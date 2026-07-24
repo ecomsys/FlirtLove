@@ -1,0 +1,14 @@
+/* resources/css/app.css */
+@import "./blatui.css";
+@import "./components.css";
+
+/* Решение проблемы с автокомплитом (фон и цвет текста) */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active {
+    -webkit-text-fill-color: var(--foreground) !important;
+    -webkit-box-shadow: 0 0 0 65rem var(--background) inset !important;
+    caret-color: var(--foreground) !important;
+    transition: background-color 9999s ease-in-out 0s;
+}
