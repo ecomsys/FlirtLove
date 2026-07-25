@@ -16,6 +16,7 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
+        // контроль за локалью
         $middleware->web(append: [
             SetLocale::class,
         ]);
@@ -30,10 +31,12 @@ return Application::configure(basePath: dirname(__DIR__))
             fn(Request $request) => $request->is('api/*'),
         );
     })
-    ->withSchedule(function (Schedule $schedule) {
-        // Добавляем сюда все задачи планировщика
-        
+
+    // Добавляем сюда все задачи планировщика (php artisan schedule:list)
+    ->withSchedule(function (Schedule $schedule) {                
         // Очистка старых комментариев к фоткам каждую ночь в 3:00
         $schedule->command('comments:clean --days=30')->dailyAt('03:00');
+        // Отправка запланированных оповещений каждую минуту
+        $schedule->command('broadcasts:send-scheduled')->everyMinute();
     })   
     ->create();

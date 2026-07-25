@@ -14,14 +14,12 @@ class Broadcast extends Model
         'message',
         'status',
         'scheduled_at',
-        'sent_at',
-        'data',
+        'sent_at',       
     ];
 
     protected $casts = [
         'scheduled_at' => 'datetime',
-        'sent_at' => 'datetime',
-        'data' => 'array',
+        'sent_at' => 'datetime',    
     ];
 
     public function user(): BelongsTo

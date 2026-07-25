@@ -164,7 +164,7 @@ new #[Layout('layouts.admin')] class extends Component
     #[Computed]
     public function photoList()
     {
-        return Cache::remember('admin_photo_list', 3600, function () {
+        return Cache::remember('admin_photo_list', 600, function () {
             return Photo::whereHas('comments')->with('user')->limit(50)->get();
         });
     }

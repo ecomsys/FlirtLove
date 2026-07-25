@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\Artisan;
 
 #[Signature('cache:project-clear')]
 #[Description('Очистка всех кешей проекта')]
+
 class ClearProjectCache extends Command
 {
     /**

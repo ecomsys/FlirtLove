@@ -7,10 +7,16 @@ use App\Notifications\UserBanned;
 use App\Notifications\PhotoModerated;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage; 
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Cache;
 
 new #[Layout('layouts.admin')] class extends Component 
 {
     public User $user;
+
+    public $address = null;
+    public $editLat = null;
+    public $editLng = null;
 
     public function mount(User $user): void
     {
@@ -24,6 +30,85 @@ new #[Layout('layouts.admin')] class extends Component
             'receivedReports',
             'sentReports',
         ]);
+         // Берем адрес из БД, если его нет — запрашиваем по координатам
+        if ($user->latitude && $user->longitude) {
+            $this->address = $user->address ?? $this->getAddressFromCoords($user->latitude, $user->longitude);
+        }
+
+         $this->editLat = $user->latitude;
+        $this->editLng = $user->longitude;
+    }
+
+       private function getAddressFromCoords(float $lat, float $lng): ?string
+    {
+        $cacheKey = "address_{$lat}_{$lng}";
+        
+        return Cache::remember($cacheKey, 86400, function () use ($lat, $lng) {
+            try {
+                $response = Http::withHeaders([
+                    'User-Agent' => 'LoveClone/1.0',
+                    'Accept-Language' => 'ru-RU,ru;q=0.9'
+                ])->get("https://nominatim.openstreetmap.org/reverse", [
+                    'lat' => $lat,
+                    'lon' => $lng,
+                    'format' => 'json',
+                    'zoom' => 18
+                ]);
+
+                if ($response->successful()) {
+                    $data = $response->json();
+                    return $data['display_name'] ?? null;
+                }
+                
+                // Если ошибка - пишем в лог (файл storage/logs/laravel.log)
+                \Log::error('Nominatim Error', [
+                    'status' => $response->status(), 
+                    'body' => $response->body()
+                ]);
+                return null;
+            } catch (\Exception $e) {
+                \Log::error('Nominatim Exception', ['message' => $e->getMessage()]);
+                return null;
+            }
+        });
+    }
+
+    public function updateAddressFromCoords(float $lat, float $lng): ?string
+    {
+        $this->address = $this->getAddressFromCoords($lat, $lng);
+        
+        // Возвращаем результат напрямую в JS
+        return $this->address;
+    }
+
+    // Добавляем метод для сохранения координат:
+    public function updateLocation(): void
+    {
+        $this->validate([
+            'editLat' => 'required|numeric|between:-90,90',
+            'editLng' => 'required|numeric|between:-180,180',
+        ]);
+
+        // 1. Получаем актуальный адрес для новых координат
+        $actualAddress = $this->getAddressFromCoords((float)$this->editLat, (float)$this->editLng);
+
+        // 2. Сохраняем обычные координаты и адрес через модель
+        $this->user->latitude = $this->editLat;
+        $this->user->longitude = $this->editLng;
+        $this->user->address = $actualAddress; // Сохраняем адрес в БД!
+        $this->user->save();
+
+        // 3. Обновляем геометрию (location) напрямую через Query Builder
+        DB::table('users')
+            ->where('id', $this->user->id)
+            ->update([
+                'location' => DB::raw("ST_SetSRID(ST_MakePoint({$this->editLng}, {$this->editLat}), 4326)")
+            ]);
+
+        // 4. Обновляем переменную в интерфейсе, чтобы текст сразу сменился
+        $this->address = $actualAddress;
+
+        $this->dispatch('show-toast', type: 'success', message: 'Координаты и адрес обновлены');
     }
 
     public function toggleBan(): void
@@ -175,6 +260,18 @@ new #[Layout('layouts.admin')] class extends Component
                 class="px-4 py-3 text-sm font-medium border-b-2 transition-colors">
                 <x-lucide-shield class="w-4 h-4 inline mr-1" />
                 Модерация
+            </button>
+            <button @click="tab = 'map'; setTimeout(() => { 
+                if(window.map) {
+                    window.map.invalidateSize(); 
+                    // Открываем попап только после того, как карта перерисовалась!
+                    if(window.userMarker) window.userMarker.openPopup(); 
+                }
+            }, 100)"
+                :class="tab === 'map' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'"
+                class="px-4 py-3 text-sm font-medium border-b-2 transition-colors">
+                <x-lucide-map class="w-4 h-4 inline mr-1" />
+                Адресс
             </button>
         </nav>
     </div>
@@ -514,5 +611,134 @@ new #[Layout('layouts.admin')] class extends Component
             </div>
         </div>
 
+       <!-- ============================================ -->
+<!-- Вкладка 5: КАРТА -->
+<!-- ============================================ -->
+<div x-show="tab === 'map'" 
+     x-init="$nextTick(() => { if (typeof map !== 'undefined') map.invalidateSize(); })"
+     style="display: none;" 
+     class="space-y-4" 
+     wire:ignore>
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div class="lg:col-span-2">
+            <div id="user-map" style="height: 450px; width: 100%; border-radius: 0.5rem; overflow: hidden;"></div>
+        </div>
+        <div class="space-y-4">
+            <div class="p-4 bg-muted/20 rounded-lg border border-border">
+                <p class="text-sm font-medium">📍 Адрес</p>
+                <p class="text-sm mt-1" id="user-address">{{ $address ?? 'Не определён' }}</p>
+            </div>
+            <div class="p-4 bg-muted/20 rounded-lg border border-border">
+                <p class="text-sm font-medium">Координаты</p>
+                <div class="mt-2 space-y-2">
+                    <x-ui.input wire:model="editLat" label="Широта" type="number" step="any" oninput="updateMarkerFromInputs()" />
+                    <x-ui.input wire:model="editLng" label="Долгота" type="number" step="any" oninput="updateMarkerFromInputs()" />
+                    <x-ui.button wire:click="updateLocation" wire:loading.attr="disabled" class="w-full">
+                        <span wire:loading.remove wire:target="updateLocation">Сохранить</span>
+                        <span wire:loading wire:target="updateLocation" class="flex items-center justify-center gap-3">
+                            <x-ui.spinner class="w-4 h-4 inline" />
+                            Сохранение...
+                        </span>
+                    </x-ui.button>
+                </div>
+            </div>
+            <div class="p-4 bg-muted/20 rounded-lg border border-border">
+                <p class="text-xs text-muted-foreground">🔁 Перетащите маркер, чтобы изменить позицию, или введите координаты вручную.</p>
+            </div>
+        </div>
     </div>
 </div>
+
+    </div>
+</div>
+@push('scripts')
+<script>
+document.addEventListener('livewire:init', function () {
+    const container = document.getElementById('user-map');
+    if (!container) return;
+
+    const user = @json($user);
+    let address = @json($address);
+
+    const lat = user.latitude ?? 55.7558;
+    const lng = user.longitude ?? 37.6173;
+
+    const map = L.map('user-map').setView([lat, lng], 13);
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    function createPopupContent(user, addr) {
+        const avatar = user.avatar_url || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(user.name) + '&background=random&size=50';
+        const age = user.birth_date ? new Date().getFullYear() - new Date(user.birth_date).getFullYear() : '?';
+
+        return `
+            <div class="min-w-[12rem] font-sans select-none">
+                <div class="flex items-center gap-3 mb-1.5">                   
+                    <div>
+                        <strong class="text-base">Имя: ${user.name}</strong><br>
+                        <span class="text-sm text-muted-foreground">Возраст: ${age}</span>
+                    </div>
+                </div>
+                <div class="text-sm text-muted-foreground border-t border-border pt-1.5">
+                    ${addr || 'Адрес не определён'}
+                </div>
+            </div>
+        `;
+    }
+
+    const popupContent = createPopupContent(user, address);
+    const marker = L.marker([lat, lng], { draggable: true })
+        .addTo(map)
+        .bindPopup(popupContent); // Убрали .openPopup()!
+
+    // Сохраняем маркер глобально, чтобы открыть его попап после invalidateSize
+    window.userMarker = marker;
+
+    // Функция для ручного обновления маркера при вводе в инпуты
+    window.updateMarkerFromInputs = function() {
+        const inputLat = document.querySelector('input[wire\\:model="editLat"]').value;
+        const inputLng = document.querySelector('input[wire\\:model="editLng"]').value;
+        
+        const newLat = parseFloat(inputLat);
+        const newLng = parseFloat(inputLng);
+        
+        if (!isNaN(newLat) && !isNaN(newLng)) {
+            marker.setLatLng([newLat, newLng]);
+            map.setView([newLat, newLng], 13);
+        }
+    };
+
+    // При перетаскивании маркера — обновляем координаты и запрашиваем адрес
+        // При перетаскивании маркера — обновляем координаты и запрашиваем адрес
+    marker.on('dragend', async function (e) {
+        const pos = marker.getLatLng();
+        @this.set('editLat', pos.lat);
+        @this.set('editLng', pos.lng);
+        
+        // Показываем текст загрузки
+        const addressElement = document.getElementById('user-address');
+        if (addressElement) addressElement.innerText = 'Определение адреса...';
+        
+        // Вызываем PHP-метод и ждём ответа (возвращаем строку)
+        const newAddress = await @this.call('updateAddressFromCoords', pos.lat, pos.lng);
+        
+        if (newAddress) {
+            address = newAddress;
+            if (addressElement) addressElement.innerText = address;
+            
+            const popup = marker.getPopup();
+            if (popup) {
+                popup.setContent(createPopupContent(user, address));
+            }
+        } else {
+            if (addressElement) addressElement.innerText = 'Адрес не определён';
+        }
+    });   
+
+    // Сохраняем карту глобально, чтобы Alpine вызвал invalidateSize
+    window.map = map;
+});
+</script>
+@endpush

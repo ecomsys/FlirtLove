@@ -199,14 +199,12 @@ new #[Layout('layouts.admin')] class extends Component
                         $report->user->notify(new ReportModerated($report, 'user_banned'));
                     }
                     
-                    //  передаем null вместо фейковой модели Report
-                    if ($photo->user) {
+                    //  передаем null вместо фейковой модели Report                   
                     $user->notify(new ReportModerated(
                         null, 
                         'user_banned',
                         "Вы были забанены на основании жалоб пользователей."
-                    ));
-                    }
+                    ));                   
                 }
             });
             

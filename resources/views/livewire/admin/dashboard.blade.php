@@ -18,7 +18,7 @@ new #[Layout('layouts.admin')] class extends Component
     public function with(): array
     {
         // Правильно получаем метрики из кеша
-        $metrics = Cache::remember('admin_dashboard_metrics', 300, function () {
+        $metrics = Cache::remember('admin_dashboard_metrics', 600, function () {
             return [
                 'totalUsers' => User::count(),
                 'newUsersToday' => User::whereDate('created_at', today())->count(),

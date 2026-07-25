@@ -1,10 +1,11 @@
 <?php
+
 use App\Models\User;
+use App\Notifications\UserBanned;
+use App\Notifications\UserDeleted;
 use Livewire\Volt\Component;
 use Livewire\WithPagination;
 use Livewire\Attributes\Layout;
-use App\Notifications\UserBanned;
-use App\Notifications\UserDeleted;
 
 new #[Layout('layouts.admin')] class extends Component 
 {
@@ -14,12 +15,12 @@ new #[Layout('layouts.admin')] class extends Component
     public string $search = '';
     public string $sortDirection = 'desc'; // asc или desc
 
-    public function updatingSearch()
+    public function updatingSearch(): void
     {
         $this->resetPage();
     }
 
-    public function toggleSort()
+    public function toggleSort(): void
     {
         $this->sortDirection = $this->sortDirection === 'desc' ? 'asc' : 'desc';
         $this->resetPage();
@@ -27,11 +28,21 @@ new #[Layout('layouts.admin')] class extends Component
 
     public function with(): array
     {
+        //  ОПТИМИЗАЦИЯ: тянем только нужные поля, чтобы не грузить память лишними данными
+        $columns = [
+            'id', 'name', 'email', 'city', 'created_at', 
+            'last_login_at', 'last_login_ip', 'is_banned', 
+            'is_admin', 'has_completed_onboarding'
+        ];
+
         $users = User::query()
+            ->select($columns) // <-- Добавили явную выборку
             ->when($this->search, function ($query) {
-                $query->where('name', 'like', '%' . $this->search . '%')
-                      ->orWhere('email', 'like', '%' . $this->search . '%')
-                      ->orWhere('city', 'like', '%' . $this->search . '%');
+                $search = $this->search;
+                //  ИСПРАВЛЕНО: используем ilike для PostgreSQL (регистронезависимый поиск)
+                $query->where('name', 'ilike', '%' . $search . '%')
+                      ->orWhere('email', 'ilike', '%' . $search . '%')
+                      ->orWhere('city', 'ilike', '%' . $search . '%');
             })
             ->orderBy('created_at', $this->sortDirection)
             ->paginate($this->perPage);
@@ -48,20 +59,13 @@ new #[Layout('layouts.admin')] class extends Component
         if (!$user) return;
 
         if ($user->is_admin) {
-            $this->dispatch('show-toast', 
-                type: 'error', 
-                message: 'Нельзя забанить администратора'
-            );
+            $this->dispatch('show-toast', type: 'error', message: 'Нельзя забанить администратора');
             return;
         }
 
-        // Определяем новый статус
         $newStatus = !$user->is_banned;
-        
-        // Обновляем в БД
         $user->update(['is_banned' => $newStatus]);
                 
-        //  ОТПРАВЛЯЕМ УВЕДОМЛЕНИЕ ПОЛЬЗОВАТЕЛЮ
         $user->notify(new UserBanned($newStatus));
         
         $this->dispatch('show-toast', 
@@ -78,26 +82,19 @@ new #[Layout('layouts.admin')] class extends Component
         if (!$user) return;
 
         if ($user->is_admin) {
-            $this->dispatch('show-toast', 
-                type: 'error', 
-                message: 'Нельзя удалить администратора'
-            );
+            $this->dispatch('show-toast', type: 'error', message: 'Нельзя удалить администратора');
             return;
         }
         
-         $userName = $user->name;
+        $userName = $user->name;
 
-        //  1.отправляем уведомление (пока модель еще существует в памяти и БД)
+        // 1. Сначала отправляем уведомление (пока модель существует)
         $user->notify(new UserDeleted());
 
-        //  2.удаляем пользователя
+        // 2. Затем удаляем
         $user->delete();
         
-        $this->dispatch('show-toast', 
-            type: 'success', 
-            message: "Пользователь {$userName} удален"
-        );
-        
+        $this->dispatch('show-toast', type: 'success', message: "Пользователь {$userName} удален");
         $this->dispatch('$refresh');
     }
 }; ?>
@@ -180,17 +177,20 @@ new #[Layout('layouts.admin')] class extends Component
                         />
                     </x-ui.table-cell>
                     <x-ui.table-cell>
-                        <div class="font-medium text-foreground flex items-center gap-2 flex-wrap">
+                    <!-- Обернули ссылкой -->
+                    <a href="{{ route('admin.users.show', $user) }}" class="block group" wire:navigate>
+                        <div class="font-medium text-foreground flex items-center gap-2 flex-wrap group-hover:text-primary transition-colors">
                             {{ $user->name }}
                             @if($user->is_admin)
                                 <x-ui.badge variant="default" size="xs" wire:key="admin-badge-{{ $user->id }}">Admin</x-ui.badge>
                             @endif
-                            @if(!$user->has_completed_onboarding)
+                            @if(!$user->has_completed_onboarding || !$user->avatar_url)
                                 <x-ui.badge variant="warning" size="xs" wire:key="onboarding-badge-{{ $user->id }}">Нет фото</x-ui.badge>
                             @endif
                         </div>
-                        <div class="text-xs text-muted-foreground">{{ $user->email }}</div>
-                    </x-ui.table-cell>
+                        <div class="text-xs text-muted-foreground group-hover:text-primary/80 transition-colors">{{ $user->email }}</div>
+                    </a>
+                </x-ui.table-cell>
                     <x-ui.table-cell>{{ $user->city ?? '—' }}</x-ui.table-cell>
                     <x-ui.table-cell class="text-muted-foreground text-xs whitespace-nowrap">
                         {{ $user->created_at->format('d.m.Y') }}

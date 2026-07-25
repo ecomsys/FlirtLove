@@ -4,7 +4,7 @@ use App\Models\User;
 use App\Models\PhotoComment;
 use App\Notifications\CommentModerated;
 
-use Illuminate\Support\Facades\Auth; 
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
 use Livewire\Volt\Volt;
 
@@ -28,14 +28,15 @@ Volt::route('/photo-setup', 'register-photo-setup')
 // АДМИНКА (ВСЁ НА VOLT)
 // ============================================
 Route::middleware(['auth', 'admin'])->prefix('admin')->name('admin.')->group(function () {
-    
+
     // Дашборд
     Volt::route('/', 'admin.dashboard')->name('dashboard');
 
     // Пользователи
     Volt::route('/users', 'admin.users-index')->name('users.index');
+    
     Volt::route('/users/{user}', 'admin.users-show')->name('users.show');
-   
+
 
     // Жалобы
     Volt::route('/reports', 'admin.reports')->name('reports');
@@ -55,9 +56,11 @@ Route::middleware(['auth', 'admin'])->prefix('admin')->name('admin.')->group(fun
     // Модерация комментарии к фото
     Volt::route('/photo-comments', 'admin.moderate-photo-comments')->name('moderate-photo-comments');
     
-    // Настройки
-    Volt::route('/settings', 'admin.settings')->name('settings');
+    // Модерация знакомств
+    Volt::route('/admin/moderate-dating', 'admin.moderate-dating')->name('moderate-dating');
 
+    // Настройки
+    Volt::route('/settings', 'admin.settings')->name('settings');  
 });
 
 require __DIR__ . '/auth.php';
