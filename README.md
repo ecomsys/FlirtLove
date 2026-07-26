@@ -56,7 +56,23 @@ php artisan db:seed
 composer run start
 ```
 
-Если все ок, то должно запуститься !
+
+## composer run start - самодельная команнда (запускает dev.php в корне проекта)
+
+Что она делает ? Ровно :
+```bash
+npm run dev
+php artisan serve
+php artisan shedule:work    #  Планировщик задач - worker (отправка уведомлений и др.)
+php artisan queue:work      #  Очередь заданий - worker (модерация фоток и др.)
+запуск браузера [http://localhost:8000/admin]
+
+```
+можешь вместо нее использовать эти команды сам !
+
+Для корректного определния адресса по карте установи ssl сертифика, инструкция в файле RAEDME-DOCS/MAP-SSL-GET-ADRESS.md
+
+Удачи !
 
 
 
