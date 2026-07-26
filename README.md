@@ -1,5 +1,15 @@
 # FlirtLove — запуск проекта для разработчиков
 
+## Минимально необходимые расширения для VS-Code:
+```bash
+1.Laravel Blade Snippets - даст VS Code грамматику языка Blade 
+2.Blade Formatter — чтобы Shift+Alt+F красиво форматировало Blade, а не ломало его. 
+3.Tailwind CSS IntelliSense — автоподсказка классов. 
+4.PHP Intelephense — лучший автокомплит для PHP. 
+5.Prettier — для форматирования JS/JSON/CSS. 
+6.ESLint — для нашего CLI на Node.js.
+```
+
 Добро пожаловать в проект FlirtLove!
 Этот гайд поможет быстро развернуть локальное окружение и запустить все сервисы одной командой.
 
