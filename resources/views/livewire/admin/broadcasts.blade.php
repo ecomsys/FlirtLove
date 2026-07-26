@@ -10,19 +10,25 @@ use Illuminate\Support\Str;
 
 use Illuminate\Support\Facades\Notification;
 use App\Notifications\BroadcastNotification;
-use Illuminate\Validation\ValidationException;
-
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Cache;
 
+/**
+ * Компонент управления оповещениями (Broadcasts).
+ * Отвечает за создание, редактирование, планирование и массовую отправку уведомлений.
+ */
 new #[Layout('layouts.admin')] class extends Component 
 {
     use WithPagination;
 
+    /** @var array Выбранные ID оповещений для массового удаления */
     public array $selectedBroadcasts = [];
+    
+    /** @var bool Состояние чекбокса "Выбрать все на странице" */
     public bool $selectAll = false;
 
+    /** @var string|null Фильтры дат */
     public ?string $dateFrom = null;
     public ?string $dateTo = null;
 
@@ -55,58 +61,74 @@ new #[Layout('layouts.admin')] class extends Component
     }
 
     /**
-     * Сброс пагинации при обновлении поиска
+     * Инициализация компонента.
+     * Восстанавливает сохраненные в сессии фильтры.
      */
-    public function updatingSearch(): void
+    public function mount()
     {
-        $this->resetPage();
+        $saved = session('moderate_broadcasts', []);
+        
+        if (isset($saved['statusFilter'])) {
+            $this->statusFilter = $saved['statusFilter'];
+        }
+        if (isset($saved['typeFilter'])) {
+            $this->typeFilter = $saved['typeFilter'];
+        }
     }
 
-    public function updatingStatusFilter(): void
-    {
-        $this->resetPage();
-    }
-
-    public function updatingTypeFilter(): void
-    {
-        $this->resetPage();
-    }
+    /**
+     * Хуки Livewire: сброс пагинации при изменении фильтров.
+     */
+    public function updatingSearch(): void { $this->resetPage(); }
+    public function updatingStatusFilter(): void { $this->resetPage(); }   
+    public function updatingDateFrom(): void { $this->resetPage(); }
+    public function updatingDateTo(): void { $this->resetPage(); }
 
     public function setStatusFilter(string $status): void
     {
         $this->statusFilter = $status;
+        
+        // Сохраняем в сессию
+        session([
+            'moderate_broadcasts' => array_merge(
+                session('moderate_broadcasts', []),
+                ['statusFilter' => $status]
+            )
+        ]);
+        
         $this->resetPage();
     }
 
-    public function setTypeFilter(string $type): void
-    {
-        $this->typeFilter = $type;
-        $this->resetPage();
-    }
-    public function updatingDateFrom(): void
-    {
-        $this->resetPage();
-    }
-
-    public function updatingDateTo(): void
-    {
-        $this->resetPage();
+     /**
+     * Хук Livewire: срабатывает после изменения типа в Select.
+     * Сохраняет выбор в сессию.
+     */
+    public function updatedTypeFilter($value): void 
+    { 
+        session([
+            'moderate_broadcasts' => array_merge(
+                session('moderate_broadcasts', []),
+                ['typeFilter' => $value]
+            )
+        ]);
+        $this->resetPage(); 
     }
 
     /**
-     * Переключение "Выбрать все"
+     * Переключение "Выбрать все" на текущей странице.
      */
     public function toggleSelectAll(): void
     {
         if ($this->selectAll) {
-            $this->selectedBroadcasts = $this->broadcasts->pluck('id')->toArray();
+            //  Получаем коллекцию из пагинатора перед pluck
+            $this->selectedBroadcasts = $this->broadcasts->getCollection()->pluck('id')->toArray();
         } else {
             $this->selectedBroadcasts = [];
         }
     }
 
     /**
-     * Массовое удаление
+     * Массовое удаление выбранных оповещений.
      */
     public function deleteSelected(): void
     {
@@ -128,17 +150,19 @@ new #[Layout('layouts.admin')] class extends Component
     }
 
     /**
-     * Открыть модалку создания оповещения
+     * Открыть модалку создания оповещения.
      */
     public function createModal(): void
     {
         $this->checkAdminAccess();
         $this->reset(['modalTitle', 'modalType', 'modalMessage', 'selectedUserId', 'scheduledDate', 'editingId']);
+        //  Очищаем старые ошибки валидации при открытии
+        $this->resetValidation(); 
         $this->showCreateModal = true;
     }
 
     /**
-     * Открыть модалку редактирования оповещения
+     * Открыть модалку редактирования оповещения.
      */
     public function editModal(int $id): void
     {
@@ -151,23 +175,25 @@ new #[Layout('layouts.admin')] class extends Component
             $this->modalMessage = $broadcast->message;
             $this->selectedUserId = $broadcast->user_id;
             $this->scheduledDate = $broadcast->scheduled_at?->format('Y-m-d\TH:i') ?? '';
+            //  Очищаем старые ошибки валидации при открытии
+            $this->resetValidation();
             $this->showEditModal = true;
         }
     }
 
     /**
-     * Обновить существующее оповещение
+     * Обновить существующее оповещение.
      */
     public function updateBroadcast(): void
     {
         $this->checkAdminAccess();
         
-        // Livewire сам обработает ошибку и покажет @error в Blade
+        //  Синтаксис валидации даты. 'before' теперь принимает реальную дату.
         $this->validate([
             'modalTitle' => 'required|string|max:255',
             'modalMessage' => 'required|string|max:5000',
             'modalType' => 'required|in:system,email,push',
-            'scheduledDate' => 'nullable|date|after_or_equal:now|before:now + 1 year',
+            'scheduledDate' => 'nullable|date|after_or_equal:now|before_or_equal:' . now()->addYear()->toDateTimeString(),
         ]);
 
         $broadcast = Broadcast::find($this->editingId);
@@ -206,18 +232,18 @@ new #[Layout('layouts.admin')] class extends Component
     }
 
     /**
-     * Создать и отправить новое оповещение
+     * Создать и отправить новое оповещение.
      */
     public function sendBroadcast(): void
     {
         $this->checkAdminAccess();
         
-        // Livewire сам обработает ошибку и покажет @error в Blade
+        //  Синтаксис валидации даты.
         $this->validate([
             'modalTitle' => 'required|string|max:255',
             'modalMessage' => 'required|string|max:5000',
             'modalType' => 'required|in:system,email,push',
-            'scheduledDate' => 'nullable|date|after_or_equal:now|before:now + 1 year',
+            'scheduledDate' => 'nullable|date|after_or_equal:now|before_or_equal:' . now()->addYear()->toDateTimeString(),
         ]);
 
         DB::transaction(function () {
@@ -246,7 +272,10 @@ new #[Layout('layouts.admin')] class extends Component
     }
 
     /**
-     * Реальная отправка оповещения (Email, Push, System)
+     * Реальная отправка оповещения (Email, Push, System).
+     * 
+     * ВАЖНО: Класс BroadcastNotification ДОЛЖЕН реализовывать ShouldQueue.
+     * Иначе при рассылке 10 000+ пользователей скрипт упадет по таймауту.
      */
     private function sendRealBroadcast($broadcast): void
     {
@@ -258,6 +287,7 @@ new #[Layout('layouts.admin')] class extends Component
 
         // Обрабатываем порциями по 500 пользователей
         $query->select(['id', 'name', 'email'])->chunk(500, function ($users) use ($broadcast, &$sentCount) {
+            // Если ShouldQueue подключен, этот метод мгновенно раскидает задачи в очередь
             Notification::send($users, new BroadcastNotification($broadcast));
             $sentCount += $users->count();
         });
@@ -272,7 +302,7 @@ new #[Layout('layouts.admin')] class extends Component
     }
 
     /**
-     * Отправить запланированное оповещение сейчас
+     * Отправить запланированное оповещение сейчас.
      */
     public function sendNow(int $id): void
     {
@@ -293,7 +323,7 @@ new #[Layout('layouts.admin')] class extends Component
     }
 
     /**
-     * Создать копию существующего оповещения
+     * Создать копию существующего оповещения.
      */
     public function duplicateBroadcast(int $id): void
     {
@@ -313,7 +343,7 @@ new #[Layout('layouts.admin')] class extends Component
     }
 
     /**
-     * Удалить оповещение
+     * Удалить оповещение.
      */
     public function deleteBroadcast(int $id): void
     {
@@ -327,7 +357,7 @@ new #[Layout('layouts.admin')] class extends Component
     }
 
     /**
-     * Получить список уведомлений с пагинацией и фильтрацией
+     * Вычисляемое свойство: список рассылок с пагинацией и фильтрацией.
      */
     #[Computed]
     public function broadcasts()
@@ -335,33 +365,32 @@ new #[Layout('layouts.admin')] class extends Component
         return Broadcast::query()
             ->with('user:id,name,email')
             ->select('id', 'user_id', 'type', 'title', 'message', 'status', 'scheduled_at', 'sent_at', 'created_at')
+            //  Изолировали orWhere в замыкание
             ->when($this->search, function ($query) {
                 $search = $this->search;
-                $query->where('title', 'like', "%{$search}%")->orWhere('message', 'like', "%{$search}%");
+                $query->where(function ($q) use ($search) {
+                    $q->where('title', 'like', "%{$search}%")
+                      ->orWhere('message', 'like', "%{$search}%");
+                });
             })
-            ->when($this->statusFilter !== 'all', function ($query) {
-                $query->where('status', $this->statusFilter);
-            })
-            ->when($this->typeFilter !== 'all', function ($query) {
-                $query->where('type', $this->typeFilter);
-            })
-            ->when($this->dateFrom, function ($query) {
-                $query->whereDate('created_at', '>=', $this->dateFrom);
-            })
-            ->when($this->dateTo, function ($query) {
-                $query->whereDate('created_at', '<=', $this->dateTo);
-            })
+            ->when($this->statusFilter !== 'all', fn($q) => $q->where('status', $this->statusFilter))
+            ->when($this->typeFilter !== 'all', fn($q) => $q->where('type', $this->typeFilter))
+            ->when($this->dateFrom, fn($q) => $q->whereDate('created_at', '>=', $this->dateFrom))
+            ->when($this->dateTo, fn($q) => $q->whereDate('created_at', '<=', $this->dateTo))
             ->latest()
             ->paginate($this->perPage);
     }
 
     /**
-     * Получить статистику по статусам уведомлений
+     * Вычисляемое свойство: Статистика по статусам рассылок.
      */
     #[Computed]
     public function counts()
     {
-        $counts = Broadcast::select('status', DB::raw('count(*) as total'))->groupBy('status')->pluck('total', 'status')->toArray();
+        $counts = Broadcast::select('status', DB::raw('count(*) as total'))
+            ->groupBy('status')
+            ->pluck('total', 'status')
+            ->toArray();
 
         return [
             'draft' => $counts['draft'] ?? 0,
@@ -372,7 +401,8 @@ new #[Layout('layouts.admin')] class extends Component
     }
 
     /**
-     * Получить список пользователей для комбобокса (с кешированием)
+     * Вычисляемое свойство: Список пользователей для Combobox.
+     * Кешируется на 10 минут для оптимизации.
      */
     #[Computed]
     public function users()
@@ -387,17 +417,24 @@ new #[Layout('layouts.admin')] class extends Component
         });
     }
 
+    /**
+     * Полный сброс всех фильтров.
+     */
     public function resetFilters(): void
     {
-        $this->search = '';
+        $this->reset(['search', 'statusFilter', 'typeFilter', 'dateFrom', 'dateTo']);
         $this->statusFilter = 'all';
         $this->typeFilter = 'all';
-        $this->dateFrom = null;
-        $this->dateTo = null;
+        
+        // Очищаем сессию
+        session()->forget('moderate_broadcasts');
+        
         $this->resetPage();
     }
 };
 ?>
+
+
 <!-- ======== HTML / BLADE VIEW ======== -->
 <div class="space-y-6">
 
@@ -696,7 +733,7 @@ new #[Layout('layouts.admin')] class extends Component
                                 @endif
 
                                 <x-ui.dropdown-menu-item wire:key="action-delete-{{ $broadcast->id }}" variant="destructive"
-                                    wire:click="deleteBroadcast({{ $broadcast->id }})">
+                                    wire:click="deleteBroadcast({{ $broadcast->id }})" wire:confirm="Удалить это оповещение без возможности восстановления?">
                                     <x-lucide-trash-2 class="w-4 h-4" />
                                     Удалить
                                 </x-ui.dropdown-menu-item>
@@ -728,6 +765,7 @@ new #[Layout('layouts.admin')] class extends Component
 
     {{-- МОДАЛКА СОЗДАТЬ оповещение --}}
     <div x-show="$wire.showCreateModal" x-cloak wire:key="modal-create-wrapper"
+        @click.self="$wire.showCreateModal = false"
         class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
         x-transition:enter="transition ease-out duration-200" x-transition:enter-start="opacity-0 scale-95"
         x-transition:enter-end="opacity-100 scale-100" @keydown.escape.window="$wire.showCreateModal = false">
@@ -811,6 +849,7 @@ new #[Layout('layouts.admin')] class extends Component
 
     {{-- МОДАЛКА РЕДАКТИРОВАНИЯ --}}
     <div x-show="$wire.showEditModal" x-cloak wire:key="modal-edit-wrapper-{{ $editingId ?? 'new' }}"
+        @click.self="$wire.showEditModal = false"
         class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
         x-transition:enter="transition ease-out duration-200" x-transition:enter-start="opacity-0 scale-95"
         x-transition:enter-end="opacity-100 scale-100" @keydown.escape.window="$wire.showEditModal = false">

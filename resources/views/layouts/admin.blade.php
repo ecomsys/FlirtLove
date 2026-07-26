@@ -48,14 +48,15 @@
     <x-ui.confirm-modal />
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@fancyapps/ui@5.0/dist/fancybox/fancybox.umd.js"></script>
-    <script>
-        document.addEventListener('DOMContentLoaded', function() {
+    <script src="https://cdn.jsdelivr.net/npm/@fancyapps/ui@5.0/dist/fancybox/fancybox.umd.js"></script>   
+  
+    <script>       
             Fancybox.bind('[data-fancybox]', {
                 // Настройки
-            });
-        });
-    </script>      
+            });       
+    </script>
+
+
     @stack('scripts')  
 </body>
 

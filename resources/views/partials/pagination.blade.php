@@ -1,6 +1,6 @@
 @if ($paginator->hasPages())
     <nav role="navigation" aria-label="Pagination Navigation" class="flex flex-row-reverse items-center justify-between gap-2">
-        <div class="flex items-center gap-2">
+        <div class="flex items-center gap-1">
             <!-- Кнопка "Назад" -->
             @if ($paginator->onFirstPage())
                 <span class="inline-flex items-center justify-center w-9 h-9 rounded-md border border-border text-muted-foreground/50 cursor-not-allowed">
@@ -12,19 +12,27 @@
                 </button>
             @endif
 
-            <!-- Номера страниц -->
+            <!-- Номера страниц и троеточия -->
             @foreach ($elements as $element)
+                {{-- 1. Если это строка, значит Laravel прислал троеточие --}}
                 @if (is_string($element))
-                    <span class="w-9 h-9 flex items-center justify-center text-muted-foreground">{{ $element }}</span>
+                    <span class="w-9 h-9 flex items-center justify-center text-muted-foreground select-none">•••</span>
                 @endif
 
-                @foreach ($element as $page => $url)
-                    @if ($page == $paginator->currentPage())
-                        <span class="inline-flex items-center justify-center w-9 h-9 rounded-md bg-primary text-primary-foreground text-sm font-medium" aria-current="page">{{ $page }}</span>
-                    @else
-                        <button wire:click="gotoPage({{ $page }})" class="inline-flex items-center justify-center w-9 h-9 rounded-md border border-border bg-background hover:bg-accent text-foreground text-sm font-medium transition-colors">{{ $page }}</button>
-                    @endif
-                @endforeach
+                {{-- 2. Если это массив, значит это группы кнопок страниц --}}
+                @if (is_array($element))
+                    @foreach ($element as $page => $url)
+                        @if ($page == $paginator->currentPage())
+                            <span class="inline-flex items-center justify-center w-9 h-9 rounded-md bg-primary text-primary-foreground text-sm font-medium" aria-current="page">
+                                {{ $page }}
+                            </span>
+                        @else
+                            <button wire:click="gotoPage({{ $page }})" class="inline-flex items-center justify-center w-9 h-9 rounded-md border border-border bg-background hover:bg-accent text-foreground text-sm font-medium transition-colors">
+                                {{ $page }}
+                            </button>
+                        @endif
+                    @endforeach
+                @endif
             @endforeach
 
             <!-- Кнопка "Вперед" -->

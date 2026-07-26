@@ -6,29 +6,48 @@ use App\Notifications\UserDeleted;
 use Livewire\Volt\Component;
 use Livewire\WithPagination;
 use Livewire\Attributes\Layout;
+use Illuminate\Support\Facades\DB;
 
+/**
+ * Компонент списка пользователей админки.
+ * Отвечает за просмотр, поиск, сортировку, бан и удаление пользователей.
+ */
 new #[Layout('layouts.admin')] class extends Component 
 {
     use WithPagination;
 
+    /** @var int Количество пользователей на странице */
     public int $perPage = 10;
+    
+    /** @var string Поисковый запрос (имя, почта, город) */
     public string $search = '';
-    public string $sortDirection = 'desc'; // asc или desc
+    
+    /** @var string Направление сортировки (asc или desc) */
+    public string $sortDirection = 'desc';
 
+    /**
+     * Хук Livewire: сброс пагинации при вводе поиска.
+     */
     public function updatingSearch(): void
     {
         $this->resetPage();
     }
 
+    /**
+     * Переключение направления сортировки.
+     */
     public function toggleSort(): void
     {
         $this->sortDirection = $this->sortDirection === 'desc' ? 'asc' : 'desc';
         $this->resetPage();
     }
 
+    /**
+     * Вычисляемое свойство: подготовка данных для страницы.
+     * Оптимизация: тянем только нужные поля, чтобы не грузить память.
+     */
     public function with(): array
     {
-        //  ОПТИМИЗАЦИЯ: тянем только нужные поля, чтобы не грузить память лишними данными
         $columns = [
             'id', 'name', 'email', 'city', 'created_at', 
             'last_login_at', 'last_login_ip', 'is_banned', 
@@ -36,13 +55,18 @@ new #[Layout('layouts.admin')] class extends Component
         ];
 
         $users = User::query()
-            ->select($columns) // <-- Добавили явную выборку
+            ->select($columns)
+            //  Изолировали поиск в замыкание, чтобы не ломать другие фильтры
             ->when($this->search, function ($query) {
                 $search = $this->search;
-                //  ИСПРАВЛЕНО: используем ilike для PostgreSQL (регистронезависимый поиск)
-                $query->where('name', 'ilike', '%' . $search . '%')
-                      ->orWhere('email', 'ilike', '%' . $search . '%')
-                      ->orWhere('city', 'ilike', '%' . $search . '%');
+                //  Динамический оператор для совместимости с MySQL и PostgreSQL
+                $operator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
+                
+                $query->where(function ($q) use ($search, $operator) {
+                    $q->where('name', $operator, '%' . $search . '%')
+                      ->orWhere('email', $operator, '%' . $search . '%')
+                      ->orWhere('city', $operator, '%' . $search . '%');
+                });
             })
             ->orderBy('created_at', $this->sortDirection)
             ->paginate($this->perPage);
@@ -53,6 +77,11 @@ new #[Layout('layouts.admin')] class extends Component
         ];
     }
 
+    /**
+     * Забанить / Разбанить пользователя.
+     * 
+     * @param int $userId
+     */
     public function toggleBan(int $userId): void
     {
         $user = User::find($userId);
@@ -65,7 +94,8 @@ new #[Layout('layouts.admin')] class extends Component
 
         $newStatus = !$user->is_banned;
         $user->update(['is_banned' => $newStatus]);
-                
+        
+        // Уведомляем пользователя (убедись, что UserBanned реализует ShouldQueue)
         $user->notify(new UserBanned($newStatus));
         
         $this->dispatch('show-toast', 
@@ -76,6 +106,14 @@ new #[Layout('layouts.admin')] class extends Component
         $this->dispatch('$refresh');
     }
 
+    /**
+     * Удаление пользователя.
+     *  Добавлена транзакция.
+     * ВАЖНО: Убедись, что в миграциях внешние ключи (photos, swipes и т.д.) 
+     * имеют метод onDelete('cascade'), иначе база выдаст ошибку Constraint violation.
+     * 
+     * @param int $userId
+     */
     public function deleteUser(int $userId): void
     {
         $user = User::find($userId);
@@ -88,17 +126,19 @@ new #[Layout('layouts.admin')] class extends Component
         
         $userName = $user->name;
 
-        // 1. Сначала отправляем уведомление (пока модель существует)
-        $user->notify(new UserDeleted());
+        DB::transaction(function () use ($user) {
+            // 1. Отправляем уведомление (пока модель существует)
+            $user->notify(new UserDeleted());
 
-        // 2. Затем удаляем
-        $user->delete();
+            // 2. Удаляем пользователя (связанные данные удалятся автоматически, если настроено cascade)
+            $user->delete();
+        });
         
         $this->dispatch('show-toast', type: 'success', message: "Пользователь {$userName} удален");
         $this->dispatch('$refresh');
     }
-}; ?>
-
+}; 
+?>
 
 <div class="space-y-6">
     <!-- Заголовок -->
@@ -177,20 +217,20 @@ new #[Layout('layouts.admin')] class extends Component
                         />
                     </x-ui.table-cell>
                     <x-ui.table-cell>
-                    <!-- Обернули ссылкой -->
-                    <a href="{{ route('admin.users.show', $user) }}" class="block group" wire:navigate>
-                        <div class="font-medium text-foreground flex items-center gap-2 flex-wrap group-hover:text-primary transition-colors">
-                            {{ $user->name }}
-                            @if($user->is_admin)
-                                <x-ui.badge variant="default" size="xs" wire:key="admin-badge-{{ $user->id }}">Admin</x-ui.badge>
-                            @endif
-                            @if(!$user->has_completed_onboarding || !$user->avatar_url)
-                                <x-ui.badge variant="warning" size="xs" wire:key="onboarding-badge-{{ $user->id }}">Нет фото</x-ui.badge>
-                            @endif
-                        </div>
-                        <div class="text-xs text-muted-foreground group-hover:text-primary/80 transition-colors">{{ $user->email }}</div>
-                    </a>
-                </x-ui.table-cell>
+                        <!-- Обернули ссылкой -->
+                        <a href="{{ route('admin.users.show', $user) }}" class="block group" wire:navigate>
+                            <div class="font-medium text-foreground flex items-center gap-2 flex-wrap group-hover:text-primary transition-colors">
+                                {{ $user->name }}
+                                @if($user->is_admin)
+                                    <x-ui.badge variant="default" size="xs" wire:key="admin-badge-{{ $user->id }}">Admin</x-ui.badge>
+                                @endif
+                                @if(!$user->has_completed_onboarding || !$user->avatar_url)
+                                    <x-ui.badge variant="warning" size="xs" wire:key="onboarding-badge-{{ $user->id }}">Нет фото</x-ui.badge>
+                                @endif
+                            </div>
+                            <div class="text-xs text-muted-foreground group-hover:text-primary/80 transition-colors">{{ $user->email }}</div>
+                        </a>
+                    </x-ui.table-cell>
                     <x-ui.table-cell>{{ $user->city ?? '—' }}</x-ui.table-cell>
                     <x-ui.table-cell class="text-muted-foreground text-xs whitespace-nowrap">
                         {{ $user->created_at->format('d.m.Y') }}
@@ -221,22 +261,28 @@ new #[Layout('layouts.admin')] class extends Component
                                 </x-ui.button>
                             </x-ui.dropdown-menu-trigger>
                             <x-ui.dropdown-menu-content align="end">
-                                <x-ui.dropdown-menu-item href="{{ route('admin.users.show', $user) }}" wire:key="view-{{ $user->id }}">
+                                <x-ui.dropdown-menu-item href="{{ route('admin.users.show', $user) }}" wire:key="view-{{ $user->id }}" wire:navigate>
                                     <x-lucide-eye class="w-4 h-4" />
                                     Просмотр
                                 </x-ui.dropdown-menu-item>
+                                
+                                <!--  Добавлен wire:confirm -->
                                 <x-ui.dropdown-menu-item 
                                     wire:click="toggleBan({{ $user->id }})"
+                                    wire:confirm="Изменить статус блокировки этого пользователя?"
                                     wire:key="toggleBan-{{ $user->id }}"
                                 >
                                     <x-lucide-lock class="w-4 h-4" />
                                     Снять/наложить бан
                                 </x-ui.dropdown-menu-item>
+                                
                                 @unless($user->is_admin)
                                     <x-ui.dropdown-menu-separator />
+                                    <!--  Добавлен wire:confirm с предупреждением -->
                                     <x-ui.dropdown-menu-item 
                                         wire:click="deleteUser({{ $user->id }})" 
                                         variant="destructive"
+                                        wire:confirm="ВНИМАНИЕ! Вы уверены, что хотите удалить этого пользователя? Все его данные будут потеряны навсегда."
                                         wire:key="delete-{{ $user->id }}"
                                     >
                                         <x-lucide-trash-2 class="w-4 h-4" />

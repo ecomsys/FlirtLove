@@ -1,4 +1,9 @@
-# FlirtLove — запуск проекта для разработчиков
+
+
+# Добро пожаловать в проект FlirtLove!
+
+Этот гайд поможет быстро развернуть локальное окружение и запустить все сервисы одной командой.
+
 
 ## Минимально необходимые расширения для VS-Code:
 ```bash
@@ -10,8 +15,25 @@
 6.ESLint
 ```
 
-Добро пожаловать в проект FlirtLove!
-Этот гайд поможет быстро развернуть локальное окружение и запустить все сервисы одной командой.
+## Минималоьный список расширений раскомментированных рсширений в php.ini
+
+```bash
+extension=curl
+extension=fileinfo
+extension=gd
+extension=intl
+extension=mbstring
+extension=openssl
+extension=pdo_pgsql
+extension=pdo_sqlite
+extension=pgsql
+```
+и
+
+```bash
+upload_max_filesize = 20M
+memory_limit = 256M
+```
 
 ## Требования
 

@@ -10,7 +10,7 @@ return new class extends Migration
     {
         Schema::create('albums', function (Blueprint $table) {
             $table->id();
-            $table->foreignId('user_id')->constrained()->cascadeOnDelete();
+            $table->foreignId('user_id')->constrained()->onDelete('cascade');
             $table->string('name')->default('Общие');
             $table->text('description')->nullable();
             $table->boolean('is_default')->default(false);

@@ -2,7 +2,6 @@
 
 use App\Models\Photo;
 use App\Models\User;
-use App\Models\Album; // добавим, если нужно
 use App\Jobs\ProcessApprovedPhoto;
 use App\Notifications\PhotoModerated;
 use Livewire\Volt\Component;
@@ -11,42 +10,108 @@ use Livewire\WithPagination;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\DB;
 
-new #[Layout('layouts.admin')] class extends Component 
-{
+/**
+ * Компонент модерации фотографий.
+ * Отвечает за просмотр ожидающих/одобренных фото, массовую обработку,
+ * удаление файлов с диска и отправку уведомлений пользователям.
+ */
+new #[Layout('layouts.admin')] class extends Component {
     use WithPagination;
 
+    /** @var string Текущий статус фильтра (pending, approved, all) */
     public $status = 'pending';
+
+    /** @var int Количество пользователей на странице (для pending) */
     public $perPage = 5;
+
+    /** @var int Количество фото на странице (для approved/all) */
     public $perPhotos = 12;
+
+    /** @var string Поисковый запрос (имя или ID пользователя) */
     public $search = '';
 
+    /**
+     * Инициализация компонента.
+     * Восстанавливает фильтры из сессии.
+     */
+    public function mount()
+    {
+        $saved = session('moderate_photos', []);
+
+        if (isset($saved['status'])) {
+            $this->status = $saved['status'];
+        }
+        if (isset($saved['search'])) {
+            $this->search = $saved['search'];
+        }
+    }
+
+    /**
+     * Полное физическое удаление всех версий фото с диска.
+     * Обрабатывает 4 размера (original, large, medium, thumb), чтобы не оставлять мусора.
+     *
+     * @param Photo $photo
+     */
+    private function deletePhotoFiles(Photo $photo): void
+    {
+        $paths = [
+            $photo->path, // Дублирует medium, но на всякий случай
+            $photo->path_original,
+            $photo->path_large,
+            $photo->path_medium,
+            $photo->path_thumb,
+        ];
+
+        foreach ($paths as $path) {
+            // Удаляем только локальные файлы, игнорируя внешние URL (например, аватарки из соцсетей)
+            if ($path && !filter_var($path, FILTER_VALIDATE_URL)) {
+                Storage::disk('public')->delete($path);
+            }
+        }
+    }
+
+    /**
+     * Хук Livewire: срабатывает при смене статуса.
+     * Сохраняет выбор в сессию и сбрасывает пагинацию.
+     */
     public function updatedStatus(): void
     {
+        session(['moderate_photos.status' => $this->status]);
         $this->resetPage();
     }
 
+    /**
+     * Хук Livewire: срабатывает при вводе поиска.
+     * Сохраняет выбор в сессию и сбрасывает пагинацию.
+     */
     public function updatedSearch(): void
     {
+        session(['moderate_photos.search' => $this->search]);
         $this->resetPage();
     }
 
+    /**
+     * Вычисляемое свойство: подготовка данных для страницы.
+     * Для pending — группирует фото по пользователям.
+     * Для approved/all — выводит общим списком.
+     */
     public function with(): array
     {
         if ($this->status == 'pending') {
+            // Жадная загрузка: тянем только юзеров, у которых есть pending фото
             $users = User::withWhereHas('photos', function ($query) {
                 $query->where('status', 'pending')->orderBy('is_primary', 'desc')->oldest();
             })
-            ->with(['photos' => function ($query) {
-                $query->where('status', 'pending')
-                    ->orderBy('is_primary', 'desc')
-                    ->oldest()
-                    ->with('album'); // ✅ загружаем альбом для каждого фото
-            }])
-            ->paginate($this->perPage);
+                ->with([
+                    'photos' => function ($query) {
+                        $query->where('status', 'pending')->orderBy('is_primary', 'desc')->oldest()->with('album');
+                    },
+                ])
+                ->paginate($this->perPage);
 
             $photos = collect();
         } else {
-            $query = Photo::with(['user', 'album']); // ✅ загружаем альбом
+            $query = Photo::with(['user', 'album']);
 
             if ($this->status == 'approved') {
                 $query->where('status', 'approved')->latest();
@@ -56,7 +121,9 @@ new #[Layout('layouts.admin')] class extends Component
 
             if (!empty($this->search)) {
                 $search = trim($this->search);
+                // Изолируем условия поиска в замыкание
                 $query->where(function ($q) use ($search) {
+                    // Поддержка регистронезависимого поиска для PostgreSQL
                     $operator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
 
                     $q->whereHas('user', function ($subQuery) use ($search, $operator) {
@@ -73,6 +140,7 @@ new #[Layout('layouts.admin')] class extends Component
             $users = null;
         }
 
+        // Оптимизация: получаем все счетчики одним SQL-запросом
         $counts = Photo::selectRaw(
             "
             COUNT(*) as total,
@@ -92,12 +160,21 @@ new #[Layout('layouts.admin')] class extends Component
         ];
     }
 
+    /**
+     * Очистка поискового запроса.
+     */
     public function clearSearch(): void
     {
         $this->search = '';
+        session()->forget('moderate_photos.search');
         $this->resetPage();
     }
 
+    /**
+     * Одобрить ВСЕ pending-фото конкретного пользователя.
+     *
+     * @param int $userId
+     */
     public function approveUser(int $userId): void
     {
         $user = User::find($userId);
@@ -121,6 +198,7 @@ new #[Layout('layouts.admin')] class extends Component
             }
         });
 
+        // Отправляем задания в очередь для создания WebP-версий
         foreach ($photos as $photo) {
             ProcessApprovedPhoto::dispatch($photo->id);
         }
@@ -131,6 +209,11 @@ new #[Layout('layouts.admin')] class extends Component
         $this->dispatch('$refresh');
     }
 
+    /**
+     * Отклонить ВСЕ pending-фото конкретного пользователя.
+     *
+     * @param int $userId
+     */
     public function rejectUser(int $userId): void
     {
         $user = User::find($userId);
@@ -148,12 +231,12 @@ new #[Layout('layouts.admin')] class extends Component
 
         $firstPhotoId = $photos->first()->id;
 
+        // Сначала удаляем все файлы со всех фото с диска
         foreach ($photos as $photo) {
-            if (!filter_var($photo->path, FILTER_VALIDATE_URL)) {
-                Storage::disk('public')->delete($photo->path);
-            }
+            $this->deletePhotoFiles($photo);
         }
 
+        // Потом удаляем записи из БД
         DB::transaction(function () use ($photos) {
             foreach ($photos as $photo) {
                 $photo->delete();
@@ -166,21 +249,35 @@ new #[Layout('layouts.admin')] class extends Component
         $this->dispatch('$refresh');
     }
 
+    /**
+     * Одобрить единичное фото.
+     *
+     * @param int $photoId
+     */
     public function approve(int $photoId): void
     {
         $photo = Photo::find($photoId);
         if (!$photo) {
             return;
         }
-        $photo->update(['status' => 'approved']);
 
+        $photo->update(['status' => 'approved']);
         ProcessApprovedPhoto::dispatch($photoId);
-        $photo->user->notify(new PhotoModerated($photo->id, $photo->user_id, 'approved', 1));
+
+        // Защита от NullPointer: автор фото мог удалить аккаунт
+        if ($photo->user) {
+            $photo->user->notify(new PhotoModerated($photo->id, $photo->user_id, 'approved', 1));
+        }
 
         $this->dispatch('show-toast', type: 'success', message: 'Фото одобрено. Запущена обработка...');
         $this->dispatch('$refresh');
     }
 
+    /**
+     * Отклонить единичное фото (удаляет файлы и БД).
+     *
+     * @param int $photoId
+     */
     public function reject(int $photoId): void
     {
         $photo = Photo::find($photoId);
@@ -189,18 +286,24 @@ new #[Layout('layouts.admin')] class extends Component
         }
 
         $userId = $photo->user_id;
-        $photo->user->notify(new PhotoModerated($photo->id, $userId, 'rejected', 1));
+        $user = $photo->user;
 
-        if (!filter_var($photo->path, FILTER_VALIDATE_URL)) {
-            Storage::disk('public')->delete($photo->path);
-        }
-
+        $this->deletePhotoFiles($photo);
         $photo->delete();
+
+        if ($user) {
+            $user->notify(new PhotoModerated($photo->id, $userId, 'rejected', 1));
+        }
 
         $this->dispatch('show-toast', type: 'error', message: 'Фото отклонено и удалено.');
         $this->dispatch('$refresh');
     }
 
+    /**
+     * Полное удаление уже одобренного фото (из архива).
+     *
+     * @param int $photoId
+     */
     public function destroy(int $photoId): void
     {
         $photo = Photo::find($photoId);
@@ -209,38 +312,62 @@ new #[Layout('layouts.admin')] class extends Component
         }
 
         $userId = $photo->user_id;
-        $photo->user->notify(new PhotoModerated($photo->id, $userId, 'deleted', 1));
+        $user = $photo->user;
+
+        // Удаляем все версии файла (оригинал, large, medium, thumb)
+        $this->deletePhotoFiles($photo);
 
         $photo->delete();
 
-        $this->dispatch('show-toast', type: 'success', message: 'Фото удалено.');
+        if ($user) {
+            $user->notify(new PhotoModerated($photo->id, $userId, 'deleted', 1));
+        }
+
+        $this->dispatch('show-toast', type: 'success', message: 'Фото и все его версии удалены.');
         $this->dispatch('$refresh');
     }
 
+    /**
+     * Установить фото как основное (аватар).
+     *
+     * @param int $photoId
+     */
     public function setPrimary(int $photoId): void
     {
         $photo = Photo::find($photoId);
         if ($photo) {
-            Photo::where('user_id', $photo->user_id)->update(['is_primary' => false]);
-            $photo->update(['is_primary' => true]);
+            // Обернуто в транзакцию: сначала снимаем флаг у старой аватарки, потом ставим новой
+            DB::transaction(function () use ($photo) {
+                Photo::where('user_id', $photo->user_id)->update(['is_primary' => false]);
+                $photo->update(['is_primary' => true]);
+            });
+
             $this->dispatch('show-toast', type: 'success', message: 'Фото установлено как основное.');
             $this->dispatch('$refresh');
         }
     }
 
+    /**
+     * Установка фильтра статуса.
+     *
+     * @param string $status
+     */
     public function setStatus(string $status): void
     {
         $this->status = $status;
+        session(['moderate_photos.status' => $status]);
         $this->resetPage();
     }
-}; ?>
+};
+?>
 
 <div class="space-y-6">
     <!-- Заголовок -->
     <div class="flex items-center justify-between">
         <h1 class="text-2xl font-semibold">Модерация фотографий</h1>
         @if ($pendingCount > 0)
-            <span class="bg-destructive/10 text-destructive px-3 py-1 rounded-full text-sm font-medium" wire:key="pending-badge">
+            <span class="bg-destructive/10 text-destructive px-3 py-1 rounded-full text-sm font-medium"
+                wire:key="pending-badge">
                 В очереди: {{ $pendingCount }} шт.
             </span>
         @endif
@@ -256,8 +383,7 @@ new #[Layout('layouts.admin')] class extends Component
             </x-ui.button>
 
             <x-ui.button wire:click="setStatus('approved')"
-                variant="{{ $status == 'approved' ? 'default' : 'secondary' }}"
-                wire:key="filter-approved">
+                variant="{{ $status == 'approved' ? 'default' : 'secondary' }}" wire:key="filter-approved">
                 Одобрены
                 <x-ui.badge>{{ $approvedCount }}</x-ui.badge>
             </x-ui.button>
@@ -399,7 +525,8 @@ new #[Layout('layouts.admin')] class extends Component
                                             <x-ui.badge variant="destructive">18+</x-ui.badge>
                                         @endif
                                         @if ($photo->album)
-                                            <x-ui.badge variant="secondary" size="xs">{{ $photo->album->name }}</x-ui.badge>
+                                            <x-ui.badge variant="secondary"
+                                                size="xs">{{ $photo->album->name }}</x-ui.badge>
                                         @endif
                                     </div>
 
@@ -414,8 +541,7 @@ new #[Layout('layouts.admin')] class extends Component
                                         class="absolute bottom-2 left-2 right-2 z-10 flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
                                         <x-ui.button wire:click="approve({{ $photo->id }})"
                                             wire:loading.attr="disabled" wire:target="approve({{ $photo->id }})"
-                                            variant="success" class="flex-1"
-                                            wire:key="approve-{{ $photo->id }}">
+                                            variant="success" class="flex-1" wire:key="approve-{{ $photo->id }}">
                                             <span wire:loading.remove wire:target="approve({{ $photo->id }})">
                                                 <x-lucide-check class="w-3.5 h-3.5 inline" />
                                                 Да
@@ -425,9 +551,9 @@ new #[Layout('layouts.admin')] class extends Component
                                         </x-ui.button>
 
                                         <x-ui.button wire:click="reject({{ $photo->id }})"
-                                            wire:loading.attr="disabled" wire:target="reject({{ $photo->id }})"
-                                            variant="destructive" class="flex-1"
-                                            wire:key="reject-{{ $photo->id }}">
+                                            wire:confirm="Отклонить и удалить это фото?" wire:loading.attr="disabled"
+                                            wire:target="reject({{ $photo->id }})" variant="destructive"
+                                            class="flex-1" wire:key="reject-{{ $photo->id }}">
                                             <span wire:loading.remove wire:target="reject({{ $photo->id }})">
                                                 <x-lucide-x class="w-3.5 h-3.5 inline" />
                                                 Нет
@@ -437,9 +563,9 @@ new #[Layout('layouts.admin')] class extends Component
                                         </x-ui.button>
 
                                         <x-ui.button wire:click="setPrimary({{ $photo->id }})"
-                                            wire:loading.attr="disabled" wire:target="setPrimary({{ $photo->id }})"
-                                            variant="icon" title="Сделать основным"
-                                            wire:key="primary-{{ $photo->id }}">
+                                            wire:loading.attr="disabled"
+                                            wire:target="setPrimary({{ $photo->id }})" variant="icon"
+                                            title="Сделать основным" wire:key="primary-{{ $photo->id }}">
                                             <span wire:loading.remove wire:target="setPrimary({{ $photo->id }})">
                                                 <x-lucide-star class="w-3.5 h-3.5" />
                                             </span>
@@ -516,7 +642,8 @@ new #[Layout('layouts.admin')] class extends Component
                                     <x-ui.badge variant="destructive">18+</x-ui.badge>
                                 @endif
                                 @if ($photo->album)
-                                    <x-ui.badge variant="secondary" size="xs">{{ $photo->album->name }}</x-ui.badge>
+                                    <x-ui.badge variant="secondary"
+                                        size="xs">{{ $photo->album->name }}</x-ui.badge>
                                 @endif
                             </div>
                         </div>
@@ -539,9 +666,9 @@ new #[Layout('layouts.admin')] class extends Component
                         <!-- Кнопки (строго в ряд через flex) -->
                         <div class="flex divide-x divide-border">
                             <!-- Кнопка удаления на всю ширину -->
-                            <button wire:click="destroy({{ $photo->id }})" wire:loading.attr="disabled"
-                                wire:target="destroy({{ $photo->id }})"
-                                wire:key="destroy-{{ $photo->id }}"
+                            <button wire:click="destroy({{ $photo->id }})"
+                                wire:confirm="Удалить это фото навсегда?" wire:loading.attr="disabled"
+                                wire:target="destroy({{ $photo->id }})" wire:key="destroy-{{ $photo->id }}"
                                 class="flex items-center justify-center gap-2 py-3 text-sm font-medium text-destructive hover:bg-destructive/10 transition-colors w-full border-t border-border">
                                 <span wire:loading.remove wire:target="destroy({{ $photo->id }})">
                                     <x-lucide-trash-2 class="w-4 h-4 inline" />
@@ -561,3 +688,12 @@ new #[Layout('layouts.admin')] class extends Component
         @endif
     @endif
 </div>
+
+
+@push('scripts')
+    <script>
+        if (typeof Fancybox !== 'undefined') {
+            Fancybox.defaults.Hash = false;
+        }
+    </script>
+@endpush

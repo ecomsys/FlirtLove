@@ -13,15 +13,47 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 
+/**
+ * Компонент модерации жалоб (пользователи и фото).
+ * Обрабатывает фильтрацию, массовое удаление, бан пользователей и удаление фото.
+ * Уведомления отправаются через очереди (ShouldQueue).
+ */
 new #[Layout('layouts.admin')] class extends Component 
 {
     use WithPagination;
 
+    /** @var string Поисковый запрос (имя, email или причина жалобы) */
     public string $search = '';
+    
+    /** @var string Текущий фильтр статуса (all, pending, resolved, rejected) */
     public string $statusFilter = 'pending';
+    
+    /** @var string Текущий фильтр типа жалобы (all, user, photo) */
     public string $typeFilter = 'all';
+    
+    /** @var int Количество элементов на странице */
     public int $perPage = 10;
 
+    /**
+     * Инициализация компонента.
+     * Восстанавливает сохраненные в сессии фильтры, чтобы админ не терял контекст при перезагрузке.
+     */
+    public function mount()
+    {
+        $saved = session('moderate_reports', []);
+        
+        if (isset($saved['statusFilter'])) {
+            $this->statusFilter = $saved['statusFilter'];
+        }
+        if (isset($saved['typeFilter'])) {
+            $this->typeFilter = $saved['typeFilter'];
+        }
+    }
+
+    /**
+     * Проверка прав доступа.
+     * Вызывается перед любым действием модератора.
+     */
     private function checkAdminAccess(): void
     {
         if (!auth()->user()?->is_admin) {
@@ -29,51 +61,101 @@ new #[Layout('layouts.admin')] class extends Component
         }
     }
 
+    /**
+     * Хук Livewire: сброс пагинации при вводе поиска.
+     */
     public function updatingSearch(): void { $this->resetPage(); }
-    public function updatingStatusFilter(): void { $this->resetPage(); }
-    public function updatingTypeFilter(): void { $this->resetPage(); }
+      
+    /**
+     * Хук Livewire: срабатывает после изменения типа жалобы в Select.
+     * Сохраняет выбор в сессию и сбрасывает пагинацию.
+     * 
+     * @param string $value Выбранное значение (all, user, photo)
+     */
+    public function updatedTypeFilter($value): void 
+    { 
+        session([
+            'moderate_reports' => array_merge(
+                session('moderate_reports', []),
+                ['typeFilter' => $value]
+            )
+        ]);
+        
+        $this->resetPage(); 
+    }
 
+    /**
+     * Устанавливает фильтр статуса (вызывается по клику на кнопки).
+     * Сохраняет выбор в сессию и сбрасывает пагинацию.
+     * 
+     * @param string $status Выбранный статус
+     */
     public function setStatusFilter(string $status): void
     {
         $this->statusFilter = $status;
+        
+        session([
+            'moderate_reports' => array_merge(
+                session('moderate_reports', []),
+                ['statusFilter' => $status]
+            )
+        ]);
+        
         $this->resetPage();
     }
 
-    public function setTypeFilter(string $type): void
+    /**
+     * Полный сброс всех фильтров и очистка сессии.
+     * Вызывается при нажатии кнопки "Сбросить фильтры" в пустом состоянии.
+     */
+    public function resetFilters(): void
     {
-        $this->typeFilter = $type;
+        $this->reset(['search', 'statusFilter', 'typeFilter']);
+        $this->statusFilter = 'pending'; 
+        $this->typeFilter = 'all';       
+        
+        session()->forget('moderate_reports');
         $this->resetPage();
     }
 
+    /**
+     * Вычисляемое свойство: список жалоб с пагинацией.
+     * Использует жадную загрузку (eager loading) для оптимизации запросов.
+     */
     #[Computed]
     public function reports()
     {
         return Report::query()
             ->with(['user', 'reportedUser', 'photo'])
+            // ВАЖНО: orWhere обернут в замыкание where(), 
+            // чтобы поиск не ломал основные фильтры (статус и тип).
             ->when($this->search, function ($query) {
                 $search = $this->search;
-                $query->whereHas('user', function ($q) use ($search) {
-                    $q->where('name', 'ilike', "%{$search}%")
-                      ->orWhere('email', 'ilike', "%{$search}%");
-                })->orWhereHas('reportedUser', function ($q) use ($search) {
-                    $q->where('name', 'ilike', "%{$search}%")
-                      ->orWhere('email', 'ilike', "%{$search}%");
-                })->orWhere('reason', 'ilike', "%{$search}%");
+                $query->where(function ($q) use ($search) {
+                    $q->whereHas('user', function ($q2) use ($search) {
+                        $q2->where('name', 'ilike', "%{$search}%")
+                           ->orWhere('email', 'ilike', "%{$search}%");
+                    })
+                    ->orWhereHas('reportedUser', function ($q2) use ($search) {
+                        $q2->where('name', 'ilike', "%{$search}%")
+                           ->orWhere('email', 'ilike', "%{$search}%");
+                    })
+                    ->orWhere('reason', 'ilike', "%{$search}%");
+                });
             })
-            ->when($this->statusFilter !== 'all', function ($query) {
-                $query->where('status', $this->statusFilter);
-            })
-            ->when($this->typeFilter !== 'all', function ($query) {
-                $query->where('type', $this->typeFilter);
-            })
+            ->when($this->statusFilter !== 'all', fn($q) => $q->where('status', $this->statusFilter))
+            ->when($this->typeFilter !== 'all', fn($q) => $q->where('type', $this->typeFilter))
             ->latest()
             ->paginate($this->perPage);
     }
 
+    /**
+     * Вычисляемое свойство: счетчики для бейджей.
+     * Оптимизация: один SQL-запрос вместо четырех отдельных COUNT().
+     */
     #[Computed]
     public function counts()
     {
-        //  Один запрос вместо четырех
         $stats = Report::selectRaw("
             SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
             SUM(CASE WHEN status = 'resolved' THEN 1 ELSE 0 END) as resolved,
@@ -89,6 +171,9 @@ new #[Layout('layouts.admin')] class extends Component
         ];
     }
 
+    /**
+     * Одобрить (решить) жалобу.
+     */
     public function resolve(int $reportId): void
     {
         $this->checkAdminAccess();
@@ -103,14 +188,20 @@ new #[Layout('layouts.admin')] class extends Component
                 ]);
             });
 
-            // Уведомляем только автора жалобы (согласно таблице)
-            $report->user->notify(new ReportModerated($report, 'resolved'));
+            // Защита от NullPointer: автор жалобы мог быть удален к этому моменту.
+            // Уведомление уходит в очередь (ShouldQueue).
+            if ($report->user) {
+                $report->user->notify(new ReportModerated($report, 'resolved'));
+            }
 
             $this->dispatch('$refresh');
             $this->dispatch('show-toast', type: 'success', message: 'Жалоба отмечена как решенная');
         }
     }
 
+    /**
+     * Отклонить жалобу.
+     */
     public function reject(int $reportId): void
     {
         $this->checkAdminAccess();
@@ -125,13 +216,18 @@ new #[Layout('layouts.admin')] class extends Component
                 ]);
             });
             
-            $report->user->notify(new ReportModerated($report, 'rejected'));
+            if ($report->user) {
+                $report->user->notify(new ReportModerated($report, 'rejected'));
+            }
 
             $this->dispatch('$refresh');
             $this->dispatch('show-toast', type: 'info', message: 'Жалоба отклонена');
         }
     }
 
+    /**
+     * Удаление единичной жалобы (только из архива).
+     */
     public function deleteReport(int $reportId): void
     {
         $this->checkAdminAccess();
@@ -143,13 +239,16 @@ new #[Layout('layouts.admin')] class extends Component
                 return;
             }
             
-             DB::transaction(function () use ($report) {
+            DB::transaction(function () use ($report) {
                 $report->delete();
             });
             $this->dispatch('show-toast', type: 'success', message: 'Жалоба удалена');
         }
     }
 
+    /**
+     * Массовая очистка архива (решенные и отклоненные жалобы).
+     */
     public function deleteResolvedReports(): void
     {
         $this->checkAdminAccess();
@@ -164,26 +263,35 @@ new #[Layout('layouts.admin')] class extends Component
         DB::transaction(function () use ($count) {
             Report::whereIn('status', ['resolved', 'rejected'])->delete();
             
+            // Логируем массовые действия админов для безопасности
             Log::info('Массовое удаление жалоб', [
                 'count' => $count,
                 'moderator_id' => auth()->id(),
             ]);
         });
         
+        // Сбрасываем страницу, т.к. записей могло стать меньше, чем текущая страница пагинации
+        $this->resetPage(); 
         $this->dispatch('$refresh');
         $this->dispatch('show-toast', type: 'success', message: "Удалено {$count} жалоб");
     }
 
+    /**
+     * Бан/Разбан пользователя напрямую из жалобы.
+     * При бане автоматически закрывает все pending жалобы на этого юзера.
+     */
     public function toggleBan(int $userId): void
     {
         $this->checkAdminAccess();     
 
         $user = User::find($userId);
+        // Нельзя забанить админа
         if ($user && !$user->is_admin) {
             DB::transaction(function () use ($user) {
                 $newStatus = !$user->is_banned;
                 $user->update(['is_banned' => $newStatus]);
                 
+                // Логика срабатывает только при НАЛОЖЕНИИ бана
                 if ($newStatus) {
                     $reports = Report::where('reported_user_id', $user->id)
                         ->where('status', 'pending')
@@ -196,10 +304,13 @@ new #[Layout('layouts.admin')] class extends Component
                             'moderator_id' => auth()->id(),
                         ]);
                         
-                        $report->user->notify(new ReportModerated($report, 'user_banned'));
+                        // Уведомляем авторов жалоб о том, что нарушитель забанен
+                        if ($report->user) {
+                            $report->user->notify(new ReportModerated($report, 'user_banned'));
+                        }
                     }
                     
-                    //  передаем null вместо фейковой модели Report                   
+                    // Уведомляем самого забаненного
                     $user->notify(new ReportModerated(
                         null, 
                         'user_banned',
@@ -216,6 +327,10 @@ new #[Layout('layouts.admin')] class extends Component
         }
     }
 
+    /**
+     * Удаление фото напрямую из жалобы.
+     * Автоматически закрывает все pending жалобы на это фото.
+     */
     public function deletePhoto(int $photoId): void
     {
         $this->checkAdminAccess();
@@ -234,19 +349,21 @@ new #[Layout('layouts.admin')] class extends Component
                         'moderator_id' => auth()->id(),
                     ]);
                     
-                    $report->user->notify(new ReportModerated($report, 'photo_deleted'));
+                    if ($report->user) {
+                        $report->user->notify(new ReportModerated($report, 'photo_deleted'));
+                    }
                 }
                 
-                //  передаем null вместо фейковой модели Report
+                // Уведомляем владельца фото об удалении
                 if ($photo->user) {
-                $photo->user->notify(new ReportModerated(
-                    null, 
-                    'photo_deleted',
-                    "Ваше фото #{$photo->id} было удалено по жалобе пользователей."
-                ));
+                    $photo->user->notify(new ReportModerated(
+                        null, 
+                        'photo_deleted',
+                        "Ваше фото #{$photo->id} было удалено по жалобе пользователей."
+                    ));
                 }
                 
-                // Физическое удаление (если нужно, как в фото-модерации)
+                // Удаляем файл с диска, только если это локальный файл, а не внешняя ссылка (URL)
                 if (!filter_var($photo->path, FILTER_VALIDATE_URL)) {
                     Storage::disk('public')->delete($photo->path);
                 }
@@ -259,6 +376,8 @@ new #[Layout('layouts.admin')] class extends Component
     }
 }; 
 ?>
+
+
 <div class="space-y-6">
     <!-- Заголовок -->
     <div class="flex items-center justify-between flex-wrap gap-4">
@@ -465,7 +584,7 @@ new #[Layout('layouts.admin')] class extends Component
                                     
                                     @if($report->type === 'user' && $report->reportedUser && !$report->reportedUser->is_admin)
                                         <x-ui.dropdown-menu-separator />
-                                        <x-ui.dropdown-menu-item wire:key="toggleBan-{{ $report->reported_user_id }}" wire:click="toggleBan({{ $report->reported_user_id }})">
+                                        <x-ui.dropdown-menu-item wire:key="toggleBan-{{ $report->reported_user_id }}" wire:click="toggleBan({{ $report->reported_user_id }})" wire:confirm="Изменить статус блокировки этого пользователя?">
                                             <x-lucide-lock class="w-4 h-4" />
                                             Снять/наложить бан
                                         </x-ui.dropdown-menu-item>
@@ -473,7 +592,7 @@ new #[Layout('layouts.admin')] class extends Component
                                     
                                     @if($report->type === 'photo' && $report->photo)
                                         <x-ui.dropdown-menu-separator />
-                                        <x-ui.dropdown-menu-item wire:key="deletePhoto-{{ $report->photo_id }}" wire:click="deletePhoto({{ $report->photo_id }})" variant="destructive">
+                                        <x-ui.dropdown-menu-item wire:key="deletePhoto-{{ $report->photo_id }}" wire:click="deletePhoto({{ $report->photo_id }})" variant="destructive" wire:confirm="Удалить это фото навсегда?">
                                             <x-lucide-trash-2 class="w-4 h-4" />
                                             Удалить фото
                                         </x-ui.dropdown-menu-item>
@@ -497,21 +616,22 @@ new #[Layout('layouts.admin')] class extends Component
                         @endif
                     </x-ui.table-cell>
                 </x-ui.table-row>
-            @empty
-                <x-ui.table-row wire:key="empty-state">
-                    <x-ui.table-cell colspan="8" class="py-12 text-center text-muted-foreground">
-                        <div class="flex flex-col items-center gap-2">
-                            <x-lucide-inbox class="w-12 h-12 opacity-30" />
-                            <p>Нет жалоб</p>
-                            @if(!empty($search) || $statusFilter !== 'all' || $typeFilter !== 'all')
-                                <x-ui.button wire:click="$set('search', ''); $set('statusFilter', 'all'); $set('typeFilter', 'all')" variant="outline" size="sm" wire:key="reset-filters">
-                                    Сбросить фильтры
-                                </x-ui.button>
-                            @endif
-                        </div>
-                    </x-ui.table-cell>
-                </x-ui.table-row>
-            @endforelse
+           @empty
+            <x-ui.table-row wire:key="empty-state">
+                <x-ui.table-cell colspan="8" class="py-12 text-center text-muted-foreground">
+                    <div class="flex flex-col items-center gap-2">
+                        <x-lucide-inbox class="w-12 h-12 opacity-30" />
+                        <p>Нет жалоб</p>
+                        @if(!empty($search) || $statusFilter !== 'pending' || $typeFilter !== 'all')
+                            <!-- ✅ ИСПРАВЛЕНО: Используем метод resetFilters -->
+                            <x-ui.button wire:click="resetFilters" variant="outline" size="sm" wire:key="reset-filters">
+                                Сбросить фильтры
+                            </x-ui.button>
+                        @endif
+                    </div>
+                </x-ui.table-cell>
+            </x-ui.table-row>
+        @endforelse
         </x-ui.table-body>
     </x-ui.table>
 
