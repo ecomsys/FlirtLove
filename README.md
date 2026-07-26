@@ -7,7 +7,7 @@
 3.Tailwind CSS IntelliSense — автоподсказка классов. 
 4.PHP Intelephense — лучший автокомплит для PHP. 
 5.Prettier — для форматирования JS/JSON/CSS. 
-6.ESLint — для нашего CLI на Node.js.
+6.ESLint
 ```
 
 Добро пожаловать в проект FlirtLove!
@@ -66,6 +66,12 @@ php artisan db:seed
 composer run start
 ```
 
+## Логин и пароль АДМИНИСТРАТОРА
+
+```bash
+login: admin@admin.com
+password: 12121212
+```
 
 ## composer run start - самодельная команнда (запускает dev.php в корне проекта)
 
