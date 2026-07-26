@@ -44,6 +44,8 @@ class DatabaseSeeder extends Seeder
         $this->call(ReportSeeder::class);
         $this->call(SettingSeeder::class);
         $this->call(BroadcastSeeder::class);
+        $this->call(AddLocationToUsersSeeder::class);
+        $this->call(SwipeSeeder::class);
 
         $this->command->info('');
         $this->command->info('  Все сидеры выполнены успешно!');
@@ -54,6 +56,8 @@ class DatabaseSeeder extends Seeder
         $this->command->info('   - Жалоб: ' . \App\Models\Report::count());
         $this->command->info('   - Настроек: ' . \App\Models\Setting::count());
         $this->command->info('   - Уведомлений: ' . \App\Models\Broadcast::count());
+        $this->command->info('   - Свайпов: ' . \App\Models\Swipe::count());
+        $this->command->info('   - Метчей: ' . \App\Models\UserMatch::count());
     }
 
     /**
@@ -66,13 +70,15 @@ class DatabaseSeeder extends Seeder
         // Отключаем проверку внешних ключей
         if ($driver === 'pgsql') {
             DB::statement('TRUNCATE TABLE photos RESTART IDENTITY CASCADE');
-            DB::statement('TRUNCATE TABLE users RESTART IDENTITY CASCADE');
+            DB::statement('TRUNCATE TABLE users RESTART IDENTITY CASCADE');            
             DB::statement('TRUNCATE TABLE photo_comments RESTART IDENTITY CASCADE');
             DB::statement('TRUNCATE TABLE reports RESTART IDENTITY CASCADE');
             DB::statement('TRUNCATE TABLE notifications RESTART IDENTITY CASCADE');
             DB::statement('TRUNCATE TABLE broadcasts RESTART IDENTITY CASCADE');
             DB::statement('TRUNCATE TABLE albums RESTART IDENTITY CASCADE');
-            DB::statement('TRUNCATE TABLE settings RESTART IDENTITY CASCADE');
+            DB::statement('TRUNCATE TABLE settings RESTART IDENTITY CASCADE');    
+            DB::statement('TRUNCATE TABLE swipes RESTART IDENTITY CASCADE');
+            DB::statement('TRUNCATE TABLE user_matches RESTART IDENTITY CASCADE');
         } else {
             DB::statement('SET FOREIGN_KEY_CHECKS=0');
             
@@ -82,6 +88,8 @@ class DatabaseSeeder extends Seeder
             \App\Models\Report::truncate();
             \App\Models\Broadcast::truncate();           
             \App\Models\Album::truncate();
+            \App\Models\Swipe::truncate();
+            \App\Models\UserMatch::truncate();
             \App\Models\Setting::truncate();
             
             DB::statement('SET FOREIGN_KEY_CHECKS=1');

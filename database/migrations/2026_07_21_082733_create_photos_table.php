@@ -6,38 +6,42 @@ use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
-    public function up()
+    public function up(): void
     {
         Schema::create('photos', function (Blueprint $table) {
             $table->id();
+
+            // Внешние ключи
             $table->foreignId('user_id')->constrained()->onDelete('cascade');
-            
-            // Основной путь (для совместимости)
+            $table->foreignId('album_id')->nullable()->constrained('albums')->nullOnDelete();
+
+            // Пути к файлам
             $table->string('path')->nullable();
-            
-            // Все версии
             $table->string('path_original')->nullable();
             $table->string('path_large')->nullable();
             $table->string('path_medium')->nullable();
             $table->string('path_thumb')->nullable();
-            
+
             // Статусы
             $table->enum('status', ['pending', 'approved', 'rejected'])->default('pending');
             $table->boolean('is_primary')->default(false);
             $table->boolean('is_intimate')->default(false);
-            
-            // Порядок сортировки
+
+            // Порядок
             $table->integer('position')->default(0);
-            
+
             $table->timestamps();
-            
-            // Индексы для быстрых запросов
+
+            // Индексы (все, что были)
             $table->index(['user_id', 'status']);
             $table->index(['user_id', 'is_primary']);
+            $table->index(['album_id', 'status']);
+            $table->index(['album_id', 'is_primary']);
+            $table->index(['album_id', 'user_id']);
         });
     }
 
-    public function down()
+    public function down(): void
     {
         Schema::dropIfExists('photos');
     }

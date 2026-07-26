@@ -6,12 +6,10 @@ use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
-    /**
-     * Run the migrations.
-     */
     public function up(): void
     {
         Schema::create('users', function (Blueprint $table) {
+            // Стандартные поля Laravel
             $table->id();
             $table->string('name');
             $table->string('email')->unique();
@@ -20,30 +18,42 @@ return new class extends Migration
             $table->rememberToken();
             $table->timestamps();
 
-            // Пол
-            $table->enum('gender', ['male', 'female'])->nullable()->after('name');
-            // День рождения
-            $table->date('birth_date')->nullable()->after('gender');
-            // Цель знакомства
-            $table->enum('dating_goal', ['friends', 'romantic', 'family', 'casual'])->nullable()->after('birth_date');
-            // Город
-            $table->string('city')->nullable()->after('dating_goal');
+            // Локализация и тема
+            $table->string('locale', 5)->default('ru');
+            $table->string('theme', 10)->default('light');
 
-            // Время последнего захода (time)
-            $table->timestamp('last_login_at')->nullable()->after('has_completed_onboarding');
-            //   Последний IP адресс юзера (ip)
-            $table->string('last_login_ip')->nullable()->after('last_login_at');
-            // Забанен ли пользователь (boolean)
-            $table->boolean('is_banned')->default(false)->after('last_login_ip');
+            // Основная информация
+            $table->enum('gender', ['male', 'female'])->nullable();
+            $table->date('birth_date')->nullable();
+            $table->enum('dating_goal', ['friends', 'romantic', 'family', 'casual'])->nullable();
+            $table->string('city')->nullable();
+            $table->text('bio')->nullable();
+            $table->json('interests')->nullable();
 
-            // Запонимаем локаль (По умолчанию будет ru)
-            $table->string('locale', 5)->default('ru')->after('email');
-            // Запонимаем тему (По умолчанию будет light)
-            $table->string('theme', 10)->default('light')->after('locale');
-            // Прошел ли пользователь процедуру онбординга (загрузка фото при регистрации = boolean)
+            // Геолокация и адрес
+            $table->geography('location', subtype: 'point')->nullable()->index();
+            $table->float('latitude', 10, 7)->nullable();
+            $table->float('longitude', 10, 7)->nullable();
+            $table->string('address')->nullable();
+            $table->string('country')->nullable();
+
+            // Предпочтения поиска
+            $table->unsignedInteger('preferred_age_min')->default(18);
+            $table->unsignedInteger('preferred_age_max')->default(99);
+            $table->string('preferred_gender')->default('any');
+            $table->unsignedInteger('preferred_distance_km')->default(50);
+
+            // Статусы и флаги
+            $table->boolean('is_admin')->default(false);
+            $table->boolean('is_banned')->default(false);
+            $table->boolean('is_premium')->default(false);
+            $table->boolean('is_verified')->default(false);
+            $table->unsignedInteger('superlikes_remaining')->default(5);
             $table->boolean('has_completed_onboarding')->default(false);
-            //   Являеться ли пользователь Администратором (boolean)
-            $table->boolean('is_admin')->default(false)->after('has_completed_onboarding');
+
+            // Активность
+            $table->timestamp('last_login_at')->nullable();
+            $table->string('last_login_ip')->nullable();
         });
 
         Schema::create('password_reset_tokens', function (Blueprint $table) {
@@ -62,13 +72,10 @@ return new class extends Migration
         });
     }
 
-    /**
-     * Reverse the migrations.
-     */
     public function down(): void
     {
-        Schema::dropIfExists('users');
-        Schema::dropIfExists('password_reset_tokens');
         Schema::dropIfExists('sessions');
+        Schema::dropIfExists('password_reset_tokens');
+        Schema::dropIfExists('users');
     }
 };

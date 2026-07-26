@@ -6,12 +6,6 @@ use App\Models\Broadcast;
 use App\Models\User;
 use Illuminate\Database\Seeder;
 
-// # Запустить только этот сидер
-// php artisan db:seed --class=BroadcastSeeder
-
-// # Или вместе со всеми
-// php artisan migrate:fresh --seed
-
 class BroadcastSeeder extends Seeder
 {
     public function run(): void
@@ -19,13 +13,9 @@ class BroadcastSeeder extends Seeder
         $users = User::all();
         $admin = $users->first();
 
-        // Типы уведомлений
         $types = ['system', 'email', 'push'];
-        
-        // Статусы
         $statuses = ['draft', 'sent', 'scheduled'];
 
-        // Темы уведомлений
         $templates = [
             [
                 'title' => 'Добро пожаловать на LovePlanet!',
@@ -89,13 +79,11 @@ class BroadcastSeeder extends Seeder
             ],
         ];
 
-        // ✅ Очищаем таблицу перед созданием
         Broadcast::truncate();
         $this->command->info('🗑️ Старые рассылки удалены');
 
         $this->command->info('📨 Создаем админские рассылки...');
 
-        // Создаем уведомления
         foreach ($templates as $template) {
             $count = rand(1, 3);
             
@@ -111,15 +99,11 @@ class BroadcastSeeder extends Seeder
                     'status' => $status,
                     'scheduled_at' => $status === 'scheduled' ? now()->addDays(rand(1, 5)) : null,
                     'sent_at' => $status === 'sent' ? now()->subDays(rand(0, 10)) : null,
-                    'data' => [
-                        'is_read' => $status === 'sent' ? (bool) rand(0, 1) : false,
-                    ],
                     'created_at' => now()->subDays(rand(0, 30)),
                 ]);
             }
         }
 
-        // Создаем несколько уведомлений для админа
         for ($i = 0; $i < 5; $i++) {
             $status = $statuses[array_rand($statuses)];
             Broadcast::create([
@@ -130,14 +114,10 @@ class BroadcastSeeder extends Seeder
                 'status' => $status,
                 'scheduled_at' => $status === 'scheduled' ? now()->addDays(rand(1, 3)) : null,
                 'sent_at' => $status === 'sent' ? now()->subDays(rand(0, 5)) : null,
-                'data' => [
-                    'is_read' => $status === 'sent' ? (bool) rand(0, 1) : false,
-                ],
                 'created_at' => now()->subDays(rand(0, 15)),
             ]);
         }
 
-        // Создаем уведомления "для всех"
         for ($i = 0; $i < 3; $i++) {
             $status = $statuses[array_rand($statuses)];
             Broadcast::create([
@@ -148,9 +128,6 @@ class BroadcastSeeder extends Seeder
                 'status' => $status,
                 'scheduled_at' => $status === 'scheduled' ? now()->addDays(rand(1, 5)) : null,
                 'sent_at' => $status === 'sent' ? now()->subDays(rand(0, 7)) : null,
-                'data' => [
-                    'is_read' => false,
-                ],
                 'created_at' => now()->subDays(rand(0, 20)),
             ]);
         }
