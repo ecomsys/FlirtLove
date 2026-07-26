@@ -72,7 +72,6 @@ php artisan queue:work      #  Очередь заданий - worker (моде�
 
 Для корректного определния адресса по карте установи ssl сертифика, инструкция в файле RAEDME-DOCS/MAP-SSL-GET-ADRESS.md
 
-Удачи !
 
 
 
