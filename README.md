@@ -63,7 +63,7 @@ createdb flirtlove_db
 php artisan key:generate
 php artisan migrate
 php artisan db:seed
-composer run start
+php dev.php
 ```
 
 ## Логин и пароль АДМИНИСТРАТОРА
@@ -73,7 +73,7 @@ login: admin@admin.com
 password: 12121212
 ```
 
-## composer run start - самодельная команнда (запускает dev.php в корне проекта)
+## php dev.php - запускает dev.php в корне проекта
 
 Что она делает ? Ровно :
 ```bash
