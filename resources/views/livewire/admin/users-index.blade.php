@@ -56,6 +56,7 @@ new #[Layout('layouts.admin')] class extends Component
 
         $users = User::query()
             ->select($columns)
+            ->excludeAdmins()
             //  Изолировали поиск в замыкание, чтобы не ломать другие фильтры
             ->when($this->search, function ($query) {
                 $search = $this->search;

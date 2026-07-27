@@ -27,7 +27,15 @@ use Illuminate\Support\Facades\DB;
     'is_admin',
     'last_login_at',
     'last_login_ip',
-    'is_banned'
+    'is_banned',   
+    'profile_views',
+    'likes_count',
+    'last_seen',
+    'premium_expires_at',
+    'height',
+    'education',
+    'occupation',
+    'zodiac_sign',
 ])]
 #[Hidden(['password', 'remember_token'])]
 
@@ -37,8 +45,7 @@ class User extends Authenticatable implements MustVerifyEmail
 
     protected function casts(): array
     {
-        return [
-            'email_verified_at' => 'datetime',
+        return [            
             'password' => 'hashed',
             'birth_date' => 'date',
             'has_completed_onboarding' => 'boolean',
@@ -46,12 +53,17 @@ class User extends Authenticatable implements MustVerifyEmail
             'is_banned' => 'boolean',
             'is_premium' => 'boolean',
             'is_verified' => 'boolean',
+            'email_verified_at' => 'datetime',
             'last_login_at' => 'datetime',
+            'last_seen' => 'datetime', 
+            'premium_expires_at' => 'datetime', 
             'interests' => 'array',
             'preferred_age_min' => 'integer',
             'preferred_age_max' => 'integer',
             'preferred_distance_km' => 'integer',
             'superlikes_remaining' => 'integer',
+            'profile_views' => 'integer', 
+            'likes_count' => 'integer', 
             'location' => 'string', 
         ];
     }
@@ -61,10 +73,35 @@ class User extends Authenticatable implements MustVerifyEmail
         return $this->email;
     }
 
+    /**
+     * Локальный скоуп: Исключает администраторов из выдачи.
+     */
+    public function scopeExcludeAdmins($query)
+    {
+        return $query->where('is_admin', false);
+    }
+
+    // === НОВЫЕ ХЕЛПЕРЫ ===
+
+    /**
+     * Проверка, активен ли Premium (с учетом даты истечения)
+     */
+    public function getHasActivePremiumAttribute(): bool
+    {
+        return $this->is_premium && ($this->premium_expires_at === null || $this->premium_expires_at->isFuture());
+    }
+
+    /**
+     * Проверка, онлайн ли пользователь (был в сети < 5 минут назад)
+     */
+    public function getIsOnlineAttribute(): bool
+    {
+        return $this->last_seen && $this->last_seen->gt(now()->subMinutes(5));
+    }
+
     // === ЧАТЫ ===
     public function chats(): HasMany
     {
-        // Юзер может быть как user1, так и user2
         return Chat::where('user1_id', $this->id)->orWhere('user2_id', $this->id);
     }
 
@@ -75,7 +112,6 @@ class User extends Authenticatable implements MustVerifyEmail
 
     public function getChatSettingsAttribute()
     {
-        // Дефолтные настройки, если поле пустое
         return $this->chat_filter_settings ?? [
             'gender' => 'any',
             'age_from' => 18,
@@ -206,7 +242,8 @@ class User extends Authenticatable implements MustVerifyEmail
         $radius = $this->preferred_distance_km ?? 50;
 
         return User::where('is_banned', false)
-            ->where('has_completed_onboarding', true)
+            ->where('is_admin', false)
+            ->where('has_completed_onboarding', true)            
             ->whereNotIn('id', $excludeIds)
             ->when($this->preferred_age_min, function ($q) {
                 $q->whereRaw('EXTRACT(YEAR FROM age(birth_date)) >= ?', [$this->preferred_age_min]);
@@ -241,6 +278,11 @@ class User extends Authenticatable implements MustVerifyEmail
             'type' => $type,
         ]);
 
+        // ✅ УВЕЛИЧИВАЕМ СЧЕТЧИК ЛАЙКОВ У ЦЕЛИ, ЕСЛИ ЭТО ЛАЙК
+        if (in_array($type, ['like', 'superlike'])) {
+            $targetUser->increment('likes_count');
+        }
+
         if (in_array($type, ['like', 'superlike'])) {
             $mutual = Swipe::where('user_id', $targetUser->id)
                 ->where('target_user_id', $this->id)
@@ -253,7 +295,6 @@ class User extends Authenticatable implements MustVerifyEmail
                     'user2_id' => max($this->id, $targetUser->id),
                 ]);
 
-                // СОЗДАЕМ ЧАТ ПРИ МАТЧЕ
                 Chat::getOrCreateBetween($this, $targetUser);
 
                 return [

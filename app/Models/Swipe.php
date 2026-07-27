@@ -22,4 +22,12 @@ class Swipe extends Model
     {
         return $this->belongsTo(User::class, 'target_user_id');
     }
+        /**
+     * Локальный скоуп: Исключает свайпы, где админ выступает инициатором или целью.
+     */
+    public function scopeExcludeAdmins($query)
+    {
+        return $query->whereHas('user', fn($q) => $q->where('is_admin', false))
+                     ->whereHas('targetUser', fn($q) => $q->where('is_admin', false));
+    }
 }

@@ -12,7 +12,8 @@ class PhotoSeeder extends Seeder
     {
         $this->command->info('📸 Создаем фото...');
 
-        $users = User::where('is_admin', false)->get();
+        // ✅ Используем скоуп
+        $users = User::excludeAdmins()->get();
 
         foreach ($users as $user) {
             $photoCount = rand(1, 3);

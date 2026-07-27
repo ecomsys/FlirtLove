@@ -10,8 +10,8 @@ class BroadcastSeeder extends Seeder
 {
     public function run(): void
     {
-        $users = User::all();
-        $admin = $users->first();
+        // ✅ Берем только обычных юзеров
+        $users = User::where('is_admin', false)->get();
 
         $types = ['system', 'email', 'push'];
         $statuses = ['draft', 'sent', 'scheduled'];
@@ -82,7 +82,7 @@ class BroadcastSeeder extends Seeder
         Broadcast::truncate();
         $this->command->info('🗑️ Старые рассылки удалены');
 
-        $this->command->info('📨 Создаем админские рассылки...');
+        $this->command->info('📨 Создаем рассылки для пользователей...');
 
         foreach ($templates as $template) {
             $count = rand(1, 3);
@@ -104,19 +104,7 @@ class BroadcastSeeder extends Seeder
             }
         }
 
-        for ($i = 0; $i < 5; $i++) {
-            $status = $statuses[array_rand($statuses)];
-            Broadcast::create([
-                'user_id' => $admin->id,
-                'type' => 'system',
-                'title' => 'Админское уведомление #' . ($i + 1),
-                'message' => 'Это тестовое уведомление для администратора. Проверка работы системы.',
-                'status' => $status,
-                'scheduled_at' => $status === 'scheduled' ? now()->addDays(rand(1, 3)) : null,
-                'sent_at' => $status === 'sent' ? now()->subDays(rand(0, 5)) : null,
-                'created_at' => now()->subDays(rand(0, 15)),
-            ]);
-        }
+        // ✅ Убрали создание "Админских уведомлений"
 
         for ($i = 0; $i < 3; $i++) {
             $status = $statuses[array_rand($statuses)];

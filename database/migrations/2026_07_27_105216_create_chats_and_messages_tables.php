@@ -8,16 +8,17 @@ return new class extends Migration
 {
     public function up(): void
     {
-        // Таблица чатов (строго 1 на 1)
+        // Таблица чатов
         Schema::create('chats', function (Blueprint $table) {
             $table->id();
+            $table->enum('type', ['private', 'support'])->default('private')->after('id');
             $table->foreignId('user1_id')->constrained('users')->onDelete('cascade');
             $table->foreignId('user2_id')->constrained('users')->onDelete('cascade');
             $table->timestamp('last_message_at')->nullable()->index(); // Для сортировки списка чатов
             $table->timestamps();
-
-            // Гарантируем, что между двумя юзерами только один чат
-            $table->unique(['user1_id', 'user2_id']);
+          
+            // Это позволит создать 1 private и 1 support чат между одними и теми же юзерами
+            $table->unique(['user1_id', 'user2_id', 'type'], 'chats_user1_user2_type_unique');
         });
 
         // Таблица сообщений

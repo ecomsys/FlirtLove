@@ -38,28 +38,34 @@ class DatabaseSeeder extends Seeder
         $this->command->info(' Запуск сидеров...');
         $this->command->info('');
 
+        // ✅ Сначала создаем Админа
+        $this->call(AdminSeeder::class);
+        
+        // Затем создаем обычных юзеров и их данные
         $this->call(UserSeeder::class);
+        $this->call(AddLocationToUsersSeeder::class);
         $this->call(PhotoAlbumsSeeder::class);
         $this->call(PhotoCommentSeeder::class);
         $this->call(ReportSeeder::class);
         $this->call(SettingSeeder::class);
         $this->call(BroadcastSeeder::class);
-        $this->call(AddLocationToUsersSeeder::class);
         $this->call(SwipeSeeder::class);
         $this->call(ChatSeeder::class);        
+        $this->call(TestLogsSeeder::class);
 
         $this->command->info('');
         $this->command->info('  Все сидеры выполнены успешно!');
         $this->command->info('  Итоговая статистика:');
-        $this->command->info('   - Пользователей: ' . \App\Models\User::count());
-        $this->command->info('   - Фото: ' . \App\Models\Photo::count());
-        $this->command->info('   - Комментариев: ' . \App\Models\PhotoComment::count());
-        $this->command->info('   - Жалоб: ' . \App\Models\Report::count());
-        $this->command->info('   - Настроек: ' . \App\Models\Setting::count());
-        $this->command->info('   - Уведомлений: ' . \App\Models\Broadcast::count());
-        $this->command->info('   - Свайпов: ' . \App\Models\Swipe::count());
-        $this->command->info('   - Метчей: ' . \App\Models\UserMatch::count());
-        $this->command->info('   - Чатов: ' . \App\Models\Chat::count());
+        $this->command->info('   👑 Админов: ' . \App\Models\User::where('is_admin', true)->count());
+        $this->command->info('   👤 Пользователей: ' . \App\Models\User::where('is_admin', false)->count());
+        $this->command->info('   📸 Фото: ' . \App\Models\Photo::count());
+        $this->command->info('   💬 Комментариев: ' . \App\Models\PhotoComment::count());
+        $this->command->info('   🚩 Жалоб: ' . \App\Models\Report::count());
+        $this->command->info('   ⚙️ Настроек: ' . \App\Models\Setting::count());
+        $this->command->info('   📨 Уведомлений: ' . \App\Models\Broadcast::count());
+        $this->command->info('   👉 Свайпов: ' . \App\Models\Swipe::count());
+        $this->command->info('   ❤️ Метчей: ' . \App\Models\UserMatch::count());
+        $this->command->info('   💌 Чатов: ' . \App\Models\Chat::count());
     }
 
     /**
@@ -69,22 +75,15 @@ class DatabaseSeeder extends Seeder
     {
         $driver = DB::connection()->getDriverName();
 
-        // Отключаем проверку внешних ключей
         if ($driver === 'pgsql') {
-            DB::statement('TRUNCATE TABLE photos RESTART IDENTITY CASCADE');
-            DB::statement('TRUNCATE TABLE users RESTART IDENTITY CASCADE');            
-            DB::statement('TRUNCATE TABLE photo_comments RESTART IDENTITY CASCADE');
-            DB::statement('TRUNCATE TABLE reports RESTART IDENTITY CASCADE');
-            DB::statement('TRUNCATE TABLE notifications RESTART IDENTITY CASCADE');
-            DB::statement('TRUNCATE TABLE broadcasts RESTART IDENTITY CASCADE');
-            DB::statement('TRUNCATE TABLE albums RESTART IDENTITY CASCADE');
-            DB::statement('TRUNCATE TABLE settings RESTART IDENTITY CASCADE');    
-            DB::statement('TRUNCATE TABLE swipes RESTART IDENTITY CASCADE');
-            DB::statement('TRUNCATE TABLE user_matches RESTART IDENTITY CASCADE');
-            DB::statement('TRUNCATE TABLE chats RESTART IDENTITY CASCADE');
+            // ✅ Добавлены сообщения и участники чатов для чистого старта
+            DB::statement('TRUNCATE TABLE users, photos, photo_comments, reports, notifications, broadcasts, albums, settings, swipes, user_matches, chats, messages, chat_participants RESTART IDENTITY CASCADE');
         } else {
             DB::statement('SET FOREIGN_KEY_CHECKS=0');
             
+            \App\Models\Message::truncate();
+            \App\Models\ChatParticipant::truncate();
+            \App\Models\Chat::truncate();
             \App\Models\Photo::truncate();
             \App\Models\User::truncate();
             \App\Models\PhotoComment::truncate();
@@ -94,7 +93,6 @@ class DatabaseSeeder extends Seeder
             \App\Models\Swipe::truncate();
             \App\Models\UserMatch::truncate();
             \App\Models\Setting::truncate();
-            \App\Models\Chat::truncate();
             
             DB::statement('SET FOREIGN_KEY_CHECKS=1');
         }

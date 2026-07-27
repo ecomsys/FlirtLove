@@ -114,6 +114,8 @@ new #[Layout('layouts.admin')] class extends Component {
      */
     private function applyCommentFilters($query): void
     {
+        $query->excludeAdmins();
+
         if ($this->statusFilter !== 'all') {
             $query->where(function ($sub) {
                 $sub->where('status', $this->statusFilter)->orWhereHas('replies', function ($r) {
@@ -145,6 +147,8 @@ new #[Layout('layouts.admin')] class extends Component {
      */
     private function applyReplyFilters($query): void
     {
+        $query->excludeAdmins();
+
         if ($this->statusFilter !== 'all') {
             $query->where('status', $this->statusFilter);
         }
@@ -201,7 +205,7 @@ new #[Layout('layouts.admin')] class extends Component {
     #[Computed]
     public function counts()
     {
-        $stats = PhotoComment::selectRaw(
+        $stats = PhotoComment::excludeAdmins()->selectRaw(
             "
             SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
             SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) as approved,
@@ -348,7 +352,7 @@ new #[Layout('layouts.admin')] class extends Component {
     {
         $this->checkAdminAccess();
 
-        $pendingComments = PhotoComment::where('photo_id', $photoId)->where('status', 'pending')->with('parent', 'user')->get();
+        $pendingComments = PhotoComment::where('photo_id', $photoId)->where('status', 'pending')->excludeAdmins()->with('parent', 'user')->get();
 
         if ($pendingComments->isEmpty()) {
             $this->dispatch('show-toast', type: 'info', message: 'Нет комментариев для одобрения');
@@ -386,7 +390,7 @@ new #[Layout('layouts.admin')] class extends Component {
     {
         $this->checkAdminAccess();
 
-        $pendingComments = PhotoComment::where('photo_id', $photoId)->where('status', 'pending')->with('user')->get();
+        $pendingComments = PhotoComment::where('photo_id', $photoId)->where('status', 'pending')->excludeAdmins()->with('user')->get();
 
         if ($pendingComments->isEmpty()) {
             $this->dispatch('show-toast', type: 'info', message: 'Нет комментариев для отклонения');
@@ -413,7 +417,7 @@ new #[Layout('layouts.admin')] class extends Component {
     {
         $this->checkAdminAccess();
 
-        $pendingComments = PhotoComment::where('status', 'pending')->with('parent', 'user')->get();
+        $pendingComments = PhotoComment::where('status', 'pending')->excludeAdmins()->with('parent', 'user')->get();
 
         if ($pendingComments->isEmpty()) {
             $this->dispatch('show-toast', type: 'info', message: 'Нет комментариев для одобрения');
@@ -447,7 +451,7 @@ new #[Layout('layouts.admin')] class extends Component {
     {
         $this->checkAdminAccess();
 
-        $pendingComments = PhotoComment::where('status', 'pending')->with('user')->get();
+        $pendingComments = PhotoComment::where('status', 'pending')->excludeAdmins()->with('user')->get();
 
         if ($pendingComments->isEmpty()) {
             $this->dispatch('show-toast', type: 'info', message: 'Нет комментариев для отклонения');

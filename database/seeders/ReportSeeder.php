@@ -10,16 +10,16 @@ class ReportSeeder extends Seeder
 {
     public function run(): void
     {
-        $users = User::all();
+        // ✅ Берем только обычных юзеров
+        $users = User::excludeAdmins()->get();
         
         if ($users->count() < 2) {
-            $this->command->warn('⚠️ Нужно минимум 2 пользователя для жалоб!');
+            $this->command->warn('⚠️ Нужно минимум 2 обычных пользователя для жалоб!');
             return;
         }
 
         $this->command->info('🚩 Создаем жалобы...');
 
-        $reporter = $users->first();
         $reasons = [
             'Оскорбляет других пользователей в чате',
             'Профиль выглядит фейковым',
@@ -30,7 +30,9 @@ class ReportSeeder extends Seeder
         ];
 
         for ($i = 0; $i < 10; $i++) {
-            $reported = $users->skip(rand(1, $users->count() - 1))->first();
+            $reporter = $users->random();
+            // ✅ Гарантируем, что юзер не кидает жалобу сам на себя
+            $reported = $users->where('id', '!=', $reporter->id)->random();
             
             Report::create([
                 'user_id' => $reporter->id,

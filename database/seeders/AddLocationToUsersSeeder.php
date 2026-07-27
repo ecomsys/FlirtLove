@@ -16,7 +16,7 @@ class AddLocationToUsersSeeder extends Seeder
         ];
 
         // ✅ Используем DB, чтобы не загружать модели с кастами
-        $users = DB::table('users')->get();
+        $users = DB::table('users')->where('is_admin', false)->get();
 
         foreach ($users as $user) {
             $cityName = array_rand($cities);

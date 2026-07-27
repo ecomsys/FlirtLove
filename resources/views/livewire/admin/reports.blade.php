@@ -120,13 +120,14 @@ new #[Layout('layouts.admin')] class extends Component
 
     /**
      * Вычисляемое свойство: список жалоб с пагинацией.
-     * Использует жадную загрузку (eager loading) для оптимизации запросов.
+     * Исключает жалобы, где замешаны админы (как жалобщики или нарушители).
      */
     #[Computed]
     public function reports()
     {
         return Report::query()
             ->with(['user', 'reportedUser', 'photo'])
+            ->excludeAdmins() 
             // ВАЖНО: orWhere обернут в замыкание where(), 
             // чтобы поиск не ломал основные фильтры (статус и тип).
             ->when($this->search, function ($query) {
@@ -152,11 +153,14 @@ new #[Layout('layouts.admin')] class extends Component
     /**
      * Вычисляемое свойство: счетчики для бейджей.
      * Оптимизация: один SQL-запрос вместо четырех отдельных COUNT().
+     * Также исключает админов.
      */
     #[Computed]
     public function counts()
     {
-        $stats = Report::selectRaw("
+        $baseQuery = Report::query()->excludeAdmins(); 
+
+        $stats = $baseQuery->selectRaw("
             SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
             SUM(CASE WHEN status = 'resolved' THEN 1 ELSE 0 END) as resolved,
             SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END) as rejected,

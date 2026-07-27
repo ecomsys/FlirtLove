@@ -21,7 +21,7 @@ class ChatSeeder extends Seeder
         ChatParticipant::truncate();
         Chat::truncate();
 
-        $matches = UserMatch::all();
+        $matches = UserMatch::excludeAdmins()->get();
 
         if ($matches->isEmpty()) {
             $this->command->warn('Нет матчей в базе! Сначала прогоните сидеры свайпов и матчей.');

@@ -118,11 +118,11 @@ new #[Layout('layouts.admin')] class extends Component
     {
         return Cache::remember('dating_admin_stats', 60, function () {
             return [
-                'total_likes' => Swipe::where('type', 'like')->count(),
-                'total_dislikes' => Swipe::where('type', 'dislike')->count(),
-                'total_superlikes' => Swipe::where('type', 'superlike')->count(),
-                'total_swipes' => Swipe::count(),
-                'total_matches' => UserMatch::count(),
+                'total_likes' => Swipe::where('type', 'like')->excludeAdmins()->count(),
+                'total_dislikes' => Swipe::where('type', 'dislike')->excludeAdmins()->count(),
+                'total_superlikes' => Swipe::where('type', 'superlike')->excludeAdmins()->count(),
+                'total_swipes' => Swipe::excludeAdmins()->count(),
+                'total_matches' => UserMatch::excludeAdmins()->count(),
             ];
         });
     }
@@ -143,9 +143,8 @@ new #[Layout('layouts.admin')] class extends Component
     private function getSwipes()
     {
         return Swipe::with(['user', 'targetUser'])
+            ->excludeAdmins() 
             ->when($this->typeFilter !== 'all', fn($q) => $q->where('type', $this->typeFilter))
-            // ВАЖНО: orWhereHas обернут в замыкание where(), 
-            // чтобы поиск по имени не ломал фильтры по типу и дате.
             ->when($this->search, function ($q) {
                 $q->where(function ($innerQ) {
                     $innerQ->whereHas('user', fn($q2) => $q2->where('name', 'ilike', "%{$this->search}%"))
@@ -163,8 +162,8 @@ new #[Layout('layouts.admin')] class extends Component
      */
     private function getMatches()
     {
-        return UserMatch::with(['user1', 'user2'])
-            // Аналогичная изоляция поиска для матчей
+          return UserMatch::with(['user1', 'user2'])
+            ->excludeAdmins() 
             ->when($this->search, function ($q) {
                 $q->where(function ($innerQ) {
                     $innerQ->whereHas('user1', fn($q2) => $q2->where('name', 'ilike', "%{$this->search}%"))

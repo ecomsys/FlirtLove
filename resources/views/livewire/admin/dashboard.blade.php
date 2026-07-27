@@ -20,40 +20,51 @@ new #[Layout('layouts.admin')] class extends Component
         // Правильно получаем метрики из кеша
         $metrics = Cache::remember('admin_dashboard_metrics', 600, function () {
             return [
-                'totalUsers' => User::count(),
-                'newUsersToday' => User::whereDate('created_at', today())->count(),
-                'newUsersWeek' => User::where('created_at', '>=', now()->subDays(7))->count(),
-                'photosTotal' => Photo::count(),
-                'photosPending' => Photo::where('status', 'pending')->count(),
-                'photosApproved' => Photo::where('status', 'approved')->count(),
-                'reportsPending' => Report::where('status', 'pending')->count(),
-                'reportsTotal' => Report::count(),
+                // ✅ Исключаем админов из статистики юзеров
+                'totalUsers' => User::excludeAdmins()->count(),
+                'newUsersToday' => User::excludeAdmins()->whereDate('created_at', today())->count(),
+                'newUsersWeek' => User::excludeAdmins()->where('created_at', '>=', now()->subDays(7))->count(),
+                
+                // ✅ Исключаем фото, загруженные админами
+                'photosTotal' => Photo::excludeAdmins()->count(),
+                'photosPending' => Photo::excludeAdmins()->where('status', 'pending')->count(),
+                'photosApproved' => Photo::excludeAdmins()->where('status', 'approved')->count(),
+                
+                // ✅ Исключаем жалобы, где замешаны админы
+                'reportsPending' => Report::excludeAdmins()->where('status', 'pending')->count(),
+                'reportsTotal' => Report::excludeAdmins()->count(),
+                
+                // Оповещения не трогаем (это сами рассылки, а не юзеры)
                 'notificationsTotal' => Broadcast::count(),
                 'notificationsScheduled' => Broadcast::where('status', 'scheduled')->count(),
+                
                 'genderStats' => $this->getGenderStats(),
                 'ageStats' => $this->getAgeStats(),
                 'topCities' => $this->getTopCities(),
                 'registrationData' => $this->getRegistrationData(),
                 'categories' => $this->getCategories(),
-                'commentsTotal' => PhotoComment::count(),
-                'commentsPending' => PhotoComment::where('status', 'pending')->count(),
-                'commentsApproved' => PhotoComment::where('status', 'approved')->count(),
-                'commentsRejected' => PhotoComment::where('status', 'rejected')->count(),
-                'commentsSpam' => PhotoComment::where('status', 'spam')->count(),
-                'newCommentsToday' => PhotoComment::whereDate('created_at', today())->count(),
+                
+                // ✅ Исключаем комментарии админов
+                'commentsTotal' => PhotoComment::excludeAdmins()->count(),
+                'commentsPending' => PhotoComment::excludeAdmins()->where('status', 'pending')->count(),
+                'commentsApproved' => PhotoComment::excludeAdmins()->where('status', 'approved')->count(),
+                'commentsRejected' => PhotoComment::excludeAdmins()->where('status', 'rejected')->count(),
+                'commentsSpam' => PhotoComment::excludeAdmins()->where('status', 'spam')->count(),
+                'newCommentsToday' => PhotoComment::excludeAdmins()->whereDate('created_at', today())->count(),
                 'commentsData' => $this->getCommentsData(),
                 'commentCategories' => $this->getCommentCategories(),        
             ];
         });
 
-        //  Онлайн считаем отдельно (не кешируем)
+        // ✅ Онлайн считаем отдельно (не кешируем). Соединяем с таблицей users, чтобы исключить админов
         $onlineUsers = DB::table('sessions')
-            ->whereNotNull('user_id')
-            ->where('last_activity', '>=', now()->subMinutes(5)->timestamp)
-            ->distinct('user_id')
-            ->count('user_id');
+            ->join('users', 'sessions.user_id', '=', 'users.id')
+            ->where('users.is_admin', false)
+            ->where('sessions.last_activity', '>=', now()->subMinutes(5)->timestamp)
+            ->distinct('sessions.user_id')
+            ->count('sessions.user_id');
 
-        //  Объединяем
+        // Объединяем
         return array_merge($metrics, ['onlineUsers' => $onlineUsers]);
     }
 
@@ -61,7 +72,8 @@ new #[Layout('layouts.admin')] class extends Component
 
     private function getGenderStats(): array
     {
-        return User::select('gender', DB::raw('count(*) as total'))
+        // ✅ Исключаем админов
+        return User::excludeAdmins()->select('gender', DB::raw('count(*) as total'))
             ->whereNotNull('gender')
             ->groupBy('gender')
             ->pluck('total', 'gender')
@@ -70,7 +82,8 @@ new #[Layout('layouts.admin')] class extends Component
 
     private function getAgeStats(): array
     {
-        $users = User::whereNotNull('birth_date')->get();
+        // ✅ Исключаем админов
+        $users = User::excludeAdmins()->whereNotNull('birth_date')->get();
         $stats = ['18-24' => 0, '25-34' => 0, '35-44' => 0, '45-54' => 0, '55+' => 0];
 
         foreach ($users as $user) {
@@ -88,7 +101,8 @@ new #[Layout('layouts.admin')] class extends Component
 
     private function getTopCities(): array
     {
-        return User::whereNotNull('city')
+        // ✅ Исключаем админов
+        return User::excludeAdmins()->whereNotNull('city')
             ->select('city', DB::raw('count(*) as total'))
             ->groupBy('city')
             ->orderBy('total', 'desc')
@@ -99,7 +113,8 @@ new #[Layout('layouts.admin')] class extends Component
 
     private function getRegistrationData(): array
     {
-        $stats = User::select(DB::raw('DATE(created_at) as date'), DB::raw('count(*) as total'))
+        // ✅ Исключаем админов
+        $stats = User::excludeAdmins()->select(DB::raw('DATE(created_at) as date'), DB::raw('count(*) as total'))
             ->where('created_at', '>=', now()->subDays(7))
             ->groupBy('date')
             ->orderBy('date')
@@ -123,10 +138,9 @@ new #[Layout('layouts.admin')] class extends Component
         return $categories;
     }
 
-   public function refresh(): void
+    public function refresh(): void
     {
         Cache::forget('admin_dashboard_metrics');
-        // Используем redirect через Livewire
         $this->redirect(route('admin.dashboard'));
     }
 
@@ -142,9 +156,11 @@ new #[Layout('layouts.admin')] class extends Component
             $this->dispatch('show-toast', type: 'error', message: 'Ошибка: ' . $e->getMessage());
         }
     }
+
     private function getCommentsData(): array
     {
-        $stats = PhotoComment::select(DB::raw('DATE(created_at) as date'), DB::raw('count(*) as total'))
+        // ✅ Исключаем админов
+        $stats = PhotoComment::excludeAdmins()->select(DB::raw('DATE(created_at) as date'), DB::raw('count(*) as total'))
             ->where('created_at', '>=', now()->subDays(7))
             ->groupBy('date')
             ->orderBy('date')
@@ -167,7 +183,8 @@ new #[Layout('layouts.admin')] class extends Component
         }
         return $categories;
     }
-}; ?>
+}; 
+?>
 
 <div class="space-y-6">
     <!-- Заголовок -->

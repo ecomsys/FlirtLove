@@ -280,7 +280,7 @@ new #[Layout('layouts.admin')] class extends Component
     private function sendRealBroadcast($broadcast): void
     {
         $query = $broadcast->user_id === null 
-            ? User::where('is_banned', false) 
+            ? User::where('is_banned', false)->excludeAdmins() 
             : User::where('id', $broadcast->user_id);
 
         $sentCount = 0;
@@ -365,6 +365,10 @@ new #[Layout('layouts.admin')] class extends Component
         return Broadcast::query()
             ->with('user:id,name,email')
             ->select('id', 'user_id', 'type', 'title', 'message', 'status', 'scheduled_at', 'sent_at', 'created_at')
+            ->where(function ($query) {
+                $query->whereNull('user_id') // Массовые рассылки (всем) оставляем
+                      ->orWhereHas('user', fn($q) => $q->where('is_admin', false)); // Только обычные юзеры
+            })
             //  Изолировали orWhere в замыкание
             ->when($this->search, function ($query) {
                 $search = $this->search;
@@ -408,7 +412,7 @@ new #[Layout('layouts.admin')] class extends Component
     public function users()
     {
         return Cache::remember('admin_users_list', 600, function () {
-            $users = User::orderBy('name')->get(['id', 'name']);
+            $users = User::orderBy('name')->excludeAdmins()->get(['id', 'name']);
             $options = [['value' => '', 'label' => 'Всем пользователям']];
             foreach ($users as $user) {
                 $options[] = ['value' => $user->id, 'label' => ' (ID: ' . $user->id . ') ' . $user->name];

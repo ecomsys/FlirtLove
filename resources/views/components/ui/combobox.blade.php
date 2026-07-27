@@ -259,7 +259,7 @@
                     @keydown.end.prevent="edge('last')"
                     @keydown.enter.prevent="selectActive()"
                 @endif
-                class="max-h-[300px] scroll-py-1 overflow-x-hidden overflow-y-auto {{ $isInput ? '' : 'p-1' }} outline-hidden"
+                class="max-h-[300px] scroll-py-1 overflow-x-hidden little-scroll overflow-y-auto {{ $isInput ? '' : 'p-1' }} outline-hidden"
             >
                 <div x-show="visibleCount === 0" class="py-6 text-center text-sm">{{ $empty }}</div>
                 <template x-for="option in options" :key="option.value">

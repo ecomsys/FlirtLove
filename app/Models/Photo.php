@@ -291,6 +291,14 @@ class Photo extends Model
     // СКОПЫ
     // ============================================
 
+        /**
+     * Локальный скоуп: Исключает фотографии, загруженные администраторами.
+     */
+    public function scopeExcludeAdmins($query)
+    {
+        return $query->whereHas('user', fn($q) => $q->where('is_admin', false));
+    }
+    
     /**
      * Только одобренные фото
      */

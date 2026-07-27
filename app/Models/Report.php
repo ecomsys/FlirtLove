@@ -28,6 +28,20 @@ class Report extends Model
     ];
 
     // Отношения
+
+        /**
+     * Локальный скоуп: Исключает жалобы, где замешаны админы
+     * (ни как жалобщики, ни как нарушители).
+     */
+    public function scopeExcludeAdmins($query)
+    {
+        return $query->whereHas('user', fn($q) => $q->where('is_admin', false))
+                     ->where(function ($query) {
+                         $query->whereNull('reported_user_id') // Жалобы на фото пропускаем
+                               ->orWhereHas('reportedUser', fn($q) => $q->where('is_admin', false));
+                     });
+    }
+     
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class, 'user_id');

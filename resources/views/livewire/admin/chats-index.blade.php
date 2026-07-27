@@ -12,7 +12,13 @@ use App\Notifications\ChatDeletedByAdmin;
 /**
  * Компонент админки: Чаты пользователей.
  * Отображает список приватных чатов, фильтры по дате и типу, поиск и переписку.
+ * Администраторы исключены из выдачи.
  */
+
+//  НА ФРОНТЕ ПОТОМ !!!
+//  Если у чата нет мэтча, инпут ввода сообщения будет скрыт,
+//  а вместо него будет плашка: "Ожидание взаимного лайка. Чтобы написать сейчас, оформите Premium".
+
 new #[Layout('layouts.admin')] class extends Component {
     use WithPagination;
 
@@ -38,10 +44,10 @@ new #[Layout('layouts.admin')] class extends Component {
         }
     }
 
-   public function updatingSearch(): void
+    public function updatingSearch(): void
     {
         $this->resetPage();
-        $this->activeChatId = null; // ✅ Сбрасываем открытый чат
+        $this->activeChatId = null;
     }
 
     public function setDateFilter(string $filter): void
@@ -49,7 +55,7 @@ new #[Layout('layouts.admin')] class extends Component {
         $this->dateFilter = $filter;
         session(['admin_chats.dateFilter' => $filter]);
         $this->resetPage();
-        $this->activeChatId = null; // ✅ Сбрасываем открытый чат
+        $this->activeChatId = null;
     }
 
     public function setTypeFilter(string $filter): void
@@ -57,7 +63,7 @@ new #[Layout('layouts.admin')] class extends Component {
         $this->typeFilter = $filter;
         session(['admin_chats.typeFilter' => $filter]);
         $this->resetPage();
-        $this->activeChatId = null; // ✅ Сбрасываем открытый чат
+        $this->activeChatId = null;
     }
 
     public function selectChat(int $chatId): void
@@ -72,6 +78,10 @@ new #[Layout('layouts.admin')] class extends Component {
         $this->resetPage();
     }
 
+    /**
+     * Вычисляемое свойство: Список чатов (левая панель).
+     * Исключает чаты, где замешаны админы.
+     */
     #[Computed]
     public function chats()
     {
@@ -80,6 +90,7 @@ new #[Layout('layouts.admin')] class extends Component {
 
         return Chat::query()
             ->where('type', 'private')
+            ->excludeAdmins()
             ->with([
                 'user1.photos',
                 'user2.photos',
@@ -104,36 +115,42 @@ new #[Layout('layouts.admin')] class extends Component {
                     $query->where('last_message_at', '>=', $date);
                 }
             })
-            // Фильтр по метчам
             ->when($this->typeFilter === 'match', function ($query) {
                 $query->whereExists(function ($subQuery) {
-                    $subQuery->select(DB::raw(1))
-                             ->from('user_matches')
-                             ->whereColumn('user_matches.user1_id', 'chats.user1_id')
-                             ->whereColumn('user_matches.user2_id', 'chats.user2_id');
+                    $subQuery->select(DB::raw(1))->from('user_matches')->whereColumn('user_matches.user1_id', 'chats.user1_id')->whereColumn('user_matches.user2_id', 'chats.user2_id');
                 });
             })
-            // Фильтр по пейволу (есть ли в чате системное сообщение)
             ->when($this->typeFilter === 'paywall', fn($q) => $q->whereHas('messages', fn($q2) => $q2->where('type', 'system')))
             ->orderByDesc('last_message_at')
             ->paginate($this->perPage);
     }
 
-        #[Computed]
+    /**
+     * Вычисляемое свойство: Счетчики для кнопок фильтров.
+     * Использует базовый запрос (clone) для оптимизации и исключения админов.
+     */
+    #[Computed]
     public function counts()
     {
+        $baseQuery = Chat::where('type', 'private')->excludeAdmins(); 
+
         return [
-            'total' => Chat::where('type', 'private')->count(),
-            'week' => Chat::where('type', 'private')->where('last_message_at', '>=', now()->startOfWeek())->count(),
-            'match' => Chat::where('type', 'private')->whereExists(function ($query) {
-                $query->select(DB::raw(1))
-                      ->from('user_matches')
-                      ->whereColumn('user_matches.user1_id', 'chats.user1_id')
-                      ->whereColumn('user_matches.user2_id', 'chats.user2_id');
-            })->count(),
-            'paywall' => Chat::where('type', 'private')->whereHas('messages', fn($q) => $q->where('type', 'system'))->count(),
+            'total' => (clone $baseQuery)->count(),
+            'day' => (clone $baseQuery)->where('last_message_at', '>=', now()->startOfDay())->count(),
+            'week' => (clone $baseQuery)->where('last_message_at', '>=', now()->startOfWeek())->count(),
+            'month' => (clone $baseQuery)->where('last_message_at', '>=', now()->startOfMonth())->count(),
+            'match' => (clone $baseQuery)
+                ->whereExists(function ($query) {
+                    $query->select(DB::raw(1))->from('user_matches')->whereColumn('user_matches.user1_id', 'chats.user1_id')->whereColumn('user_matches.user2_id', 'chats.user2_id');
+                })
+                ->count(),
+            'paywall' => (clone $baseQuery)->whereHas('messages', fn($q) => $q->where('type', 'system'))->count(),
         ];
     }
+
+    /**
+     * Вычисляемое свойство: Сообщения активного чата (правая панель).
+     */
     #[Computed]
     public function activeChatMessages()
     {
@@ -143,6 +160,10 @@ new #[Layout('layouts.admin')] class extends Component {
         return Chat::with(['user1.photos', 'user2.photos', 'match', 'messages.sender'])->find($this->activeChatId);
     }
 
+    /**
+     * Удаление чата с уведомлением пользователей.
+     * Защита от уведомления админов.
+     */
     public function deleteChat(int $chatId): void
     {
         $chat = Chat::with(['user1', 'user2'])->find($chatId);
@@ -151,10 +172,10 @@ new #[Layout('layouts.admin')] class extends Component {
             $user2 = $chat->user2;
 
             DB::transaction(function () use ($chat, $user1, $user2) {
-                if ($user1) {
+                if ($user1 && !$user1->is_admin) {
                     $user1->notify(new ChatDeletedByAdmin($this->deleteReason));
                 }
-                if ($user2) {
+                if ($user2 && !$user2->is_admin) {
                     $user2->notify(new ChatDeletedByAdmin($this->deleteReason));
                 }
                 $chat->delete();
@@ -172,38 +193,51 @@ new #[Layout('layouts.admin')] class extends Component {
 ?>
 
 <div class="space-y-6">
-    <h1 class="text-2xl font-semibold flex items-center gap-2">
-        <x-lucide-messages-square class="w-6 h-6" />
-        Чаты пользователей
-        @if ($this->counts['week'] > 0)
-            <x-ui.badge variant="info" size="sm">{{ $this->counts['week'] }} за неделю</x-ui.badge>
-        @endif
-    </h1>
+
+    <div class="flex items-center justify-between">
+        <h1 class="text-2xl font-semibold flex items-center gap-2">
+            <x-lucide-messages-square class="w-6 h-6" />
+            Чаты пользователей
+        </h1>
+
+        <!-- Поиск -->
+        <div class="relative w-72">
+            <x-ui.input wire:model.live.debounce.300ms="search" type="search" placeholder="Поиск по имени..."
+                class="pl-9 pr-8" />
+            <x-lucide-search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            @if (!empty($search))
+                <button wire:click="resetFilters"
+                    class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+                    <x-lucide-x class="w-4 h-4" />
+                </button>
+            @endif
+        </div>
+    </div>
 
     <div class="flex items-center justify-between flex-wrap gap-4">
-        <!-- Фильтры по дате (старые кнопки) -->
+        <!-- Фильтры по дате -->
         <div class="flex flex-wrap gap-1.5">
-            <x-ui.button wire:click="setDateFilter('all')" variant="{{ $dateFilter === 'all' ? 'default' : 'secondary' }}"
-                size="sm" wire:key="filter-all">
-                За всё время
+            <x-ui.button wire:click="setDateFilter('all')"
+                variant="{{ $dateFilter === 'all' ? 'default' : 'secondary' }}" size="sm" wire:key="filter-all">
+                За всё время <x-ui.badge size="xs">{{ $this->counts['total'] }}</x-ui.badge>
             </x-ui.button>
             <x-ui.button wire:click="setDateFilter('day')"
                 variant="{{ $dateFilter === 'day' ? 'default' : 'secondary' }}" size="sm" wire:key="filter-day">
-                Сегодня
+                Сегодня <x-ui.badge size="xs" variant="info">{{ $this->counts['day'] }}</x-ui.badge>
             </x-ui.button>
             <x-ui.button wire:click="setDateFilter('week')"
                 variant="{{ $dateFilter === 'week' ? 'default' : 'secondary' }}" size="sm" wire:key="filter-week">
-                На неделе
+                На неделе <x-ui.badge size="xs" variant="warning">{{ $this->counts['week'] }}</x-ui.badge>
             </x-ui.button>
             <x-ui.button wire:click="setDateFilter('month')"
                 variant="{{ $dateFilter === 'month' ? 'default' : 'secondary' }}" size="sm"
                 wire:key="filter-month">
-                В этом месяце
+                В этом месяце <x-ui.badge size="xs" variant="success">{{ $this->counts['month'] }}</x-ui.badge>
             </x-ui.button>
         </div>
 
         <div class="flex items-center gap-3">
-            <!-- Фильтры по типу (Новые кнопки) -->
+            <!-- Фильтры по типу -->
             <div class="flex flex-wrap gap-1.5">
                 <x-ui.button wire:click="setTypeFilter('all')"
                     variant="{{ $typeFilter === 'all' ? 'default' : 'secondary' }}" size="sm" wire:key="type-all">
@@ -212,7 +246,7 @@ new #[Layout('layouts.admin')] class extends Component {
                 <x-ui.button wire:click="setTypeFilter('match')"
                     variant="{{ $typeFilter === 'match' ? 'default' : 'secondary' }}" size="sm"
                     wire:key="type-match">
-                    По метчам <x-ui.badge size="xs" variant="success">{{ $this->counts['match'] }}</x-ui.badge>
+                    По симпатии <x-ui.badge size="xs" variant="success">{{ $this->counts['match'] }}</x-ui.badge>
                 </x-ui.button>
                 <x-ui.button wire:click="setTypeFilter('paywall')"
                     variant="{{ $typeFilter === 'paywall' ? 'default' : 'secondary' }}" size="sm"
@@ -221,83 +255,72 @@ new #[Layout('layouts.admin')] class extends Component {
                         variant="destructive">{{ $this->counts['paywall'] }}</x-ui.badge>
                 </x-ui.button>
             </div>
-
-            <!-- Поиск -->
-            <div class="relative w-72">
-                <x-ui.input wire:model.live.debounce.300ms="search" type="search" placeholder="Поиск по имени..."
-                    class="pl-9 pr-8" />
-                <x-lucide-search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                @if (!empty($search))
-                    <button wire:click="resetFilters"
-                        class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
-                        <x-lucide-x class="w-4 h-4" />
-                    </button>
-                @endif
-            </div>
         </div>
     </div>
-
-
 
     <!-- Интерфейс чата (Список + Переписка) -->
     <div
         class="grid grid-cols-1 lg:grid-cols-3 gap-6 bg-card border border-border rounded-lg p-4 min-h-[calc(100vh-20rem)]">
 
-        <!-- Левая панель: Список чатов -->
-        <div
-            class="lg:col-span-1 border-r border-border pr-4 space-y-2 overflow-y-auto little-scroll max-h-[calc(100vh-17rem)]">
-            @forelse ($this->chats as $chat)
-                @php
-                    $u1 = $chat->user1;
-                    $u2 = $chat->user2;
-                    $lastMsg = $chat->messages->first();
-                @endphp
+        <!-- Левая панель: Список чатов (Автопроверка новых сообщений раз в 15 сек) -->
+        <div wire:poll.10s class="lg:col-span-1 border-r border-border pr-4 flex flex-col h-[calc(100vh-17rem)]">
 
-                <div wire:click="selectChat({{ $chat->id }})"
-                    class="p-3 rounded-lg cursor-pointer transition-colors {{ $this->activeChatId === $chat->id ? 'bg-primary/10 border border-primary/30' : 'hover:bg-muted/50 border border-transparent' }}"
-                    wire:key="chat-list-{{ $chat->id }}">
-                    <div class="flex items-center gap-3">
-                        <div class="relative">
-                            <x-avatar src="{{ $u1?->avatar_url }}" name="{{ $u1?->name }}" size="sm"
-                                userId="{{ $u1?->id }}" showStatus="true" />
-                            <x-avatar src="{{ $u2?->avatar_url }}" name="{{ $u2?->name }}" size="sm"
-                                userId="{{ $u2?->id }}" showStatus="true"
-                                class="absolute -bottom-2 -right-2 w-6 h-6 rounded-full border-2 border-card" />
-                        </div>
-                        <div class="flex-1 min-w-0">
-                            <div class="flex justify-between items-center">
-                                <span class="font-medium text-sm truncate flex items-center gap-1">
-                                    {{ $u1?->name }} & {{ $u2?->name }}
-                                    @if ($chat->match)
-                                        <x-lucide-heart class="w-3 h-3 text-pink-500 fill-current" />
-                                    @endif
-                                </span>
-                                @if ($chat->last_message_at)
-                                    <span
-                                        class="text-[10px] text-muted-foreground whitespace-nowrap ml-2">{{ $chat->last_message_at->diffForHumans() }}</span>
-                                @endif
+            <!--  Внутренний скроллируемый блок со списком -->
+            <div class="flex-1 min-h-0 overflow-y-auto space-y-2 little-scroll pr-1">
+                @forelse ($this->chats as $chat)
+                    @php
+                        $u1 = $chat->user1;
+                        $u2 = $chat->user2;
+                        $lastMsg = $chat->messages->first();
+                    @endphp
+
+                    <div wire:click="selectChat({{ $chat->id }})"
+                        class="p-3 rounded-lg cursor-pointer transition-colors {{ $this->activeChatId === $chat->id ? 'bg-primary/10 border border-primary/30' : 'bg-message/75 hover:bg-message border border-transparent' }}"
+                        wire:key="chat-list-{{ $chat->id }}">
+                        <div class="flex items-center gap-3">
+                            <div class="relative">
+                                <x-avatar src="{{ $u1?->avatar_url }}" name="{{ $u1?->name }}" size="sm"
+                                    userId="{{ $u1?->id }}" showStatus="true" />
+                                <x-avatar src="{{ $u2?->avatar_url }}" name="{{ $u2?->name }}" size="sm"
+                                    userId="{{ $u2?->id }}" showStatus="true"
+                                    class="absolute -bottom-2 -right-2 w-6 h-6 rounded-full border-2 border-card" />
                             </div>
-                            <p class="text-xs text-muted-foreground truncate mt-0.5">
-                                @if ($lastMsg)
-                                    @if ($lastMsg->type === 'system')
-                                        <span class="text-destructive font-medium">🔒 Требуется Premium</span>
-                                    @else
-                                        {{ $lastMsg->body }}
+                            <div class="flex-1 min-w-0">
+                                <div class="flex justify-between items-center">
+                                    <span class="font-medium text-sm truncate flex items-center gap-1">
+                                        {{ $u1?->name }} & {{ $u2?->name }}
+                                        @if ($chat->match)
+                                            <x-lucide-heart class="w-3 h-3 text-pink-500 fill-current" />
+                                        @endif
+                                    </span>
+                                    @if ($chat->last_message_at)
+                                        <span
+                                            class="text-[10px] text-muted-foreground whitespace-nowrap ml-2">{{ $chat->last_message_at->diffForHumans() }}</span>
                                     @endif
-                                @else
-                                    <span class="italic">Нет сообщений</span>
-                                @endif
-                            </p>
+                                </div>
+                                <p class="text-xs text-muted-foreground truncate mt-0.5">
+                                    @if ($lastMsg)
+                                        @if ($lastMsg->type === 'system')
+                                            <span class="text-destructive font-medium">Требуется Premium</span>
+                                        @else
+                                            {{ $lastMsg->body }}
+                                        @endif
+                                    @else
+                                        <span class="italic">Нет сообщений</span>
+                                    @endif
+                                </p>
+                            </div>
                         </div>
                     </div>
-                </div>
-            @empty
-                <div class="text-center py-12 text-muted-foreground text-sm" wire:key="empty-chats">
-                    <p>Чаты не найдены</p>
-                </div>
-            @endforelse
+                @empty
+                    <div class="text-center py-12 text-muted-foreground text-sm" wire:key="empty-chats">
+                        <p>Чаты не найдены</p>
+                    </div>
+                @endforelse
+            </div>
 
-            <div class="pt-4" wire:key="pagination-chats">
+            <!--  Пагинация всегда прижата к низу и не скроллится -->
+            <div class="shrink-0 pt-4 mt-2 border-t border-border" wire:key="pagination-chats">
                 {{ $this->chats->links('partials.pagination') }}
             </div>
         </div>
@@ -395,7 +418,7 @@ new #[Layout('layouts.admin')] class extends Component {
                 </div>
 
                 <!-- Лента сообщений -->
-                <div x-data x-init="setTimeout(() => { $el.scrollTop = $el.scrollHeight; }, 50)"
+                <div wire:poll.10s="$refresh" x-data x-init="setTimeout(() => { $el.scrollTop = $el.scrollHeight; }, 50)"
                     class="flex-1 overflow-y-auto space-y-4 pr-2 max-h-[calc(100vh-23rem)] flex flex-col little-scroll">
                     @php $messages = $chat->messages->reverse(); @endphp
                     @foreach ($messages as $message)
@@ -403,7 +426,7 @@ new #[Layout('layouts.admin')] class extends Component {
                             <div class="flex justify-center" wire:key="msg-{{ $message->id }}">
                                 <div
                                     class="bg-destructive/10 text-destructive text-xs font-medium px-4 py-2 rounded-lg text-center max-w-md border border-destructive/20">
-                                    🔒 {{ $message->body }}
+                                    {{ trim($message->body) }}
                                 </div>
                             </div>
                         @else
@@ -419,9 +442,8 @@ new #[Layout('layouts.admin')] class extends Component {
                                 @endif
                                 <div class="max-w-[70%]">
                                     <div
-                                        class="{{ $isUser1 ? 'bg-muted text-foreground' : 'bg-primary text-primary-foreground' }} rounded-2xl px-4 py-2 text-sm">
-                                        {{ $message->body }}
-                                    </div>
+                                        class="text-left whitespace-pre-line break-words {{ $isUser1 ? 'bg-muted text-foreground' : 'bg-primary text-primary-foreground' }} rounded-2xl px-4 py-2 text-sm">
+                                        {{ trim($message->body) }}</div>
                                     <div
                                         class="text-[10px] text-muted-foreground mt-1 {{ $isUser1 ? 'text-left' : 'text-right' }}">
                                         {{ $message->created_at->format('d.m H:i') }}

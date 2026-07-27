@@ -13,7 +13,7 @@ class PhotoAlbumsSeeder extends Seeder
     {
         $this->command->info('📸 Создаём альбомы и фото (идемпотентно)...');
 
-        $users = User::where('is_admin', false)->get();
+         $users = User::excludeAdmins()->get();
 
         $otherAlbumNames = [
             'Путешествия', 'Друзья', 'Семья', 'Хобби',

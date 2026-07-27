@@ -18,15 +18,22 @@ new class extends Component {
     {
         $stats = Cache::remember('admin_sidebar_stats', 300, function () {
             return [
-                'newUsers' => User::whereDate('created_at', today())->count(),
-                'pendingReports' => Report::where('status', 'pending')->count(),
-                'pendingPhotos' => Photo::where('status', 'pending')->count(),
-                'pendingComments' => PhotoComment::where('status', 'pending')->count(),
-                'pendingBroadcasts' => Broadcast::whereIn('status', ['draft', 'scheduled'])->count(),
-                'totalMatches' => UserMatch::count(),
-                'totalChats' => Chat::count(),
-                'totalSupportChats' => \App\Models\Chat::where('type', 'support')->where('user1_id', auth()->id())->count(),
-              
+                'newUsers' => User::whereDate('created_at', today())->excludeAdmins()->count(),
+                'pendingReports' => Report::where('status', 'pending')->excludeAdmins()->count(),
+                'pendingPhotos' => Photo::where('status', 'pending')->excludeAdmins()->count(),
+                'pendingComments' => PhotoComment::where('status', 'pending')->excludeAdmins()->count(),
+                'pendingBroadcasts' => Broadcast::whereIn('status', ['draft', 'scheduled'])->count(),                     
+                'newMatchesToday' => UserMatch::whereDate('created_at', today())
+                    ->excludeAdmins()
+                    ->count(),             
+                'activeChatsToday' => Chat::where('type', 'private')
+                    ->excludeAdmins()
+                    ->whereDate('last_message_at', today())
+                    ->count(),
+                'unreadSupport' => \App\Models\Chat::where('type', 'support')
+                    ->where('user1_id', auth()->id())
+                    ->whereHas('participants', fn($q) => $q->where('user_id', auth()->id())->where('unread_count', '>', 0))
+                    ->count(),              
             ];
         });
 
@@ -49,7 +56,7 @@ new class extends Component {
 
     <!-- Пользователи -->
     <p class="px-3 text-xs uppercase text-muted-foreground/60 mt-4 mb-1">Пользователи</p>
-    <a href="{{ route('admin.users.index') }}" wire:navigate
+    <a href="{{ route('admin.users.index') }}" wire:navigate title="Добавились сегодня"
         class="flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium {{ request()->routeIs('admin.users.*') ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-accent hover:text-foreground' }}">
         <x-lucide-users class="w-4 h-4" />
         Список юзеров
@@ -60,41 +67,31 @@ new class extends Component {
         @endif
     </a>
 
-     <a href="{{ route('admin.chats.index') }}" wire:navigate
+     <a href="{{ route('admin.chats.index') }}" wire:navigate title="Добавились сегодня"
         class="flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium {{ request()->routeIs('admin.chats.index') ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-accent hover:text-foreground' }}">
         <x-lucide-messages-square class="w-4 h-4" />
         Чаты юзеров        
-        @if ($totalChats > 0)
+        @if ($activeChatsToday > 0)
             <span class="ml-auto text-xs bg-primary/10 text-success px-2 py-0.5 rounded-full">
-                {{ $totalChats }}
+                +{{ $activeChatsToday }}
             </span>
         @endif
     </a>
-
-    <a href="{{ route('admin.support.index') }}" wire:navigate
-        class="flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium {{ request()->routeIs('admin.support.*') ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-accent hover:text-foreground' }}">
-        <x-lucide-life-buoy class="w-4 h-4" />
-        Чат поддержки
-        @if ($totalSupportChats > 0)
-            <span class="ml-auto text-xs bg-destructive text-white px-2 py-0.5 rounded-full animate-pulse">
-                {{ $totalSupportChats }}
-            </span>
-        @endif
-    </a>
+    
    
-    <a href="{{ route('admin.moderate-dating') }}" wire:navigate
+    <a href="{{ route('admin.moderate-dating') }}" wire:navigate title="Добавились сегодня"
         class="flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium {{ request()->routeIs('admin.moderate-dating') ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-accent hover:text-foreground' }}">
         <x-lucide-heart class="w-4 h-4" />
         Знакомства
-         @if ($totalMatches > 0)
+         @if ($newMatchesToday > 0)
             <span class="ml-auto text-xs bg-destructive/10 text-destructive px-2 py-0.5 rounded-full">
-                {{ $totalMatches }}
+                +{{ $newMatchesToday }}
             </span>
         @endif
     </a>
 
 
-    <a href="{{ route('admin.reports') }}" wire:navigate
+    <a href="{{ route('admin.reports') }}" wire:navigate title="Ожидают модерации"
         class="flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium {{ request()->routeIs('admin.reports') ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-accent hover:text-foreground' }}">
         <x-lucide-flag class="w-4 h-4" />
         Жалобы
@@ -105,9 +102,21 @@ new class extends Component {
         @endif
     </a>
 
+    <a href="{{ route('admin.support.index') }}" wire:navigate title="Непрочитанные чаты"
+        class="flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium {{ request()->routeIs('admin.support.*') ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-accent hover:text-foreground' }}">
+        <x-lucide-life-buoy class="w-4 h-4" />
+        Поддержка
+        <!-- Красный бейдж с непрочитанными -->
+        @if ($unreadSupport > 0)
+            <span class="ml-auto text-xs bg-destructive text-white px-2 py-0.5 rounded-full animate-pulse">
+               +{{ $unreadSupport }}
+            </span>
+        @endif
+    </a>
+
     <!-- Контент -->
     <p class="px-3 text-xs uppercase text-muted-foreground/60 mt-4 mb-1">Контент</p>
-    <a href="{{ route('admin.moderate-photos.index') }}" wire:navigate
+    <a href="{{ route('admin.moderate-photos.index') }}" wire:navigate title="Ожидают модерации"
         class="flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium {{ request()->routeIs('admin.moderate-photos.*') ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-accent hover:text-foreground' }}">
         <x-lucide-image class="w-4 h-4" />
         Модерация фото
@@ -118,7 +127,7 @@ new class extends Component {
         @endif
     </a>
 
-    <a href="{{ route('admin.moderate-photo-comments') }}" wire:navigate
+    <a href="{{ route('admin.moderate-photo-comments') }}" wire:navigate title="Ожидают модерации"
         class="flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium {{ request()->routeIs('admin.moderate-photo-comments') ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-accent hover:text-foreground' }}">
         <x-lucide-message-circle class="w-4 h-4" />
         Комментарии к фото
@@ -132,7 +141,7 @@ new class extends Component {
     <!-- Система -->
     <p class="px-3 text-xs uppercase text-muted-foreground/60 mt-4 mb-1">Система</p>
 
-    <a href="{{ route('admin.broadcasts') }}" wire:navigate
+    <a href="{{ route('admin.broadcasts') }}" wire:navigate title="В очереди + черновики"
         class="flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium {{ request()->routeIs('admin.broadcasts') ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-accent hover:text-foreground' }}">
         <x-lucide-bell class="w-4 h-4" />
         Оповещения

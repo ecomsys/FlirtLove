@@ -102,6 +102,7 @@ new #[Layout('layouts.admin')] class extends Component {
             $users = User::withWhereHas('photos', function ($query) {
                 $query->where('status', 'pending')->orderBy('is_primary', 'desc')->oldest();
             })
+                ->excludeAdmins() 
                 ->with([
                     'photos' => function ($query) {
                         $query->where('status', 'pending')->orderBy('is_primary', 'desc')->oldest()->with('album');
@@ -111,7 +112,7 @@ new #[Layout('layouts.admin')] class extends Component {
 
             $photos = collect();
         } else {
-            $query = Photo::with(['user', 'album']);
+            $query = Photo::with(['user', 'album'])->excludeAdmins(); 
 
             if ($this->status == 'approved') {
                 $query->where('status', 'approved')->latest();
@@ -141,7 +142,7 @@ new #[Layout('layouts.admin')] class extends Component {
         }
 
         // Оптимизация: получаем все счетчики одним SQL-запросом
-        $counts = Photo::selectRaw(
+        $counts = Photo::excludeAdmins()->selectRaw( // ✅ Исключаем админов из счетчиков
             "
             COUNT(*) as total,
             SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,

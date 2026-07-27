@@ -11,7 +11,8 @@ class PhotoCommentSeeder extends Seeder
 {
     public function run(): void
     {
-        $users = User::all();
+        // ✅ Исключаем админов из комментаторов
+        $users = User::excludeAdmins()->get();
         $photos = Photo::where('status', 'approved')->get();
 
         if ($users->isEmpty() || $photos->isEmpty()) {

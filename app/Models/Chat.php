@@ -41,6 +41,16 @@ class Chat extends Model
     }
 
     /**
+     * Локальный скоуп: Исключает чаты, где замешаны админы.
+     * Используется только для private чатов (знакомства).
+     */
+    public function scopeExcludeAdmins($query)
+    {
+        return $query->whereHas('user1', fn($q) => $q->where('is_admin', false))
+                     ->whereHas('user2', fn($q) => $q->where('is_admin', false));
+    }
+
+    /**
      * Получить собеседника (того, кто не я)
      */
     public function getOtherUserAttribute()
@@ -72,12 +82,12 @@ class Chat extends Model
                     ->where('user2_id', $this->user2_id);
     }
 
-     /**
+        /**
      * Создать или получить чат поддержки между Админом и Юзером
      */
     public static function getOrCreateSupportChat(User $admin, User $user): self
     {
-        return self::firstOrCreate(
+        $chat = self::firstOrCreate(
             [
                 'user1_id' => $admin->id, 
                 'user2_id' => $user->id,
@@ -85,5 +95,17 @@ class Chat extends Model
             ],
             ['last_message_at' => now()]
         );
+
+        //  Гарантируем, что участники чата существуют в БД (чтобы работали счетчики)
+        \App\Models\ChatParticipant::firstOrCreate(
+            ['chat_id' => $chat->id, 'user_id' => $admin->id],
+            ['unread_count' => 0]
+        );
+        \App\Models\ChatParticipant::firstOrCreate(
+            ['chat_id' => $chat->id, 'user_id' => $user->id],
+            ['unread_count' => 0]
+        );
+
+        return $chat;
     }
 }

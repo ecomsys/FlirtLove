@@ -2,6 +2,7 @@
 
 namespace Database\Seeders;
 
+use App\Models\User;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Log;
 
@@ -10,6 +11,14 @@ class TestLogsSeeder extends Seeder
     public function run(): void
     {
         $this->command->info('🧪 Генерируем тестовые логи...');
+
+        // ✅ Берем ID только обычных юзеров
+        $userIds = User::excludeAdmins()->pluck('id')->toArray();
+
+        if (empty($userIds)) {
+            $this->command->warn('Нет пользователей для генерации логов.');
+            return;
+        }
 
         $levels = ['debug', 'info', 'notice', 'warning', 'error', 'critical', 'alert', 'emergency'];
         $messages = [
@@ -36,7 +45,8 @@ class TestLogsSeeder extends Seeder
         for ($i = 0; $i < 100; $i++) {
             $level = $levels[array_rand($levels)];
             $message = $messages[array_rand($messages)];
-            $userId = rand(1, 20);
+            // ✅ Выбираем случайный ID из массива обычных юзеров
+            $userId = $userIds[array_rand($userIds)];
             $context = [
                 'user_id' => $userId,
                 'ip' => '192.168.' . rand(1, 255) . '.' . rand(1, 255),

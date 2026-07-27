@@ -74,6 +74,13 @@ class PhotoComment extends Model
     // СКОПЫ
     // ============================================
 
+        /**
+     * Локальный скоуп: Исключает комментарии, оставленные администраторами.
+     */
+    public function scopeExcludeAdmins($query)
+    {
+        return $query->whereHas('user', fn($q) => $q->where('is_admin', false));
+    }
     /**
      * Только корневые комментарии (не ответы)
      */
