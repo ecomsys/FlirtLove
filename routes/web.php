@@ -37,6 +37,12 @@ Route::middleware(['auth', 'admin'])->prefix('admin')->name('admin.')->group(fun
     
     Volt::route('/users/{user}', 'admin.users-show')->name('users.show');
 
+    // Чаты
+    Volt::route('/chats', 'admin.chats-index')->name('chats.index');
+
+    // Чаты поддержки
+    Volt::route('/support', 'admin.chats-support')->name('support.index');
+    Volt::route('/support/{user_id}', 'admin.chats-support')->name('support.show');
 
     // Жалобы
     Volt::route('/reports', 'admin.reports')->name('reports');
@@ -60,7 +66,8 @@ Route::middleware(['auth', 'admin'])->prefix('admin')->name('admin.')->group(fun
     Volt::route('/admin/moderate-dating', 'admin.moderate-dating')->name('moderate-dating');
 
     // Настройки
-    Volt::route('/settings', 'admin.settings')->name('settings');  
+    Volt::route('/settings', 'admin.settings')->name('settings');    
+  
 });
 
 require __DIR__ . '/auth.php';

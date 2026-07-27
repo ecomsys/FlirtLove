@@ -2,6 +2,7 @@
 
 use App\Models\Broadcast;
 use App\Models\Photo;
+use App\Models\Chat;
 use App\Models\PhotoComment;
 use App\Models\Report;
 use App\Models\User;
@@ -23,6 +24,9 @@ new class extends Component {
                 'pendingComments' => PhotoComment::where('status', 'pending')->count(),
                 'pendingBroadcasts' => Broadcast::whereIn('status', ['draft', 'scheduled'])->count(),
                 'totalMatches' => UserMatch::count(),
+                'totalChats' => Chat::count(),
+                'totalSupportChats' => \App\Models\Chat::where('type', 'support')->where('user1_id', auth()->id())->count(),
+              
             ];
         });
 
@@ -56,6 +60,28 @@ new class extends Component {
         @endif
     </a>
 
+     <a href="{{ route('admin.chats.index') }}" wire:navigate
+        class="flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium {{ request()->routeIs('admin.chats.index') ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-accent hover:text-foreground' }}">
+        <x-lucide-messages-square class="w-4 h-4" />
+        Чаты юзеров        
+        @if ($totalChats > 0)
+            <span class="ml-auto text-xs bg-primary/10 text-success px-2 py-0.5 rounded-full">
+                {{ $totalChats }}
+            </span>
+        @endif
+    </a>
+
+    <a href="{{ route('admin.support.index') }}" wire:navigate
+        class="flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium {{ request()->routeIs('admin.support.*') ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-accent hover:text-foreground' }}">
+        <x-lucide-life-buoy class="w-4 h-4" />
+        Чат поддержки
+        @if ($totalSupportChats > 0)
+            <span class="ml-auto text-xs bg-destructive text-white px-2 py-0.5 rounded-full animate-pulse">
+                {{ $totalSupportChats }}
+            </span>
+        @endif
+    </a>
+   
     <a href="{{ route('admin.moderate-dating') }}" wire:navigate
         class="flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium {{ request()->routeIs('admin.moderate-dating') ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-accent hover:text-foreground' }}">
         <x-lucide-heart class="w-4 h-4" />

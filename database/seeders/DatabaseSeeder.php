@@ -46,6 +46,7 @@ class DatabaseSeeder extends Seeder
         $this->call(BroadcastSeeder::class);
         $this->call(AddLocationToUsersSeeder::class);
         $this->call(SwipeSeeder::class);
+        $this->call(ChatSeeder::class);        
 
         $this->command->info('');
         $this->command->info('  Все сидеры выполнены успешно!');
@@ -58,6 +59,7 @@ class DatabaseSeeder extends Seeder
         $this->command->info('   - Уведомлений: ' . \App\Models\Broadcast::count());
         $this->command->info('   - Свайпов: ' . \App\Models\Swipe::count());
         $this->command->info('   - Метчей: ' . \App\Models\UserMatch::count());
+        $this->command->info('   - Чатов: ' . \App\Models\Chat::count());
     }
 
     /**
@@ -79,6 +81,7 @@ class DatabaseSeeder extends Seeder
             DB::statement('TRUNCATE TABLE settings RESTART IDENTITY CASCADE');    
             DB::statement('TRUNCATE TABLE swipes RESTART IDENTITY CASCADE');
             DB::statement('TRUNCATE TABLE user_matches RESTART IDENTITY CASCADE');
+            DB::statement('TRUNCATE TABLE chats RESTART IDENTITY CASCADE');
         } else {
             DB::statement('SET FOREIGN_KEY_CHECKS=0');
             
@@ -91,6 +94,7 @@ class DatabaseSeeder extends Seeder
             \App\Models\Swipe::truncate();
             \App\Models\UserMatch::truncate();
             \App\Models\Setting::truncate();
+            \App\Models\Chat::truncate();
             
             DB::statement('SET FOREIGN_KEY_CHECKS=1');
         }

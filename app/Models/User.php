@@ -61,6 +61,29 @@ class User extends Authenticatable implements MustVerifyEmail
         return $this->email;
     }
 
+    // === ЧАТЫ ===
+    public function chats(): HasMany
+    {
+        // Юзер может быть как user1, так и user2
+        return Chat::where('user1_id', $this->id)->orWhere('user2_id', $this->id);
+    }
+
+    public function chatParticipants(): HasMany
+    {
+        return $this->hasMany(ChatParticipant::class);
+    }
+
+    public function getChatSettingsAttribute()
+    {
+        // Дефолтные настройки, если поле пустое
+        return $this->chat_filter_settings ?? [
+            'gender' => 'any',
+            'age_from' => 18,
+            'age_to' => 99,
+            'city' => null,
+        ];
+    }
+
     // === АЛЬБОМЫ, ФОТО ===
     public function albums(): HasMany
     {
@@ -229,6 +252,9 @@ class User extends Authenticatable implements MustVerifyEmail
                     'user1_id' => min($this->id, $targetUser->id),
                     'user2_id' => max($this->id, $targetUser->id),
                 ]);
+
+                // СОЗДАЕМ ЧАТ ПРИ МАТЧЕ
+                Chat::getOrCreateBetween($this, $targetUser);
 
                 return [
                     'success' => true,

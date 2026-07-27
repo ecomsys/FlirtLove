@@ -15,7 +15,7 @@
         @keydown.escape.prevent.stop="closeMenu()"
         @keydown.tab.prevent.stop="closeMenu()"
         @keydown="$blatNav($event); $blatType($event)"
-        :style="`position: fixed; left: ${x}px; top: ${y}px`"
+        :style="`position: fixed; left: ${x}px; top: ${y}px; transform: translate(-100%, -100%);`"
         role="menu"
         aria-orientation="vertical"
         tabindex="-1"

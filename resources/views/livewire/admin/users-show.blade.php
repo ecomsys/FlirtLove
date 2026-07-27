@@ -251,21 +251,29 @@ new #[Layout('layouts.admin')] class extends Component
             </div>
         </div>
 
-        <div class="flex items-center gap-2">
-            @if (!$user->is_admin)
-                <x-ui.button wire:click="toggleBan" wire:loading.attr="disabled"
-                    wire:confirm="Изменить статус блокировки пользователя?"
-                    variant="{{ $user->is_banned ? 'success' : 'destructive' }}">
-                    <span wire:loading.remove
-                        wire:target="toggleBan">{{ $user->is_banned ? 'Разбанить' : 'Забанить' }}</span>
-                    <span wire:loading wire:target="toggleBan">Обработка...</span>
-                </x-ui.button>
-            @endif
-            <x-ui.button variant="outline" onclick="window.location.href='mailto:{{ $user->email }}'">
-                <x-lucide-mail class="w-4 h-4" />
-                Написать
+    <div class="flex items-center gap-2">
+        @if (!$user->is_admin)
+            <x-ui.button wire:click="toggleBan" wire:loading.attr="disabled"
+                wire:confirm="Изменить статус блокировки пользователя?"
+                variant="{{ $user->is_banned ? 'success' : 'destructive' }}">
+                <span wire:loading.remove wire:target="toggleBan">{{ $user->is_banned ? 'Разбанить' : 'Забанить' }}</span>
+                <span wire:loading wire:target="toggleBan">Обработка...</span>
             </x-ui.button>
-        </div>
+        @endif
+
+        <!--  КНОПКА ЧАТА ПОДДЕРЖКИ -->
+        <a href="{{ route('admin.support.show', ['user_id' => $user->id]) }}" wire:navigate>
+            <x-ui.button variant="default">
+                <x-lucide-headphones class="w-4 h-4" />
+                Чат поддержки
+            </x-ui.button>
+        </a>
+
+        <x-ui.button variant="outline" onclick="window.location.href='mailto:{{ $user->email }}'">
+            <x-lucide-mail class="w-4 h-4" />
+            Написать на Email
+        </x-ui.button>           
+    </div>
     </div>
 
     <!-- Меню вкладок -->
