@@ -2,7 +2,6 @@
 
 namespace App\Notifications;
 
-use App\Models\Photo;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Notifications\Notification;
@@ -34,15 +33,21 @@ class PhotoModerated extends Notification implements ShouldQueue
         protected int $count = 1
     ) {}
 
+    /**
+     *  Обновляем каналы доставки с учетом настроек юзера
+     */
     public function via($notifiable): array
     {
-        $channels = ['database'];
+        $channels = ['database']; // В базу (колокольчик) пишем ВСЕГДА
 
-        if (in_array($this->status, ['approved', 'rejected'])) {
+        // Проверяем настройку Email для модерации фото (?? true — дефолт для старых юзеров)
+        if (($notifiable->email_settings['on_photo_moderated'] ?? true) && in_array($this->status, ['approved', 'rejected', 'deleted'])) {
             $channels[] = 'mail';
+        }
+
+        // Проверяем глобальный тумблер Push (только для approved/rejected)
+        if ($notifiable->push_enabled && in_array($this->status, ['approved', 'rejected'])) {
             $channels[] = 'broadcast';
-        } elseif ($this->status === 'deleted') {
-            $channels[] = 'mail';
         }
 
         return $channels;

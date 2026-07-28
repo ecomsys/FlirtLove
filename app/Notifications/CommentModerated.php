@@ -36,18 +36,21 @@ class CommentModerated extends Notification implements ShouldQueue
         protected string $status // approved, rejected, spam, deleted, restored
     ) {}
 
+    /**
+     *  Обновляем каналы доставки с учетом настроек юзера
+     */
     public function via($notifiable): array
     {
         // 1. В кабинет (БД) отправляем ВСЕГДА
         $channels = ['database'];
 
-        // 2. Email: отправляем ВСЕГДА, КРОМЕ "spam" и "restored"
-        if (!in_array($this->status, ['spam', 'restored'])) {
+        // 2. Email: отправляем ВСЕГДА, КРОМЕ "spam" и "restored", И ЕСЛИ ВКЛЮЧЕНА НАСТРОЙКА on_photo_moderated
+        if (($notifiable->email_settings['on_photo_moderated'] ?? true) && !in_array($this->status, ['spam', 'restored'])) {
             $channels[] = 'mail';
         }
 
-        // 3. Push (Broadcast): отправляем ТОЛЬКО при "approved" и "rejected"
-        if (in_array($this->status, ['approved', 'rejected'])) {
+        // 3. Push (Broadcast): отправляем ТОЛЬКО при "approved" и "rejected", И ЕСЛИ ВКЛЮЧЕН ГЛОБАЛЬНЫЙ ТУМБЛЕР push_enabled
+        if ($notifiable->push_enabled && in_array($this->status, ['approved', 'rejected'])) {
             $channels[] = 'broadcast';
         }
        

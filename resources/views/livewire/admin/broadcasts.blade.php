@@ -363,7 +363,7 @@ new #[Layout('layouts.admin')] class extends Component
     public function broadcasts()
     {
         return Broadcast::query()
-            ->with('user:id,name,email')
+            ->with('user:id,name,email,is_premium,premium_expires_at,is_banned')
             ->select('id', 'user_id', 'type', 'title', 'message', 'status', 'scheduled_at', 'sent_at', 'created_at')
             ->where(function ($query) {
                 $query->whereNull('user_id') // Массовые рассылки (всем) оставляем
@@ -685,12 +685,22 @@ new #[Layout('layouts.admin')] class extends Component
                     <x-ui.table-cell>
                         @if ($broadcast->user_id)
                             <div class="flex items-center gap-2">
-                                <x-avatar src="{{ $broadcast->user->avatar_url }}"
-                                    name="{{ $broadcast->user->name }}" size="sm"
-                                    userId="{{ $broadcast->user->id }}" showStatus="true" />
+                                <x-avatar src="{{ $broadcast->user?->avatar_url }}"
+                                    name="{{ $broadcast->user?->name ?? 'Удален' }}" size="sm"
+                                    userId="{{ $broadcast->user?->id }}" showStatus="true" />
                                 <div>
-                                    <div class="font-medium text-sm">{{ $broadcast->user->name ?? 'Пользователь' }}</div>
-                                    <div class="text-xs text-muted-foreground">{{ $broadcast->user->email }}</div>
+                                    <div class="flex gap-2 items-center">
+                                        <span class="text-sm font-medium">{{ $broadcast->user?->name ?? 'Удален' }}</span>
+                                        @if($broadcast->user?->has_active_premium)
+                                            <x-ui.badge variant="warning" size="xs" wire:key="premium-badge-{{ $broadcast->id }}" class="p-1 flex items-center gap-1">
+                                                <x-lucide-crown class="w-3 h-3" />
+                                            </x-ui.badge>
+                                        @endif      
+                                        @if($broadcast->user?->is_banned)
+                                            <x-ui.badge variant="destructive" size="xs">Бан</x-ui.badge>
+                                        @endif                                             
+                                    </div>                                    
+                                    <div class="text-xs text-muted-foreground">{{ $broadcast->user?->email ?? '-' }}</div>
                                 </div>
                             </div>
                         @else

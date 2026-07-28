@@ -12,6 +12,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Notifications\Notifiable;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Database\Eloquent\Builder;
 
 #[Fillable([
     'name',
@@ -23,19 +24,44 @@ use Illuminate\Support\Facades\DB;
     'birth_date',
     'dating_goal',
     'city',
+    'bio',
+    'looking_for',
     'has_completed_onboarding',
     'is_admin',
+    'is_banned',
+    'is_premium',
     'last_login_at',
     'last_login_ip',
-    'is_banned',   
     'profile_views',
     'likes_count',
     'last_seen',
     'premium_expires_at',
     'height',
+    'weight',
     'education',
     'occupation',
     'zodiac_sign',
+    'interests',
+    'latitude',
+    'longitude',
+    'address',
+    'country',
+    'preferred_age_min',
+    'preferred_age_max',
+    'preferred_gender',
+    'preferred_distance_km',
+    'superlikes_remaining',
+    'chat_filter_enabled',
+    'chat_filter_settings',
+    'search_filters',
+    'is_invisible',
+    'hide_intimate',
+    'disable_photo_comments',
+    'hide_from_search',
+    'is_deactivated',
+    'push_enabled',
+    'email_settings',
+    'profile_details'
 ])]
 #[Hidden(['password', 'remember_token'])]
 
@@ -45,7 +71,7 @@ class User extends Authenticatable implements MustVerifyEmail
 
     protected function casts(): array
     {
-        return [            
+        return [
             'password' => 'hashed',
             'birth_date' => 'date',
             'has_completed_onboarding' => 'boolean',
@@ -55,16 +81,25 @@ class User extends Authenticatable implements MustVerifyEmail
             'is_verified' => 'boolean',
             'email_verified_at' => 'datetime',
             'last_login_at' => 'datetime',
-            'last_seen' => 'datetime', 
-            'premium_expires_at' => 'datetime', 
+            'last_seen' => 'datetime',
+            'premium_expires_at' => 'datetime',
             'interests' => 'array',
+            'chat_filter_settings' => 'array',
+            'search_filters' => 'array',
+            'email_settings' => 'array',
+            'profile_details' => 'array',
             'preferred_age_min' => 'integer',
             'preferred_age_max' => 'integer',
             'preferred_distance_km' => 'integer',
             'superlikes_remaining' => 'integer',
-            'profile_views' => 'integer', 
-            'likes_count' => 'integer', 
-            'location' => 'string', 
+            'profile_views' => 'integer',
+            'likes_count' => 'integer',
+            'is_invisible' => 'boolean',
+            'hide_intimate' => 'boolean',
+            'disable_photo_comments' => 'boolean',
+            'hide_from_search' => 'boolean',
+            'push_enabled' => 'boolean',
+            'is_deactivated' => 'boolean',
         ];
     }
 
@@ -73,51 +108,85 @@ class User extends Authenticatable implements MustVerifyEmail
         return $this->email;
     }
 
-    /**
-     * Локальный скоуп: Исключает администраторов из выдачи.
-     */
     public function scopeExcludeAdmins($query)
     {
         return $query->where('is_admin', false);
     }
 
-    // === НОВЫЕ ХЕЛПЕРЫ ===
-
-    /**
-     * Проверка, активен ли Premium (с учетом даты истечения)
-     */
+    // === ХЕЛПЕРЫ ===
     public function getHasActivePremiumAttribute(): bool
     {
         return $this->is_premium && ($this->premium_expires_at === null || $this->premium_expires_at->isFuture());
     }
-
-    /**
-     * Проверка, онлайн ли пользователь (был в сети < 5 минут назад)
-     */
     public function getIsOnlineAttribute(): bool
     {
         return $this->last_seen && $this->last_seen->gt(now()->subMinutes(5));
     }
 
+    public function getSearchFiltersAttribute(): array
+    {
+        $filters = $this->attributes['search_filters'] ?? null;
+        if (is_string($filters)) {
+            $filters = json_decode($filters, true);
+        }
+
+        return array_merge([
+            'height_from' => null, 'height_to' => null, 'education' => null,
+            'zodiac_sign' => null, 'is_verified_only' => false, 'is_premium_only' => false
+        ], is_array($filters) ? $filters : []);
+    }
+
+    public function getChatFiltersAttribute(): array
+    {
+        $filters = $this->attributes['chat_filter_settings'] ?? null;
+        if (is_string($filters)) {
+            $filters = json_decode($filters, true);
+        }
+
+        return array_merge([
+            'gender' => 'any', 'age_from' => 18, 'age_to' => 99,
+            'is_verified_only' => false, 'is_premium_only' => false
+        ], is_array($filters) ? $filters : []);
+    }
+
+    public function getEmailSettingsAttribute(): array
+    {
+        $settings = $this->attributes['email_settings'] ?? null;
+        if (is_string($settings)) {
+            $settings = json_decode($settings, true);
+        }
+
+        return array_merge([
+            'on_message' => true, 'on_like' => true, 'on_view' => false,
+            'on_photo_moderated' => true, 'on_report' => true,
+            'on_ban' => true, 'on_broadcast' => true
+        ], is_array($settings) ? $settings : []);
+    }
+
+    public function getProfileDetailsAttribute(): array
+    {
+        $details = $this->attributes['profile_details'] ?? null;
+        if (is_string($details)) {
+            $details = json_decode($details, true);
+        }
+
+        return array_merge([
+            'body_type' => 0, 'eye_color' => 0, 'hair_color' => 0, 'body_decorations' => [],
+            'relationship_status' => 0, 'children_status' => 0, 'pets' => 0, 'housing' => 0,
+            'has_car' => 0, 'education_level' => 0, 'institution' => null, 'graduation_year' => null,
+            'industry' => null, 'occupation' => null, 'income' => 0, 'smoking' => 0,
+            'alcohol' => 0, 'languages' => [], 'sports' => []
+        ], is_array($details) ? $details : []);
+    }
+    
     // === ЧАТЫ ===
-    public function chats(): HasMany
+    public function chats(): Builder
     {
         return Chat::where('user1_id', $this->id)->orWhere('user2_id', $this->id);
     }
-
     public function chatParticipants(): HasMany
     {
         return $this->hasMany(ChatParticipant::class);
-    }
-
-    public function getChatSettingsAttribute()
-    {
-        return $this->chat_filter_settings ?? [
-            'gender' => 'any',
-            'age_from' => 18,
-            'age_to' => 99,
-            'city' => null,
-        ];
     }
 
     // === АЛЬБОМЫ, ФОТО ===
@@ -125,7 +194,6 @@ class User extends Authenticatable implements MustVerifyEmail
     {
         return $this->hasMany(Album::class);
     }
-
     public function defaultAlbum(): HasOne
     {
         return $this->hasOne(Album::class)->where('is_default', true);
@@ -145,12 +213,19 @@ class User extends Authenticatable implements MustVerifyEmail
 
     public function getAvatarUrlAttribute(): ?string
     {
-        $primary = $this->photos()->where('is_primary', true)->first();
+        if ($this->relationLoaded('photos')) {
+            $primary = $this->photos->firstWhere('is_primary', true);
+        } else {
+            $primary = $this->photos()->where('is_primary', true)->first();
+        }
         return $primary ? $primary->thumb_url : null;
     }
 
     public function getPrimaryPhotoAttribute()
     {
+        if ($this->relationLoaded('photos')) {
+            return $this->photos->firstWhere('is_primary', true);
+        }
         return $this->photos()->where('is_primary', true)->first();
     }
 
@@ -158,12 +233,10 @@ class User extends Authenticatable implements MustVerifyEmail
     {
         return $this->hasMany(PhotoComment::class);
     }
-
     public function approvedPhotoComments(): HasMany
     {
         return $this->hasMany(PhotoComment::class)->where('status', 'approved');
     }
-
     public function hasCompletedOnboarding(): bool
     {
         return $this->has_completed_onboarding || $this->photos()->count() > 0;
@@ -174,7 +247,6 @@ class User extends Authenticatable implements MustVerifyEmail
     {
         return $this->hasMany(Report::class, 'reported_user_id');
     }
-
     public function sentReports(): HasMany
     {
         return $this->hasMany(Report::class, 'user_id');
@@ -182,12 +254,11 @@ class User extends Authenticatable implements MustVerifyEmail
 
     public function getReportsReceivedCountAttribute(): int
     {
-        return $this->receivedReports()->count();
+        return $this->relationLoaded('receivedReports') ? $this->receivedReports->count() : $this->receivedReports()->count();
     }
-
     public function getReportsSentCountAttribute(): int
     {
-        return $this->sentReports()->count();
+        return $this->relationLoaded('sentReports') ? $this->sentReports->count() : $this->sentReports()->count();
     }
 
     // === ГЕОЛОКАЦИЯ ===
@@ -201,11 +272,7 @@ class User extends Authenticatable implements MustVerifyEmail
 
     public function scopeNearby($query, float $lat, float $lng, int $radius = 50)
     {
-        return $query->whereNotNull('location')
-            ->whereRaw(
-                "ST_DWithin(location::geography, ST_SetSRID(ST_MakePoint(?, ?), 4326)::geography, ?)",
-                [$lng, $lat, $radius * 1000]
-            );
+        return $query->whereNotNull('location')->whereRaw("ST_DWithin(location::geography, ST_SetSRID(ST_MakePoint(?, ?), 4326)::geography, ?)", [$lng, $lat, $radius * 1000]);
     }
 
     // === СВАЙПЫ И МАТЧИ ===
@@ -213,118 +280,78 @@ class User extends Authenticatable implements MustVerifyEmail
     {
         return $this->hasMany(Swipe::class, 'user_id');
     }
-
     public function swipesReceived(): HasMany
     {
         return $this->hasMany(Swipe::class, 'target_user_id');
     }
-
-    public function matches(): HasMany
+    public function matches(): Builder
     {
-        return $this->hasMany(UserMatch::class, 'user1_id')
-            ->orWhere('user2_id', $this->id);
+        return UserMatch::where('user1_id', $this->id)->orWhere('user2_id', $this->id);
     }
 
     // === ЛОГИКА РЕКОМЕНДАЦИЙ ===
     public function getRecommendedUsers(int $limit = 20)
     {
-        if (!$this->location) {
-            return collect();
-        }
+        if (!$this->location) return collect();
 
         $swipedIds = $this->swipesGiven()->pluck('target_user_id')->toArray();
-
-        $matchedIds = UserMatch::where('user1_id', $this->id)->pluck('user2_id')->toArray()
-            + UserMatch::where('user2_id', $this->id)->pluck('user1_id')->toArray();
-
+        $matchedIds = array_merge(UserMatch::where('user1_id', $this->id)->pluck('user2_id')->toArray(), UserMatch::where('user2_id', $this->id)->pluck('user1_id')->toArray());
         $excludeIds = array_merge([$this->id], $swipedIds, $matchedIds);
-
         $radius = $this->preferred_distance_km ?? 50;
+        $filters = $this->search_filters;
 
         return User::where('is_banned', false)
-            ->where('is_admin', false)
-            ->where('has_completed_onboarding', true)            
+            ->excludeAdmins()
+            ->where('has_completed_onboarding', true)
             ->whereNotIn('id', $excludeIds)
             ->when($this->preferred_age_min, function ($q) {
-                $q->whereRaw('EXTRACT(YEAR FROM age(birth_date)) >= ?', [$this->preferred_age_min]);
+                $q->where('birth_date', '<=', now()->subYears($this->preferred_age_min)->format('Y-m-d'));
             })
             ->when($this->preferred_age_max, function ($q) {
-                $q->whereRaw('EXTRACT(YEAR FROM age(birth_date)) <= ?', [$this->preferred_age_max]);
+                $q->where('birth_date', '>=', now()->subYears($this->preferred_age_max + 1)->format('Y-m-d'));
             })
             ->when($this->preferred_gender && $this->preferred_gender !== 'any', function ($q) {
                 $q->where('gender', $this->preferred_gender);
             })
+            ->when(!empty($filters['height_from']), fn($q) => $q->where('height', '>=', $filters['height_from']))
+            ->when(!empty($filters['height_to']), fn($q) => $q->where('height', '<=', $filters['height_to']))
+            ->when(!empty($filters['education']), fn($q) => $q->where('education', $filters['education']))
+            ->when(!empty($filters['zodiac_sign']), fn($q) => $q->where('zodiac_sign', $filters['zodiac_sign']))
+            ->when(!empty($filters['is_verified_only']), fn($q) => $q->where('is_verified', true))
+            ->when(!empty($filters['is_premium_only']), fn($q) => $q->where('is_premium', true))
             ->nearby($this->latitude, $this->longitude, $radius)
             ->with(['photos' => function ($q) {
                 $q->where('is_primary', true)->orWhere('status', 'approved');
             }])
-            ->limit($limit)
-            ->get();
+            ->limit($limit)->get();
     }
 
     public function swipe(User $targetUser, string $type): array
     {
-        $existing = Swipe::where('user_id', $this->id)
-            ->where('target_user_id', $targetUser->id)
-            ->first();
-
-        if ($existing) {
+        if (Swipe::where('user_id', $this->id)->where('target_user_id', $targetUser->id)->exists()) {
             return ['success' => false, 'message' => 'Вы уже оценили этого пользователя'];
         }
 
-        $swipe = Swipe::create([
-            'user_id' => $this->id,
-            'target_user_id' => $targetUser->id,
-            'type' => $type,
-        ]);
+        Swipe::create(['user_id' => $this->id, 'target_user_id' => $targetUser->id, 'type' => $type]);
 
-        // ✅ УВЕЛИЧИВАЕМ СЧЕТЧИК ЛАЙКОВ У ЦЕЛИ, ЕСЛИ ЭТО ЛАЙК
         if (in_array($type, ['like', 'superlike'])) {
             $targetUser->increment('likes_count');
-        }
 
-        if (in_array($type, ['like', 'superlike'])) {
-            $mutual = Swipe::where('user_id', $targetUser->id)
-                ->where('target_user_id', $this->id)
-                ->whereIn('type', ['like', 'superlike'])
-                ->exists();
-
-            if ($mutual) {
-                $match = UserMatch::create([
-                    'user1_id' => min($this->id, $targetUser->id),
-                    'user2_id' => max($this->id, $targetUser->id),
-                ]);
-
+            if (Swipe::where('user_id', $targetUser->id)->where('target_user_id', $this->id)->whereIn('type', ['like', 'superlike'])->exists()) {
+                $match = UserMatch::create(['user1_id' => min($this->id, $targetUser->id), 'user2_id' => max($this->id, $targetUser->id)]);
                 Chat::getOrCreateBetween($this, $targetUser);
-
-                return [
-                    'success' => true,
-                    'match' => true,
-                    'message' => 'Взаимный лайк! У вас новый матч!',
-                    'match_id' => $match->id,
-                ];
+                return ['success' => true, 'match' => true, 'message' => 'Взаимный лайк! У вас новый матч!', 'match_id' => $match->id];
             }
-
             return ['success' => true, 'match' => false, 'message' => 'Лайк отправлен'];
         }
-
         return ['success' => true, 'match' => false, 'message' => 'Дизлайк сохранён'];
     }
 
     public function getMatchesList()
     {
-        return UserMatch::where('user1_id', $this->id)
-            ->orWhere('user2_id', $this->id)
-            ->with(['user1', 'user2'])
-            ->latest()
-            ->get()
-            ->map(function ($match) {
-                $other = $match->user1_id === $this->id ? $match->user2 : $match->user1;
-                return [
-                    'match_id' => $match->id,
-                    'user' => $other,
-                    'created_at' => $match->created_at,
-                ];
-            });
+        return UserMatch::where('user1_id', $this->id)->orWhere('user2_id', $this->id)->with(['user1', 'user2'])->latest()->get()->map(function ($match) {
+            $other = $match->user1_id === $this->id ? $match->user2 : $match->user1;
+            return ['match_id' => $match->id, 'user' => $other, 'created_at' => $match->created_at];
+        });
     }
 }

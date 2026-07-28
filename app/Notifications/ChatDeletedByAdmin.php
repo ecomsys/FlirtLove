@@ -19,23 +19,40 @@ class ChatDeletedByAdmin extends Notification implements ShouldQueue
         $this->reason = $reason;
     }
 
+    /**
+     *  Обновляем каналы доставки с учетом настроек юзера
+     */
     public function via($notifiable): array
     {
-        // Добавьте 'mail', чтобы отправлять еще и на email
-        return ['database', 'broadcast'];
+        $channels = ['database']; // В базу (колокольчик) пишем ВСЕГДА
+
+        // Проверяем глобальный тумблер Push
+        if ($notifiable->push_enabled) {
+            $channels[] = 'broadcast';
+        }
+
+        // Проверяем настройку Email для модерации (используем on_report ?? true)
+        if ($notifiable->email_settings['on_report'] ?? true) {
+            $channels[] = 'mail';
+        }
+
+        return $channels;
     }
 
-    // public function toMail($notifiable): MailMessage
-    // {
-    //     return (new MailMessage)
-    //         ->subject('Ваш чат был удален модерацией')
-    //         ->greeting("Здравствуйте, {$notifiable->name}!")
-    //         ->line("Ваша переписка с другим пользователем была удалена модератором.")
-    //         ->line("**Причина:** {$this->reason}.")
-    //         ->line('Пожалуйста, соблюдайте правила нашего сообщества, чтобы избежать блокировки аккаунта.')
-    //         ->action('Перейти в приложение', url('/'))
-    //         ->line('Спасибо за понимание!');
-    // }
+    /**
+     *  Раскомментировали и обновили метод toMail
+     */
+    public function toMail($notifiable): MailMessage
+    {
+        return (new MailMessage)
+            ->subject('Ваш чат был удален модерацией')
+            ->greeting("Здравствуйте, {$notifiable->name}!")
+            ->line("Ваша переписка с другим пользователем была удалена модератором.")
+            ->line("**Причина:** {$this->reason}.")
+            ->line('Пожалуйста, соблюдайте правила нашего сообщества, чтобы избежать блокировки аккаунта.')
+            ->action('Перейти в приложение', url('/'))
+            ->line('Спасибо за понимание!');
+    }
 
     public function toDatabase($notifiable): array
     {

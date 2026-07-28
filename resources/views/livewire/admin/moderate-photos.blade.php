@@ -441,11 +441,19 @@ new #[Layout('layouts.admin')] class extends Component {
                                 <x-avatar src="{{ $user->avatar_url }}" name="{{ $user->name ?? 'User' }}"
                                     size="lg" userId="{{ $user->id }}" showStatus="true" />
                                 <div>
-                                    <p class="font-semibold text-foreground">
-                                        <a href="{{ route('admin.users.show', $user->id) }}"
-                                            class="hover:text-primary">
+                                    <!--  Добавлены бейджи в шапку юзера -->
+                                    <p class="font-semibold text-foreground flex items-center gap-2 flex-wrap">
+                                        <a href="{{ route('admin.users.show', $user->id) }}" class="hover:text-primary">
                                             {{ $user->name ?? 'Без имени' }}
                                         </a>
+                                        @if($user->has_active_premium)
+                                            <x-ui.badge variant="warning" size="xs" class="p-1 flex items-center gap-1">
+                                                <x-lucide-crown class="w-3 h-3" /> 
+                                            </x-ui.badge>
+                                        @endif
+                                        @if($user->is_banned)
+                                            <x-ui.badge variant="destructive" size="xs">Бан</x-ui.badge>
+                                        @endif
                                     </p>
                                     <div class="flex items-center gap-3 text-xs text-muted-foreground">
                                         <span>ID: {{ $user->id }}</span>
@@ -654,10 +662,18 @@ new #[Layout('layouts.admin')] class extends Component {
                             <x-avatar src="{{ $photo->user->avatar_url }}" name="{{ $photo->user->name ?? 'User' }}"
                                 size="sm" userId="{{ $photo->user->id }}" showStatus="true" />
                             <div class="text-sm overflow-hidden">
+                                <!--  Убрал дубль имени и исправил wire:key на $photo->id -->
                                 <p class="font-medium text-foreground truncate">
-                                    <a href="{{ route('admin.users.show', $photo->user_id) }}"
-                                        class="hover:text-primary">
-                                        {{ $photo->user->name ?? 'Удален' }}
+                                    <a href="{{ route('admin.users.show', $photo->user_id) }}" class="hover:text-primary flex gap-2 items-center">
+                                        <span title="{{ $photo->user->name }}" class="text-sm font-medium">{{ $photo->user->name }}</span>
+                                        @if($photo->user->has_active_premium)
+                                            <x-ui.badge variant="warning" size="xs" wire:key="premium-badge-{{ $photo->id }}" class="p-1 flex items-center gap-1">
+                                                <x-lucide-crown class="w-3 h-3" /> 
+                                            </x-ui.badge>
+                                        @endif  
+                                        @if($photo->user->is_banned)
+                                            <x-ui.badge variant="destructive" size="xs">Бан</x-ui.badge>
+                                        @endif                                                                          
                                     </a>
                                 </p>
                                 <p class="text-xs text-muted-foreground">ID: {{ $photo->user_id }}</p>
@@ -697,4 +713,4 @@ new #[Layout('layouts.admin')] class extends Component {
             Fancybox.defaults.Hash = false;
         }
     </script>
-@endpush
+@endpush>

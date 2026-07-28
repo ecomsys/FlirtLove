@@ -16,10 +16,24 @@ class UserBanned extends Notification implements ShouldQueue
         protected bool $isBanned
     ) {}
 
+    /**
+     * Обновляем каналы доставки с учетом настроек юзера
+     */
     public function via($notifiable): array
     {
-        // Отправляем в БД, на почту и пушем (и при бане, и при разбане это важно)
-        return ['database', 'mail', 'broadcast'];
+        $channels = ['database']; // В базу (колокольчик) пишем ВСЕГДА
+
+        // Проверяем глобальный тумблер Push
+        if ($notifiable->push_enabled) {
+            $channels[] = 'broadcast';
+        }
+
+        // Проверяем настройку Email для бана (?? true — дефолт для старых юзеров)
+        if ($notifiable->email_settings['on_ban'] ?? true) {
+            $channels[] = 'mail';
+        }
+
+        return $channels;
     }
 
     public function toMail($notifiable): MailMessage

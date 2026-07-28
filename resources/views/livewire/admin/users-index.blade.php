@@ -42,25 +42,25 @@ new #[Layout('layouts.admin')] class extends Component
         $this->resetPage();
     }
 
-    /**
+       /**
      * Вычисляемое свойство: подготовка данных для страницы.
      * Оптимизация: тянем только нужные поля, чтобы не грузить память.
      */
     public function with(): array
-    {
+    {        
         $columns = [
             'id', 'name', 'email', 'city', 'created_at', 
             'last_login_at', 'last_login_ip', 'is_banned', 
-            'is_admin', 'has_completed_onboarding'
+            'is_admin', 'has_completed_onboarding',
+            'is_premium', 'premium_expires_at'
         ];
 
         $users = User::query()
             ->select($columns)
             ->excludeAdmins()
-            //  Изолировали поиск в замыкание, чтобы не ломать другие фильтры
+            ->with('photos') // Жадная загрузка фото для аватарок (убивает N+1)
             ->when($this->search, function ($query) {
                 $search = $this->search;
-                //  Динамический оператор для совместимости с MySQL и PostgreSQL
                 $operator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
                 
                 $query->where(function ($q) use ($search, $operator) {
@@ -96,7 +96,6 @@ new #[Layout('layouts.admin')] class extends Component
         $newStatus = !$user->is_banned;
         $user->update(['is_banned' => $newStatus]);
         
-        // Уведомляем пользователя (убедись, что UserBanned реализует ShouldQueue)
         $user->notify(new UserBanned($newStatus));
         
         $this->dispatch('show-toast', 
@@ -109,9 +108,6 @@ new #[Layout('layouts.admin')] class extends Component
 
     /**
      * Удаление пользователя.
-     *  Добавлена транзакция.
-     * ВАЖНО: Убедись, что в миграциях внешние ключи (photos, swipes и т.д.) 
-     * имеют метод onDelete('cascade'), иначе база выдаст ошибку Constraint violation.
      * 
      * @param int $userId
      */
@@ -128,10 +124,7 @@ new #[Layout('layouts.admin')] class extends Component
         $userName = $user->name;
 
         DB::transaction(function () use ($user) {
-            // 1. Отправляем уведомление (пока модель существует)
             $user->notify(new UserDeleted());
-
-            // 2. Удаляем пользователя (связанные данные удалятся автоматически, если настроено cascade)
             $user->delete();
         });
         
@@ -219,15 +212,19 @@ new #[Layout('layouts.admin')] class extends Component
                     </x-ui.table-cell>
                     <x-ui.table-cell>
                         <!-- Обернули ссылкой -->
-                        <a href="{{ route('admin.users.show', $user) }}" class="block group" wire:navigate>
+                        <a href="{{ route('admin.users.show', $user->id) }}" class="block group" wire:navigate>
                             <div class="font-medium text-foreground flex items-center gap-2 flex-wrap group-hover:text-primary transition-colors">
-                                {{ $user->name }}
-                                @if($user->is_admin)
-                                    <x-ui.badge variant="default" size="xs" wire:key="admin-badge-{{ $user->id }}">Admin</x-ui.badge>
-                                @endif
+                                {{ $user->name }}                                
+                                <!-- БЕЙДЖ PREMIUM -->
+                                @if($user->has_active_premium)
+                                    <x-ui.badge variant="warning" size="xs" wire:key="premium-badge-{{ $user->id }}" class="p-1 flex items-center gap-1">
+                                        <x-lucide-crown class="w-3 h-3" />
+                                    </x-ui.badge>
+                                @endif                              
                                 @if(!$user->has_completed_onboarding || !$user->avatar_url)
                                     <x-ui.badge variant="warning" size="xs" wire:key="onboarding-badge-{{ $user->id }}">Нет фото</x-ui.badge>
                                 @endif
+                                <span class="text-xs text-muted-foreground font-normal">(ID: {{ $user->id }})</span>
                             </div>
                             <div class="text-xs text-muted-foreground group-hover:text-primary/80 transition-colors">{{ $user->email }}</div>
                         </a>
@@ -235,14 +232,14 @@ new #[Layout('layouts.admin')] class extends Component
                     <x-ui.table-cell>{{ $user->city ?? '—' }}</x-ui.table-cell>
                     <x-ui.table-cell class="text-muted-foreground text-xs whitespace-nowrap">
                         {{ $user->created_at->format('d.m.Y') }}
-                        <span class="text-[10px] text-muted-foreground/60">
+                        <span class="text-[0.65rem] text-muted-foreground/60">
                             {{ $user->created_at->format('H:i') }}
                         </span>
                     </x-ui.table-cell>
                     <x-ui.table-cell>
                         @if($user->last_login_at)
                             <div class="text-xs">{{ $user->last_login_at->diffForHumans() }}</div>
-                            <div class="text-[10px] text-muted-foreground">{{ $user->last_login_ip }}</div>
+                            <div class="text-[0.65rem] text-muted-foreground">{{ $user->last_login_ip }}</div>
                         @else
                             <span class="text-muted-foreground text-xs">Никогда</span>
                         @endif
@@ -262,12 +259,11 @@ new #[Layout('layouts.admin')] class extends Component
                                 </x-ui.button>
                             </x-ui.dropdown-menu-trigger>
                             <x-ui.dropdown-menu-content align="end">
-                                <x-ui.dropdown-menu-item href="{{ route('admin.users.show', $user) }}" wire:key="view-{{ $user->id }}" wire:navigate>
+                                <x-ui.dropdown-menu-item href="{{ route('admin.users.show', $user->id) }}" wire:key="view-{{ $user->id }}" wire:navigate>
                                     <x-lucide-eye class="w-4 h-4" />
                                     Просмотр
                                 </x-ui.dropdown-menu-item>
                                 
-                                <!--  Добавлен wire:confirm -->
                                 <x-ui.dropdown-menu-item 
                                     wire:click="toggleBan({{ $user->id }})"
                                     wire:confirm="Изменить статус блокировки этого пользователя?"
@@ -279,7 +275,6 @@ new #[Layout('layouts.admin')] class extends Component
                                 
                                 @unless($user->is_admin)
                                     <x-ui.dropdown-menu-separator />
-                                    <!--  Добавлен wire:confirm с предупреждением -->
                                     <x-ui.dropdown-menu-item 
                                         wire:click="deleteUser({{ $user->id }})" 
                                         variant="destructive"

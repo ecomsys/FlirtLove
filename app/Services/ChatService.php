@@ -23,7 +23,7 @@ class ChatService
             return ['success' => false, 'message' => 'Собеседник не найден.'];
         }
 
-        // ✅ АВТОПРОХОД ДЛЯ ЧАТОВ ПОДДЕРЖКИ
+        //  АВТОПРОХОД ДЛЯ ЧАТОВ ПОДДЕРЖКИ
         if ($chat->type === 'support') {
             $message = $this->createMessage($chat, $sender, $body);
             return ['success' => true, 'type' => 'text', 'message' => $message];
@@ -42,7 +42,7 @@ class ChatService
             ->count();
 
         if (!$sender->is_premium && $userMessagesCount >= $freeMessagesLimit) {
-            // ✅ ПЕРЕДАЕМ $sender В МЕТОД
+            //  ПЕРЕДАЕМ $sender В МЕТОД
             $systemMessage = $this->createSystemMessage($chat, 'Вы исчерпали лимит бесплатных сообщений. Для продолжения переписки необходима подписка Premium.', $sender);
 
             return ['success' => true, 'type' => 'system', 'message' => $systemMessage];
@@ -57,7 +57,9 @@ class ChatService
      */
     private function passesFilter(User $sender, User $recipient): bool
     {
-        if (!$recipient->chat_filter_enabled) {
+        //  Фильтр чата работает ТОЛЬКО если у получателя активен Premium!
+        // Бесплатный юзер не может фильтровать сообщения, даже если запросом сменит флаг.
+        if (!$recipient->has_active_premium || !$recipient->chat_filter_enabled) {
             return true;
         }
 
@@ -118,7 +120,7 @@ class ChatService
                 'body' => $body,
             ]);
 
-            // ✅ ИСПОЛЬЗУЕМ ПЕРЕДАННЫЙ $sender, А НЕ Auth::user()
+            //  ИСПОЛЬЗУЕМ ПЕРЕДАННЫЙ $sender, А НЕ Auth::user()
             $this->updateChatTimestamps($chat, $sender, $message->created_at);
 
             return $message;
@@ -137,3 +139,41 @@ class ChatService
             ->increment('unread_count');
     }
 }
+
+/*=============================
+ПРИМЕР КОДА НА ФРОНТЕ
+=============================*/
+
+    // public function updateChatFilters(): void
+    // {
+    //     $user = auth()->user();
+
+    //     // Если юзер не премиум, не даем ему сохранить фильтр
+    //     if (!$user->has_active_premium) {
+    //         $this->dispatch('show-toast', type: 'error', message: 'Фильтр чата доступен только для Premium-пользователей');
+    //         return;
+    //     }
+
+    //     $validated = $this->validate([
+    //         'chat_filter_enabled' => 'boolean',
+    //         'filter_gender' => 'nullable|in:male,female,any',
+    //         'filter_age_from' => 'nullable|integer|min:18|max:99',
+    //         'filter_age_to' => 'nullable|integer|min:18|max:99',
+    //         'filter_is_verified_only' => 'boolean',
+    //     ]);
+
+    //     // Собираем JSON для БД
+    //     $settings = [
+    //         'gender' => $validated['filter_gender'] ?? 'any',
+    //         'age_from' => $validated['filter_age_from'] ?? 18,
+    //         'age_to' => $validated['filter_age_to'] ?? 99,
+    //         'is_verified_only' => $validated['filter_is_verified_only'] ?? false,
+    //     ];
+
+    //     // Сохраняем в базу
+    //     $user->chat_filter_enabled = $validated['chat_filter_enabled'];
+    //     $user->chat_filter_settings = $settings;
+    //     $user->save();
+
+    //     $this->dispatch('show-toast', type: 'success', message: 'Настройки фильтра сохранены');
+    // }

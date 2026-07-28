@@ -1,0 +1,316 @@
+брат не гони коней !
+давай сначала разберемся что нужно ! Именно тоолько по "Личная информация" сейчас пройдемся !
+там помимо опций есть и несколько полей для заполнения юзером как инпут:
+
+Рост, Вес (инпуты в цифрах)
+Телосложение(<select class="select-control w280" name="body" data-type="simple" hidden=""><option value="1" selected="selected">Стройное</option>
+<option value="3">Спортивное</option>
+<option value="5">Есть пара лишних кило</option>
+<option value="6">Полное</option>
+<option value="0">Нет ответа</option>
+</select>)
+Цвет глаз(<select class="select-control w280" name="coloreye" data-type="simple" hidden=""><option value="1">Карие</option>
+<option value="2">Серые</option>
+<option value="3">Голубые</option>
+<option value="4">Зеленые</option>
+<option value="0" selected="selected">Нет ответа</option>
+</select>) 
+Цвет волос(<select class="select-control w280" name="head" data-type="simple" hidden=""><option value="1">Блонд</option>
+<option value="2">Русые</option>
+<option value="3">Шатен</option>
+<option value="9">Черные</option>
+<option value="4">Рыжие</option>
+<option value="7">Седые</option>
+<option value="6">Мелированные</option>
+<option value="8">Голова бритая наголо</option>
+<option value="0" selected="selected">Нет ответа</option>
+</select>)
+На вашем теле есть(<div class="lh25"><input id="TATTOO1" type="checkbox" name="tattoo1"><label for="TATTOO1">Пирсинг</label>
+<br>
+<input id="TATTOO2" type="checkbox" name="tattoo2"><label for="TATTOO2">Татуировки</label>
+<br>
+<input id="TATTOO3" type="checkbox" name="tattoo3"><label for="TATTOO3">Шрамы</label>
+<br>
+<input id="TATTOO5" type="checkbox" name="tattoo5"><label for="TATTOO5">Веснушки</label>
+<br>
+<input type="hidden" name="tattoo" value="on">
+</div>)
+Отношения(<select class="select-control w280" name="marr" data-type="simple" hidden=""><option value="5" selected="selected">Свободен</option>
+<option value="1">Занят</option>
+<option value="2">Женат, живем порознь</option>
+<option value="3">Всё сложно</option>
+<option value="0">Нет ответа</option>
+</select>)
+Дети(<select class="select-control w280 mb19" name="child" data-type="simple" hidden=""><option value="5">Нет, и не хочу</option>
+<option value="8">Нет, и ищу без детей</option>
+<option value="2">Возможны в будущем</option>
+<option value="6" selected="selected">Уже есть, больше не хочу</option>
+<option value="7">Уже есть, хочу еще</option>
+<option value="0">Нет ответа</option>
+</select>)
+Домашние животные(<select class="select-control w280 mb19" name="pets" data-type="simple" hidden=""><option value="3">Собака</option>
+<option value="2">Кошка</option>
+<option value="5">Нет</option>
+<option value="6">Нет, и не хочу</option>
+<option value="1">Да, много разных</option>
+<option value="0" selected="selected">Нет ответа</option>
+</select>)
+Жилищные условия(<select class="select-control w280" name="habit" data-type="simple" hidden=""><option value="1">Собственная квартира</option>
+<option value="7">Дом, коттедж</option>
+<option value="8">Снимаю квартиру</option>
+<option value="9">Снимаю комнату</option>
+<option value="3">Живу у родителей</option>
+<option value="10">Без жилья</option>
+<option value="0" selected="selected">Нет ответа</option>
+</select>)
+Наличие автомобиля(<select class="select-control w280 mb19" name="carexist" data-type="simple" hidden=""><option value="1">Нет</option>
+<option value="3">Есть</option>
+<option value="0" selected="selected">Нет ответа</option>
+</select>)
+Образование(<select class="select-control w280" name="education" data-type="simple" hidden=""><option value="2">Среднее</option>
+<option value="3">Среднее-специальное</option>
+<option value="4">Студент(-ка)</option>
+<option value="5">Неполное высшее</option>
+<option value="6">Высшее</option>
+<option value="8">Несколько высших</option>
+<option value="0" selected="selected">Нет ответа</option>
+</select>)
+Учебное заведение(просто текст произвольный инпут)
+Год выпуска(цифры 4шт)
+Сфера деятельности(просто текст произвольный инпут)
+Должность(просто текст произвольный инпут)
+Доход(<select class="select-control w280" name="finpos" data-type="simple" hidden=""><option value="2">Хватает только на основное</option>
+<option value="3">Хватает на основное и отдых</option>
+<option value="4">На всё хватает и остаётся</option>
+<option value="0" selected="selected">Нет ответа</option>
+</select>)
+Курение(<select class="select-control w280" name="smoke" data-type="simple" hidden=""><option value="8">Против курения</option>
+<option value="1" selected="selected">Не курю, но не против</option>
+<option value="5">Иногда курю</option>
+<option value="9">Курю электронные сигареты</option>
+<option value="2">Курю регулярно</option>
+<option value="0">Нет ответа</option>
+</select>)
+Алкоголь(<select class="select-control w280 mb19" name="drink" data-type="simple" hidden=""><option value="5">Против алкоголя</option>
+<option value="1" selected="selected">Не пью, но не против</option>
+<option value="3">Иногда выпиваю</option>
+<option value="0">Нет ответа</option>
+</select>)
+Знание языков(<div class="lh25">
+						
+							<label for="FLANG1" class="xcloud-checkbox checked">
+								<input type="checkbox" name="flang1" style="display:none;">
+								Русский
+							</label>
+						
+							<label for="FLANG8" class="xcloud-checkbox ">
+								<input type="checkbox" name="flang8" style="display:none;">
+								Украинский
+							</label>
+						
+							<label for="FLANG2" class="xcloud-checkbox ">
+								<input type="checkbox" name="flang2" style="display:none;">
+								Английский
+							</label>
+						
+							<label for="FLANG3" class="xcloud-checkbox ">
+								<input type="checkbox" name="flang3" style="display:none;">
+								Немецкий
+							</label>
+						
+							<label for="FLANG4" class="xcloud-checkbox ">
+								<input type="checkbox" name="flang4" style="display:none;">
+								Французский
+							</label>
+						
+							<label for="FLANG5" class="xcloud-checkbox ">
+								<input type="checkbox" name="flang5" style="display:none;">
+								Итальянский
+							</label>
+						
+							<label for="FLANG6" class="xcloud-checkbox ">
+								<input type="checkbox" name="flang6" style="display:none;">
+								Испанский
+							</label>
+						
+							<label for="FLANG7" class="xcloud-checkbox ">
+								<input type="checkbox" name="flang7" style="display:none;">
+								Португальский
+							</label>
+						
+							<label for="FLANG10" class="xcloud-checkbox ">
+								<input type="checkbox" name="flang10" style="display:none;">
+								Арабский
+							</label>
+						
+							<label for="FLANG9" class="xcloud-checkbox ">
+								<input type="checkbox" name="flang9" style="display:none;">
+								Иврит
+							</label>
+						
+							<label for="FLANG11" class="xcloud-checkbox ">
+								<input type="checkbox" name="flang11" style="display:none;">
+								Корейский
+							</label>
+						
+							<label for="FLANG12" class="xcloud-checkbox ">
+								<input type="checkbox" name="flang12" style="display:none;">
+								Китайский
+							</label>
+						
+							<label for="FLANG13" class="xcloud-checkbox ">
+								<input type="checkbox" name="flang13" style="display:none;">
+								Нидерландский
+							</label>
+						
+							<label for="FLANG14" class="xcloud-checkbox ">
+								<input type="checkbox" name="flang14" style="display:none;">
+								Индонезийский
+							</label>
+						
+							<label for="FLANG15" class="xcloud-checkbox ">
+								<input type="checkbox" name="flang15" style="display:none;">
+								Японский
+							</label>
+						
+							<label for="FLANG16" class="xcloud-checkbox ">
+								<input type="checkbox" name="flang16" style="display:none;">
+								Шведский
+							</label>
+						
+							<label for="FLANG17" class="xcloud-checkbox ">
+								<input type="checkbox" name="flang17" style="display:none;">
+								Тайский
+							</label>
+						
+							<label for="FLANG18" class="xcloud-checkbox ">
+								<input type="checkbox" name="flang18" style="display:none;">
+								Вьетнамский
+							</label>
+						
+							<label for="FLANG20" class="xcloud-checkbox ">
+								<input type="checkbox" name="flang20" style="display:none;">
+								Турецкий
+							</label>
+						
+							<label for="FLANG19" class="xcloud-checkbox ">
+								<input type="checkbox" name="flang19" style="display:none;">
+								Хинди
+							</label>
+						<input type="hidden" name="flang" value="on">
+
+						<!-- <input name="slang" type="hidden" value="1">
+						<div class="lh25" id="lang_target"></div> -->
+					</div>)
+Спорт (<div class="lh25">
+						
+							<label for="SPORT1" class="xcloud-checkbox ">
+								<input type="checkbox" name="sport1" style="display:none;">
+								Бег
+							</label>
+						
+							<label for="SPORT2" class="xcloud-checkbox">
+								<input type="checkbox" name="sport2" style="display:none;">
+								Ходьба
+							</label>
+						
+							<label for="SPORT3" class="xcloud-checkbox ">
+								<input type="checkbox" name="sport3" style="display:none;">
+								Фитнес
+							</label>
+						
+							<label for="SPORT4" class="xcloud-checkbox ">
+								<input type="checkbox" name="sport4" style="display:none;">
+								Плавание
+							</label>
+						
+							<label for="SPORT5" class="xcloud-checkbox ">
+								<input type="checkbox" name="sport5" style="display:none;">
+								Велосипед
+							</label>
+						
+							<label for="SPORT7" class="xcloud-checkbox ">
+								<input type="checkbox" name="sport7" style="display:none;">
+								Ролики
+							</label>
+						
+							<label for="SPORT8" class="xcloud-checkbox ">
+								<input type="checkbox" name="sport8" style="display:none;">
+								Лыжи
+							</label>
+						
+							<label for="SPORT9" class="xcloud-checkbox ">
+								<input type="checkbox" name="sport9" style="display:none;">
+								Качалка
+							</label>
+						
+							<label for="SPORT10" class="xcloud-checkbox ">
+								<input type="checkbox" name="sport10" style="display:none;">
+								Экстрим
+							</label>
+						
+							<label for="SPORT11" class="xcloud-checkbox ">
+								<input type="checkbox" name="sport11" style="display:none;">
+								Единоборства
+							</label>
+						
+							<label for="SPORT12" class="xcloud-checkbox ">
+								<input type="checkbox" name="sport12" style="display:none;">
+								Йога
+							</label>
+						
+							<label for="SPORT13" class="xcloud-checkbox ">
+								<input type="checkbox" name="sport13" style="display:none;">
+								Командные игры
+							</label>
+						
+							<label for="SPORT14" class="xcloud-checkbox ">
+								<input type="checkbox" name="sport14" style="display:none;">
+								Танцы
+							</label>
+						
+							<label for="SPORT16" class="xcloud-checkbox ">
+								<input type="checkbox" name="sport16" style="display:none;">
+								Футбол
+							</label>
+						
+							<label for="SPORT17" class="xcloud-checkbox ">
+								<input type="checkbox" name="sport17" style="display:none;">
+								Волейбол
+							</label>
+						
+							<label for="SPORT19" class="xcloud-checkbox ">
+								<input type="checkbox" name="sport19" style="display:none;">
+								Хоккей
+							</label>
+						
+							<label for="SPORT20" class="xcloud-checkbox ">
+								<input type="checkbox" name="sport20" style="display:none;">
+								Коньки
+							</label>
+						
+							<label for="SPORT22" class="xcloud-checkbox ">
+								<input type="checkbox" name="sport22" style="display:none;">
+								Пилатес
+							</label>
+						
+							<label for="SPORT23" class="xcloud-checkbox ">
+								<input type="checkbox" name="sport23" style="display:none;">
+								Гимнастика
+							</label>
+						
+							<label for="SPORT24" class="xcloud-checkbox ">
+								<input type="checkbox" name="sport24" style="display:none;">
+								Скалолазание
+							</label>
+						
+							<label for="SPORT25" class="xcloud-checkbox ">
+								<input type="checkbox" name="sport25" style="display:none;">
+								Тренировки на улице
+							</label>
+						<input type="hidden" name="sport" value="on">
+
+					</div>)
+
+
+Брат вот я полностью выдернул все опции личной информации для расширенного поиска прямо со страницы работающего сайта, нам нужно повторить наши опции в точности для "Личная информация"

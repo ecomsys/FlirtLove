@@ -262,23 +262,28 @@ new #[Layout('layouts.admin')] class extends Component
     <!-- Контент вкладок -->
     <div class="bg-card border border-border rounded-lg p-6">
 
-        <!-- Вкладка 1: ПРОФИЛЬ -->
+                <!-- Вкладка 1: ПРОФИЛЬ -->
         <div x-show="tab === 'profile'">
             <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                
+                <!-- ЛЕВАЯ КОЛОНКА (Анкета) -->
                 <div class="space-y-4">
+                    <!-- Карточка юзера -->
                     <div class="flex items-center gap-4 p-4 bg-muted/30 rounded-lg border border-border">
                         <x-avatar src="{{ $user->avatar_url }}" name="{{ $user->name }}" size="xl" userId="{{ $user->id }}" showStatus="true" />
                         <div>
                             <p class="font-medium">{{ $user->name }}</p>
                             <p class="text-xs text-muted-foreground">{{ $user->email }}</p>
                             <p class="text-xs text-muted-foreground">ID: {{ $user->id }}</p>
-                            <div class="flex gap-1 mt-2">
-                                @if ($user->is_premium) <x-ui.badge variant="warning" size="xs">Premium</x-ui.badge> @endif
+                            <div class="flex gap-1 mt-2 flex-wrap">
+                                @if ($user->has_active_premium) <x-ui.badge variant="warning" size="xs"><x-lucide-crown class="w-3 h-3 inline mr-1" />Premium</x-ui.badge> @endif
                                 @if ($user->is_verified) <x-ui.badge variant="info" size="xs">Верифицирован</x-ui.badge> @endif
+                                @if ($user->is_invisible) <x-ui.badge variant="secondary" size="xs">Невидимка</x-ui.badge> @endif
                             </div>
                         </div>
                     </div>
 
+                    <!-- Пол и Возраст -->
                     <div class="grid grid-cols-2 gap-4">
                         <div class="p-4 bg-muted/20 rounded-lg border border-border">
                             <p class="text-xs text-muted-foreground uppercase">Пол</p>
@@ -297,7 +302,7 @@ new #[Layout('layouts.admin')] class extends Component
                         </div>
                     </div>
 
-                 
+                    <!-- Локация и Цель -->
                     <div class="grid grid-cols-2 gap-4">
                         <div class="p-4 bg-muted/20 rounded-lg border border-border">
                             <p class="text-xs text-muted-foreground uppercase">Город / Страна</p>
@@ -320,11 +325,20 @@ new #[Layout('layouts.admin')] class extends Component
                         </div>
                     </div>
 
+                    <!-- О себе и Кого ищу -->
                     <div class="p-4 bg-muted/20 rounded-lg border border-border">
                         <p class="text-xs text-muted-foreground uppercase">О себе</p>
-                        <p class="text-sm mt-1 text-muted-foreground">{{ $user->about ?? $user->bio ?? 'Пользователь не заполнил информацию о себе' }}</p>
+                        <p class="text-sm mt-1 text-muted-foreground">{{ $user->bio ?? 'Пользователь не заполнил информацию о себе' }}</p>
                     </div>
+                    
+                    @if($user->looking_for)
+                    <div class="p-4 bg-muted/20 rounded-lg border border-border">
+                        <p class="text-xs text-muted-foreground uppercase">Кого я хочу найти</p>
+                        <p class="text-sm mt-1 text-muted-foreground">{{ $user->looking_for }}</p>
+                    </div>
+                    @endif
 
+                    <!-- Интересы -->
                     <div class="p-4 bg-muted/20 rounded-lg border border-border">
                         <p class="text-xs text-muted-foreground uppercase">Интересы</p>
                         <div class="flex flex-wrap gap-1 mt-1">
@@ -338,41 +352,77 @@ new #[Layout('layouts.admin')] class extends Component
                         </div>
                     </div>
 
-                        <!-- Карточка доп инфо -->
+                    @php
+                        // Подключаем словари и хелперы для вывода Личной информации
+                        $options = config('profile_options');
+                        $pd = $user->profile_details;
+                        $getOptionName = function($key, $id) use ($options) { return $options[$key][$id] ?? null; };
+                        $getOptionsList = function($key, $ids) use ($options) {
+                            if (!is_array($ids)) return [];
+                            return array_filter(array_map(function($id) use ($options, $key) { return $options[$key][$id] ?? null; }, $ids));
+                        };
+                    @endphp
+
+                    <!-- Внешность (из profile_details) -->
                     <div class="p-4 bg-muted/20 rounded-lg border border-border">
-                        <p class="text-xs text-muted-foreground uppercase mb-2">Дополнительно</p>
+                        <p class="text-xs text-muted-foreground uppercase mb-2">Внешность</p>
                         <div class="grid grid-cols-2 gap-2 text-sm">
-                            @if($user->height)
-                            <div>
-                                <span class="text-muted-foreground">Рост:</span> 
-                                <span class="font-medium">{{ $user->height }} см</span>
-                            </div>
+                            @if($user->height) <div><span class="text-muted-foreground">Рост:</span> <span class="font-medium">{{ $user->height }} см</span></div> @endif
+                            @if($user->weight) <div><span class="text-muted-foreground">Вес:</span> <span class="font-medium">{{ $user->weight }} кг</span></div> @endif
+                            @if(!empty($pd['body_type'])) <div><span class="text-muted-foreground">Телосложение:</span> <span class="font-medium">{{ $getOptionName('body_type', $pd['body_type']) }}</span></div> @endif
+                            @if(!empty($pd['eye_color'])) <div><span class="text-muted-foreground">Цвет глаз:</span> <span class="font-medium">{{ $getOptionName('eye_color', $pd['eye_color']) }}</span></div> @endif
+                            @if(!empty($pd['hair_color'])) <div><span class="text-muted-foreground">Цвет волос:</span> <span class="font-medium">{{ $getOptionName('hair_color', $pd['hair_color']) }}</span></div> @endif
+                            @if(!empty($pd['body_decorations']))
+                                <div class="col-span-2"><span class="text-muted-foreground">На теле есть:</span> <span class="font-medium">{{ implode(', ', $getOptionsList('body_decorations', $pd['body_decorations'])) }}</span></div>
                             @endif
-                            @if($user->education)
-                            <div>
-                                <span class="text-muted-foreground">Образование:</span> 
-                                <span class="font-medium">{{ $user->education }}</span>
-                            </div>
+                            @if($user->zodiac_sign) <div><span class="text-muted-foreground">Знак зодиака:</span> <span class="font-medium">{{ $user->zodiac_sign }}</span></div> @endif
+                        </div>
+                    </div>
+
+                    <!-- Личная жизнь и Быт -->
+                    <div class="p-4 bg-muted/20 rounded-lg border border-border">
+                        <p class="text-xs text-muted-foreground uppercase mb-2">Личная жизнь и Быт</p>
+                        <div class="grid grid-cols-2 gap-2 text-sm">
+                            @if(!empty($pd['relationship_status'])) <div><span class="text-muted-foreground">Отношения:</span> <span class="font-medium">{{ $getOptionName('relationship_status', $pd['relationship_status']) }}</span></div> @endif
+                            @if(!empty($pd['children_status'])) <div><span class="text-muted-foreground">Дети:</span> <span class="font-medium">{{ $getOptionName('children_status', $pd['children_status']) }}</span></div> @endif
+                            @if(!empty($pd['pets'])) <div><span class="text-muted-foreground">Животные:</span> <span class="font-medium">{{ $getOptionName('pets', $pd['pets']) }}</span></div> @endif
+                            @if(!empty($pd['housing'])) <div><span class="text-muted-foreground">Жилье:</span> <span class="font-medium">{{ $getOptionName('housing', $pd['housing']) }}</span></div> @endif
+                            @if(!empty($pd['has_car'])) <div><span class="text-muted-foreground">Автомобиль:</span> <span class="font-medium">{{ $getOptionName('has_car', $pd['has_car']) }}</span></div> @endif
+                        </div>
+                    </div>
+
+                    <!-- Работа и Образование -->
+                    <div class="p-4 bg-muted/20 rounded-lg border border-border">
+                        <p class="text-xs text-muted-foreground uppercase mb-2">Работа и Образование</p>
+                        <div class="grid grid-cols-2 gap-2 text-sm">
+                            @if(!empty($pd['education_level'])) <div><span class="text-muted-foreground">Образование:</span> <span class="font-medium">{{ $getOptionName('education_level', $pd['education_level']) }}</span></div> @endif
+                            @if(!empty($pd['institution'])) <div class="col-span-2"><span class="text-muted-foreground">Учебное заведение:</span> <span class="font-medium">{{ $pd['institution'] }}</span></div> @endif
+                            @if(!empty($pd['graduation_year'])) <div><span class="text-muted-foreground">Год выпуска:</span> <span class="font-medium">{{ $pd['graduation_year'] }}</span></div> @endif
+                            @if(!empty($pd['industry'])) <div><span class="text-muted-foreground">Сфера:</span> <span class="font-medium">{{ $pd['industry'] }}</span></div> @endif
+                            @if(!empty($pd['occupation'])) <div><span class="text-muted-foreground">Должность:</span> <span class="font-medium">{{ $pd['occupation'] }}</span></div> @endif
+                            @if(!empty($pd['income'])) <div><span class="text-muted-foreground">Доход:</span> <span class="font-medium">{{ $getOptionName('income', $pd['income']) }}</span></div> @endif
+                        </div>
+                    </div>
+
+                    <!-- Привычки и Увлечения -->
+                    <div class="p-4 bg-muted/20 rounded-lg border border-border">
+                        <p class="text-xs text-muted-foreground uppercase mb-2">Привычки и Увлечения</p>
+                        <div class="grid grid-cols-2 gap-2 text-sm">
+                            @if(!empty($pd['smoking'])) <div><span class="text-muted-foreground">Курение:</span> <span class="font-medium">{{ $getOptionName('smoking', $pd['smoking']) }}</span></div> @endif
+                            @if(!empty($pd['alcohol'])) <div><span class="text-muted-foreground">Алкоголь:</span> <span class="font-medium">{{ $getOptionName('alcohol', $pd['alcohol']) }}</span></div> @endif
+                            @if(!empty($pd['languages']))
+                                <div class="col-span-2"><span class="text-muted-foreground">Языки:</span> <span class="font-medium">{{ implode(', ', $getOptionsList('languages', $pd['languages'])) }}</span></div>
                             @endif
-                            @if($user->occupation)
-                            <div>
-                                <span class="text-muted-foreground">Профессия:</span> 
-                                <span class="font-medium">{{ $user->occupation }}</span>
-                            </div>
-                            @endif
-                            @if($user->zodiac_sign)
-                            <div>
-                                <span class="text-muted-foreground">Знак зодиака:</span> 
-                                <span class="font-medium">{{ $user->zodiac_sign }}</span>
-                            </div>
+                            @if(!empty($pd['sports']))
+                                <div class="col-span-2"><span class="text-muted-foreground">Спорт:</span> <span class="font-medium">{{ implode(', ', $getOptionsList('sports', $pd['sports'])) }}</span></div>
                             @endif
                         </div>
                     </div>
 
-
-                        <div class="p-4 bg-muted/20 rounded-lg border border-border">
+                    <!-- Предпочтения в поиске -->
+                    <div class="p-4 bg-muted/20 rounded-lg border border-border">
                         <p class="text-xs text-muted-foreground uppercase mb-2">Предпочтения в поиске</p>
-                        <div class="text-xs">
+                        <div class="text-xs space-y-2">
                             <div class="flex justify-between">
                                 <span class="text-muted-foreground">Ищет:</span> 
                                 <span class="font-medium">
@@ -390,12 +440,24 @@ new #[Layout('layouts.admin')] class extends Component
                                 <span class="text-muted-foreground">Радиус:</span> 
                                 <span class="font-medium">{{ $user->preferred_distance_km }} км</span>
                             </div>
+                            @if($user->search_filters)
+                                @php $sf = $user->search_filters; @endphp
+                                @if(!empty($sf['height_from']) || !empty($sf['height_to']))
+                                    <div class="flex justify-between">
+                                        <span class="text-muted-foreground">Рост:</span> 
+                                        <span class="font-medium">{{ $sf['height_from'] ?? '-' }} - {{ $sf['height_to'] ?? '-' }} см</span>
+                                    </div>
+                                @endif
+                                @if(!empty($sf['is_verified_only']))<div class="text-muted-foreground flex justify-between">Дополнительно:<span class="text-primary"> Только верифицированные</span></div> @endif
+                                @if(!empty($sf['is_premium_only']))<div class="text-muted-foreground flex justify-between">Дополнительно:<span class="text-yellow-500"> Только Premium</span></div> @endif
+                            @endif
                         </div>
                     </div>
                 </div>
 
+                <!-- ПРАВАЯ КОЛОНКА (Статусы и метрики) -->
                 <div class="space-y-4">
-                    <!-- Карточка просмотров и лайков -->
+                    <!-- Просмотры и Лайки -->
                     <div class="grid grid-cols-2 gap-4">
                         <div class="p-4 bg-muted/20 rounded-lg border border-border">
                             <p class="text-xs text-muted-foreground uppercase">Просмотры</p>
@@ -406,24 +468,34 @@ new #[Layout('layouts.admin')] class extends Component
                             <p class="text-sm font-medium mt-1">{{ $user->likes_count }} шт.</p>
                         </div>
                     </div>                                      
-                    
+
+                    <!-- Подписка и Email -->
                     <div class="grid grid-cols-2 gap-4">                       
-                          <div class="p-4 bg-muted/20 rounded-lg border border-border">
+                        <div class="p-4 bg-muted/20 rounded-lg border border-border">
                             <p class="text-xs text-muted-foreground uppercase">Подписка</p>
-                            <div class="mt-1">
-                                @if ($user->is_premium) <x-ui.badge variant="success">Премиум</x-ui.badge>
-                                @else <x-ui.badge variant="destructive">Бесплатная</x-ui.badge> @endif
+                            <div class="mt-1 flex items-center gap-2 flex-wrap">
+                                @if ($user->has_active_premium)
+                                    <x-ui.badge variant="warning"><x-lucide-crown class="w-3 h-3 inline mr-1" />Premium</x-ui.badge>
+                                    @if($user->premium_expires_at)
+                                        <span class="text-xs text-muted-foreground">до {{ $user->premium_expires_at->format('d.m.Y') }}</span>
+                                    @else
+                                        <span class="text-xs text-muted-foreground">Бессрочно</span>
+                                    @endif
+                                @else
+                                    <x-ui.badge variant="secondary">Бесплатный</x-ui.badge>
+                                @endif
                             </div>
                         </div>
                         <div class="p-4 bg-muted/20 rounded-lg border border-border">
                             <p class="text-xs text-muted-foreground uppercase">Email</p>
                             <div class="mt-1">
-                                @if ($user->is_verified) <x-ui.badge variant="success">Подтвержден</x-ui.badge>
+                                @if ($user->email_verified_at) <x-ui.badge variant="success">Подтвержден</x-ui.badge>
                                 @else <x-ui.badge variant="destructive">Не подтвержден</x-ui.badge> @endif
                             </div>
                         </div>
                     </div>
 
+                    <!-- Онбординг и Статус -->
                     <div class="grid grid-cols-2 gap-4">
                         <div class="p-4 bg-muted/20 rounded-lg border border-border">
                             <p class="text-xs text-muted-foreground uppercase">Онбординг</p>
@@ -432,23 +504,33 @@ new #[Layout('layouts.admin')] class extends Component
                                 @else <x-ui.badge variant="warning">Не завершен</x-ui.badge> @endif
                             </div>
                         </div>
-                          <div class="p-4 bg-muted/20 rounded-lg border border-border">
+                        <div class="p-4 bg-muted/20 rounded-lg border border-border">
                             <p class="text-xs text-muted-foreground uppercase">Статус аккаунта</p>
-                            <div class="mt-1">
-                                @if ($user->is_banned) <x-ui.badge variant="destructive">Забанен</x-ui.badge>
-                                @else <x-ui.badge variant="success">Активен</x-ui.badge> @endif
+                            <div class="mt-1 flex flex-wrap gap-1">
+                                @if ($user->is_banned) <x-ui.badge variant="destructive">Забанен</x-ui.badge> @endif
+                                @if ($user->is_deactivated) <x-ui.badge variant="warning">Заморожен</x-ui.badge> @endif
+                                @if (!$user->is_banned && !$user->is_deactivated) <x-ui.badge variant="success">Активен</x-ui.badge> @endif
                             </div>
                         </div>                            
                     </div>
 
-                                        
-                         <div class="p-4 bg-muted/20 rounded-lg border border-border">
+                    <!-- Активность -->
+                    <div class="grid grid-cols-2 gap-4">
+                        <div class="p-4 bg-muted/20 rounded-lg border border-border">
                             <p class="text-xs text-muted-foreground uppercase">Дата регистрации</p>
                             <p class="text-sm font-medium mt-1">{{ $user->created_at->format('d.m.Y H:i') }}</p>
                             <p class="text-xs text-muted-foreground">{{ $user->created_at->diffForHumans() }}</p>
-                        </div>                                     
-                   
+                        </div>   
+                        <div class="p-4 bg-muted/20 rounded-lg border border-border">
+                            <p class="text-xs text-muted-foreground uppercase">Последний визит</p>
+                            <p class="text-sm font-medium mt-1">
+                                {{ $user->last_seen ? $user->last_seen->diffForHumans() : 'Никогда' }}
+                            </p>
+                            @if($user->is_online) <span class="text-xs text-green-500">● Онлайн</span> @endif
+                        </div>                                    
+                    </div>
 
+                    <!-- Суперлайки и Фото -->
                     <div class="grid grid-cols-2 gap-4">
                         <div class="p-4 bg-muted/20 rounded-lg border border-border">
                             <p class="text-xs text-muted-foreground uppercase">Суперлайки</p>
@@ -460,6 +542,7 @@ new #[Layout('layouts.admin')] class extends Component
                         </div>
                     </div>                
 
+                    <!-- Настройки чата -->
                     <div class="p-4 bg-muted/20 rounded-lg border border-border">
                         <p class="text-xs text-muted-foreground uppercase mb-2">Настройки чата</p>
                         <div class="flex justify-between text-sm">
@@ -467,8 +550,50 @@ new #[Layout('layouts.admin')] class extends Component
                             @if ($user->chat_filter_enabled) <x-ui.badge variant="info" size="xs">Включен</x-ui.badge>
                             @else <span class="font-medium text-muted-foreground">Доступен всем</span> @endif
                         </div>
+                        @if ($user->chat_filter_enabled && $user->chat_filter_settings)
+                            @php $cf = $user->chat_filter_settings; @endphp
+                            <div class="mt-2 text-xs space-y-1 border-t border-border pt-2">
+                                <div class="flex justify-between">
+                                    <span class="text-muted-foreground">Принимает от:</span> 
+                                    <span>{{ $cf['gender'] ?? 'any' }}</span>
+                                </div>
+                                <div class="flex justify-between">
+                                    <span class="text-muted-foreground">Возраст:</span> 
+                                    <span>{{ $cf['age_from'] ?? 18 }} - {{ $cf['age_to'] ?? 99 }}</span>
+                                </div>
+                                @if(!empty($cf['is_verified_only'])) <div class="text-primary">Только верифицированные</div> @endif
+                                @if(!empty($cf['is_premium_only'])) <div class="text-yellow-500">Только Premium</div> @endif
+                            </div>
+                        @endif
                     </div>
 
+                    <!-- Приватность и Контент -->
+                    <div class="p-4 bg-muted/20 rounded-lg border border-border">
+                        <p class="text-xs text-muted-foreground uppercase mb-2">Приватность</p>
+                        <div class="text-sm space-y-1">
+                            <div class="flex justify-between"><span class="text-muted-foreground">Режим "Невидимка":</span> @if($user->is_invisible) <span class="text-green-500">Вкл</span> @else <span class="text-muted-foreground">Выкл</span> @endif</div>
+                            <div class="flex justify-between"><span class="text-muted-foreground">Скрывать 18+ фото:</span> @if($user->hide_intimate) <span class="text-green-500">Да</span> @else <span class="text-muted-foreground">Нет</span> @endif</div>
+                            <div class="flex justify-between"><span class="text-muted-foreground">Комментарии к фото:</span> @if($user->disable_photo_comments) <span class="text-destructive">Запрещены</span> @else <span class="text-muted-foreground">Разрешены</span> @endif</div>
+                            <div class="flex justify-between"><span class="text-muted-foreground">Скрыт из поиска:</span> @if($user->hide_from_search) <span class="text-yellow-500">Да</span> @else <span class="text-muted-foreground">Нет</span> @endif</div>
+                        </div>
+                    </div>
+
+                    <!-- Уведомления -->
+                    <div class="p-4 bg-muted/20 rounded-lg border border-border">
+                        <p class="text-xs text-muted-foreground uppercase mb-2">Уведомления</p>
+                        @php $es = $user->email_settings; @endphp
+                        <div class="text-sm space-y-1">
+                            <div class="flex justify-between"><span class="text-muted-foreground">Push (браузер):</span> @if($user->push_enabled) <span class="text-green-500">Вкл</span> @else <span class="text-muted-foreground">Выкл</span> @endif</div>
+                            <div class="text-xs mt-2 border-t border-border pt-2 text-muted-foreground">Уведомления на Email:</div>
+                            <div class="flex justify-between"><span>Сообщения:</span> @if($es['on_message']) <span>✅</span> @else <span>❌</span> @endif</div>
+                            <div class="flex justify-between"><span>Лайки:</span> @if($es['on_like']) <span>✅</span> @else <span>❌</span> @endif</div>
+                            <div class="flex justify-between"><span>Просмотры:</span> @if($es['on_view']) <span>✅</span> @else <span>❌</span> @endif</div>
+                            <div class="flex justify-between"><span>Модерация:</span> @if($es['on_photo_moderated']) <span>✅</span> @else <span>❌</span> @endif</div>
+                            <div class="flex justify-between"><span>Рассылки:</span> @if($es['on_broadcast']) <span>✅</span> @else <span>❌</span> @endif</div>
+                        </div>
+                    </div>
+
+                    <!-- Системные данные -->
                     <div class="p-4 bg-muted/20 rounded-lg border border-border">
                         <p class="text-xs text-muted-foreground uppercase mb-2">Системные данные</p>
                         <div class="grid grid-cols-2 gap-2 text-sm">

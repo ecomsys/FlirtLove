@@ -648,7 +648,12 @@ new #[Layout('layouts.admin')] class extends Component {
                             <p class="font-semibold text-foreground">
                                 Фото #{{ $photo->id }}
                                 <span class="text-xs text-muted-foreground font-normal">от
-                                    {{ $photo->user?->name ?? 'Удален' }}</span>
+                                    @if($photo->user)
+                                        <a href="{{ route('admin.users.show', $photo->user->id) }}" wire:navigate class="hover:text-primary">{{ $photo->user->name }}</a>
+                                    @else
+                                        Удален
+                                    @endif
+                                </span>
                                 @if ($photo->album)
                                     <span class="text-xs text-muted-foreground font-normal">в альбоме
                                         «{{ $photo->album->name }}»</span>
@@ -766,13 +771,22 @@ new #[Layout('layouts.admin')] class extends Component {
 
                                     <div class="flex-1 min-w-0">
                                         <div class="flex items-center gap-2 flex-wrap">
-                                            <span
-                                                class="font-medium text-sm">{{ $comment->user?->name ?? 'Удален' }}</span>
-                                            <span
-                                                class="text-xs text-muted-foreground">{{ $comment->created_at->diffForHumans() }}</span>
+                                            @if($comment->user)
+                                                <a href="{{ route('admin.users.show', $comment->user->id) }}" wire:navigate class="font-medium text-sm hover:text-primary">{{ $comment->user->name }}</a>
+                                                @if($comment->user->has_active_premium)
+                                                    <x-ui.badge variant="warning" size="xs" class="p-1 flex items-center gap-1">
+                                                        <x-lucide-crown class="w-3 h-3" />
+                                                    </x-ui.badge>
+                                                @endif
+                                                @if($comment->user->is_banned)
+                                                    <x-ui.badge variant="destructive" size="xs">Бан</x-ui.badge>
+                                                @endif
+                                            @else
+                                                <span class="font-medium text-sm text-muted-foreground">Удален</span>
+                                            @endif
+                                            <span class="text-xs text-muted-foreground">{{ $comment->created_at->diffForHumans() }}</span>
                                             @php $badge = $this->getStatusBadge($comment->status); @endphp
-                                            <x-ui.badge :variant="$badge['variant']"
-                                                size="xs">{{ $badge['label'] }}</x-ui.badge>
+                                            <x-ui.badge :variant="$badge['variant']" size="xs">{{ $badge['label'] }}</x-ui.badge>
                                         </div>
                                         <p class="text-sm mt-0.5">{{ $comment->content }}</p>
                                     </div>
@@ -828,13 +842,22 @@ new #[Layout('layouts.admin')] class extends Component {
 
                                                 <div class="flex-1 min-w-0">
                                                     <div class="flex items-center gap-2 flex-wrap">
-                                                        <span
-                                                            class="font-medium text-xs">{{ $reply->user?->name ?? 'Удален' }}</span>
-                                                        <span
-                                                            class="text-[10px] text-muted-foreground">{{ $reply->created_at->diffForHumans() }}</span>
+                                                        @if($reply->user)
+                                                            <a href="{{ route('admin.users.show', $reply->user->id) }}" wire:navigate class="font-medium text-xs hover:text-primary">{{ $reply->user->name }}</a>
+                                                            @if($reply->user->has_active_premium)
+                                                                <x-ui.badge variant="warning" size="xs" class="p-1 flex items-center gap-1">
+                                                                    <x-lucide-crown class="w-3 h-3" />
+                                                                </x-ui.badge>
+                                                            @endif
+                                                            @if($reply->user->is_banned)
+                                                                <x-ui.badge variant="destructive" size="xs">Бан</x-ui.badge>
+                                                            @endif
+                                                        @else
+                                                            <span class="font-medium text-xs text-muted-foreground">Удален</span>
+                                                        @endif
+                                                        <span class="text-[10px] text-muted-foreground">{{ $reply->created_at->diffForHumans() }}</span>
                                                         @php $replyBadge = $this->getStatusBadge($reply->status); @endphp
-                                                        <x-ui.badge :variant="$replyBadge['variant']"
-                                                            size="xs">{{ $replyBadge['label'] }}</x-ui.badge>
+                                                        <x-ui.badge :variant="$replyBadge['variant']" size="xs">{{ $replyBadge['label'] }}</x-ui.badge>
                                                     </div>
                                                     <p class="text-xs mt-0.5">{{ $reply->content }}</p>
                                                 </div>

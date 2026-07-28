@@ -246,7 +246,7 @@ new #[Layout('layouts.admin')] class extends Component {
                 <x-ui.button wire:click="setTypeFilter('match')"
                     variant="{{ $typeFilter === 'match' ? 'default' : 'secondary' }}" size="sm"
                     wire:key="type-match">
-                    По симпатии <x-ui.badge size="xs" variant="success">{{ $this->counts['match'] }}</x-ui.badge>
+                    По матчам <x-ui.badge size="xs" variant="success">{{ $this->counts['match'] }}</x-ui.badge>
                 </x-ui.button>
                 <x-ui.button wire:click="setTypeFilter('paywall')"
                     variant="{{ $typeFilter === 'paywall' ? 'default' : 'secondary' }}" size="sm"
@@ -285,20 +285,48 @@ new #[Layout('layouts.admin')] class extends Component {
                                     userId="{{ $u2?->id }}" showStatus="true"
                                     class="absolute -bottom-2 -right-2 w-6 h-6 rounded-full border-2 border-card" />
                             </div>
-                            <div class="flex-1 min-w-0">
-                                <div class="flex justify-between items-center">
-                                    <span class="font-medium text-sm truncate flex items-center gap-1">
-                                        {{ $u1?->name }} & {{ $u2?->name }}
+                            
+                                                        <div class="flex-1 min-w-0">
+                                <div class="flex justify-between items-start gap-2">
+                                    <!-- Имена юзеров (вертикально) -->
+                                    <div class="flex flex-col gap-0.5 min-w-0">
+                                        <!-- User 1 -->
+                                        <div class="flex items-center gap-1">
+                                            <span class="font-medium text-sm truncate">{{ $u1?->name }}</span>
+                                            @if($u1?->has_active_premium)
+                                                <x-ui.badge variant="warning" size="xs" wire:key="premium-list-u1-{{ $chat->id }}" class="p-1 flex items-center gap-1 shrink-0">
+                                                    <x-lucide-crown class="w-3 h-3" />
+                                                </x-ui.badge>
+                                            @endif
+                                            @if($u1?->is_banned)
+                                                <x-ui.badge variant="destructive" size="xs" wire:key="ban-list-u1-{{ $chat->id }}" class="shrink-0">Бан</x-ui.badge>
+                                            @endif
+                                        </div>
+                                        <!-- User 2 -->
+                                        <div class="flex items-center gap-1">
+                                            <span class="font-medium text-sm truncate">{{ $u2?->name }}</span>
+                                            @if($u2?->has_active_premium)
+                                                <x-ui.badge variant="warning" size="xs" wire:key="premium-list-u2-{{ $chat->id }}" class="p-1 flex items-center gap-1 shrink-0">
+                                                    <x-lucide-crown class="w-3 h-3" />
+                                                </x-ui.badge>
+                                            @endif
+                                            @if($u2?->is_banned)
+                                                <x-ui.badge variant="destructive" size="xs" wire:key="ban-list-u2-{{ $chat->id }}" class="shrink-0">Бан</x-ui.badge>
+                                            @endif
+                                        </div>
+                                    </div>
+
+                                    <!-- Время и Мэтч (справа) -->
+                                    <div class="flex flex-col items-end gap-1 shrink-0">
                                         @if ($chat->match)
                                             <x-lucide-heart class="w-3 h-3 text-pink-500 fill-current" />
                                         @endif
-                                    </span>
-                                    @if ($chat->last_message_at)
-                                        <span
-                                            class="text-[10px] text-muted-foreground whitespace-nowrap ml-2">{{ $chat->last_message_at->diffForHumans() }}</span>
-                                    @endif
+                                        @if ($chat->last_message_at)
+                                            <span class="text-[10px] text-muted-foreground whitespace-nowrap">{{ $chat->last_message_at->diffForHumans() }}</span>
+                                        @endif
+                                    </div>
                                 </div>
-                                <p class="text-xs text-muted-foreground truncate mt-0.5">
+                                <p class="text-xs text-muted-foreground truncate mt-1">
                                     @if ($lastMsg)
                                         @if ($lastMsg->type === 'system')
                                             <span class="text-destructive font-medium">Требуется Premium</span>
@@ -333,7 +361,7 @@ new #[Layout('layouts.admin')] class extends Component {
                 <!-- Шапка чата -->
                 <div class="flex items-start justify-between border-b border-border pb-3 mb-4">
                     <div class="flex items-center gap-8">
-                        <!-- User 1 -->
+                                              <!-- User 1 -->
                         <div class="flex items-center gap-3">
                             <x-avatar src="{{ $chat->user1?->avatar_url }}" name="{{ $chat->user1?->name }}"
                                 size="sm" userId="{{ $chat->user1?->id }}" showStatus="true" />
@@ -341,8 +369,13 @@ new #[Layout('layouts.admin')] class extends Component {
                                 <a href="{{ route('admin.users.show', $chat->user1_id) }}"
                                     class="hover:text-primary font-medium flex items-center gap-1">
                                     {{ $chat->user1?->name }}
-                                    @if ($chat->user1?->is_premium)
-                                        <x-ui.badge variant="warning" size="xs">Premium</x-ui.badge>
+                                    @if($chat->user1?->has_active_premium)
+                                        <x-ui.badge variant="warning" size="xs" wire:key="premium-header-u1-{{ $chat->id }}" class="p-1 flex items-center gap-1">
+                                            <x-lucide-crown class="w-3 h-3" />
+                                        </x-ui.badge>
+                                    @endif
+                                    @if($chat->user1?->is_banned)
+                                        <x-ui.badge variant="destructive" size="xs" wire:key="ban-header-u1-{{ $chat->id }}">Бан</x-ui.badge>
                                     @endif
                                 </a>
                                 <div class="text-xs text-muted-foreground">ID: {{ $chat->user1?->id }} •
@@ -360,8 +393,13 @@ new #[Layout('layouts.admin')] class extends Component {
                                 <a href="{{ route('admin.users.show', $chat->user2_id) }}"
                                     class="hover:text-primary font-medium flex items-center gap-1">
                                     {{ $chat->user2?->name }}
-                                    @if ($chat->user2?->is_premium)
-                                        <x-ui.badge variant="warning" size="xs">Premium</x-ui.badge>
+                                    @if($chat->user2?->has_active_premium)
+                                        <x-ui.badge variant="warning" size="xs" wire:key="premium-header-u2-{{ $chat->id }}" class="p-1 flex items-center gap-1">
+                                            <x-lucide-crown class="w-3 h-3" />
+                                        </x-ui.badge>
+                                    @endif
+                                    @if($chat->user2?->is_banned)
+                                        <x-ui.badge variant="destructive" size="xs" wire:key="ban-header-u2-{{ $chat->id }}">Бан</x-ui.badge>
                                     @endif
                                 </a>
                                 <div class="text-xs text-muted-foreground">ID: {{ $chat->user2?->id }} •
@@ -421,41 +459,34 @@ new #[Layout('layouts.admin')] class extends Component {
                 <div wire:poll.10s="$refresh" x-data x-init="setTimeout(() => { $el.scrollTop = $el.scrollHeight; }, 50)"
                     class="flex-1 overflow-y-auto space-y-4 pr-2 max-h-[calc(100vh-23rem)] flex flex-col little-scroll">
                     @php $messages = $chat->messages->reverse(); @endphp
-                    @foreach ($messages as $message)
-                        @if ($message->type === 'system')
-                            <div class="flex justify-center" wire:key="msg-{{ $message->id }}">
-                                <div
-                                    class="bg-destructive/10 text-destructive text-xs font-medium px-4 py-2 rounded-lg text-center max-w-md border border-destructive/20">
-                                    {{ trim($message->body) }}
+                          @foreach ($messages as $message)
+                            @if ($message->type === 'system')
+                                <div class="flex justify-center" wire:key="msg-{{ $message->id }}">
+                                    <!--  текст и тег в одну строку -->
+                                    <div class="bg-destructive/10 text-destructive text-xs font-medium px-4 py-2 rounded-lg text-center max-w-md border border-destructive/20">{{ trim($message->body) }}</div>
                                 </div>
-                            </div>
-                        @else
-                            @php
-                                $isUser1 = $message->sender_id === $chat->user1_id;
-                                $sender = $isUser1 ? $chat->user1 : $chat->user2;
-                            @endphp
-                            <div class="flex items-end gap-2 {{ $isUser1 ? 'justify-start' : 'justify-end' }}"
-                                wire:key="msg-{{ $message->id }}">
-                                @if ($isUser1)
-                                    <x-avatar src="{{ $sender?->avatar_url }}" name="{{ $sender?->name }}"
-                                        size="xs" userId="{{ $sender?->id }}" showStatus="true" />
-                                @endif
-                                <div class="max-w-[70%]">
-                                    <div
-                                        class="text-left whitespace-pre-line break-words {{ $isUser1 ? 'bg-muted text-foreground' : 'bg-primary text-primary-foreground' }} rounded-2xl px-4 py-2 text-sm">
-                                        {{ trim($message->body) }}</div>
-                                    <div
-                                        class="text-[10px] text-muted-foreground mt-1 {{ $isUser1 ? 'text-left' : 'text-right' }}">
-                                        {{ $message->created_at->format('d.m H:i') }}
+                            @else
+                                @php
+                                    $isUser1 = $message->sender_id === $chat->user1_id;
+                                    $sender = $isUser1 ? $chat->user1 : $chat->user2;
+                                @endphp
+                                <div class="flex items-end gap-2 {{ $isUser1 ? 'justify-start' : 'justify-end' }}" wire:key="msg-{{ $message->id }}">
+                                    @if ($isUser1)
+                                        <x-avatar src="{{ $sender?->avatar_url }}" name="{{ $sender?->name }}" size="xs" userId="{{ $sender?->id }}" showStatus="true" />
+                                    @endif
+                                    <div class="max-w-[70%]">
+                                        <!-- ✅ Фикс: текст и тег в одну строку -->
+                                        <div class="text-left whitespace-pre-line break-words {{ $isUser1 ? 'bg-muted text-foreground' : 'bg-primary text-primary-foreground' }} rounded-2xl px-4 py-2 text-sm">{{ trim($message->body) }}</div>
+                                        <div class="text-[10px] text-muted-foreground mt-1 {{ $isUser1 ? 'text-left' : 'text-right' }}">
+                                            {{ $message->created_at->format('d.m H:i') }}
+                                        </div>
                                     </div>
+                                    @if (!$isUser1)
+                                        <x-avatar src="{{ $sender?->avatar_url }}" name="{{ $sender?->name }}" size="xs" userId="{{ $sender?->id }}" showStatus="true" />
+                                    @endif
                                 </div>
-                                @if (!$isUser1)
-                                    <x-avatar src="{{ $sender?->avatar_url }}" name="{{ $sender?->name }}"
-                                        size="xs" userId="{{ $sender?->id }}" showStatus="true" />
-                                @endif
-                            </div>
-                        @endif
-                    @endforeach
+                            @endif
+                        @endforeach
                 </div>
             @else
                 <div class="flex-1 flex flex-col items-center justify-center text-muted-foreground">

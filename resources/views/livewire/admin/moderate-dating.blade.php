@@ -311,13 +311,24 @@ new #[Layout('layouts.admin')] class extends Component
                     <x-ui.table-cell class="text-muted-foreground text-xs font-mono">{{ $item->id }}</x-ui.table-cell>
 
                     @if ($viewMode === 'swipes')
-                        <!-- Кто оценил -->
+                                                <!-- Кто оценил -->
                         <x-ui.table-cell>
                             @if($item->user)
                                 <a href="{{ route('admin.users.show', $item->user->id) }}" wire:navigate class="group flex items-center gap-3 hover:text-primary transition-colors">
                                     <x-avatar src="{{ $item->user->avatar_url }}" name="{{ $item->user->name }}" size="sm" userId="{{ $item->user->id }}" showStatus="true" />
                                     <div class="flex flex-col">
-                                        <span class="text-sm font-medium">{{ $item->user->name }} <span class="text-xs text-muted-foreground font-normal">(ID: {{ $item->user->id }})</span></span>
+                                        <div class="flex gap-2 items-center">
+                                            <span class="text-sm font-medium">{{ $item->user->name }}</span>
+                                            @if($item->user?->has_active_premium)
+                                                <x-ui.badge variant="warning" size="xs" wire:key="premium-badge-swiper-{{ $item->id }}" class="p-1 flex items-center gap-1">
+                                                    <x-lucide-crown class="w-3 h-3" />
+                                                </x-ui.badge>
+                                            @endif 
+                                            @if($item->user?->is_banned)
+                                                <x-ui.badge variant="destructive" size="xs" wire:key="ban-badge-swiper-{{ $item->id }}">Бан</x-ui.badge>
+                                            @endif                                          
+                                            <span class="text-xs text-muted-foreground font-normal">(ID: {{ $item->user->id }})</span>                                        
+                                        </div>                                        
                                         <span class="text-xs text-muted-foreground group-hover:text-primary/80 transition-colors">{{ $item->user->email }}</span>
                                     </div>
                                 </a>
@@ -326,13 +337,24 @@ new #[Layout('layouts.admin')] class extends Component
                             @endif
                         </x-ui.table-cell>
 
-                        <!-- Кого оценили -->
+                                                <!-- Кого оценили -->
                         <x-ui.table-cell>
                             @if($item->targetUser)
                                 <a href="{{ route('admin.users.show', $item->targetUser->id) }}" wire:navigate class="group flex items-center gap-3 hover:text-primary transition-colors">
                                     <x-avatar src="{{ $item->targetUser->avatar_url }}" name="{{ $item->targetUser->name }}" size="sm" userId="{{ $item->targetUser->id }}" showStatus="true" />
                                     <div class="flex flex-col">
-                                        <span class="text-sm font-medium">{{ $item->targetUser->name }} <span class="text-xs text-muted-foreground font-normal">(ID: {{ $item->targetUser->id }})</span></span>
+                                        <div class="flex gap-2 items-center">
+                                            <span class="text-sm font-medium">{{ $item->targetUser->name }} </span>
+                                            @if($item->targetUser?->has_active_premium)
+                                                <x-ui.badge variant="warning" size="xs" wire:key="premium-badge-target-{{ $item->id }}" class="p-1 flex items-center gap-1">
+                                                    <x-lucide-crown class="w-3 h-3" />
+                                                </x-ui.badge>
+                                            @endif   
+                                            @if($item->targetUser?->is_banned)
+                                                <x-ui.badge variant="destructive" size="xs" wire:key="ban-badge-target-{{ $item->id }}">Бан</x-ui.badge>
+                                            @endif           
+                                            <span class="text-xs text-muted-foreground font-normal">(ID: {{ $item->targetUser->id }})</span>
+                                        </div>
                                         <span class="text-xs text-muted-foreground group-hover:text-primary/80 transition-colors">{{ $item->targetUser->email }}</span>
                                     </div>
                                 </a>
@@ -358,13 +380,24 @@ new #[Layout('layouts.admin')] class extends Component
                             @endif
                         </x-ui.table-cell>
                     @else
-                        <!-- Матч: Пользователь 1 -->
+                                                <!-- Матч: Пользователь 1 -->
                         <x-ui.table-cell>
                             @if($item->user1)
                                 <a href="{{ route('admin.users.show', $item->user1->id) }}" wire:navigate class="group flex items-center gap-3 hover:text-primary transition-colors">
                                     <x-avatar src="{{ $item->user1->avatar_url }}" name="{{ $item->user1->name }}" size="sm" userId="{{ $item->user1->id }}" showStatus="true" />
                                     <div class="flex flex-col">
-                                        <span class="text-sm font-medium">{{ $item->user1->name }} <span class="text-xs text-muted-foreground font-normal">(ID: {{ $item->user1->id }})</span></span>
+                                        <div class="flex gap-2 items-center">
+                                            <span class="text-sm font-medium">{{ $item->user1->name }} </span>
+                                            @if($item->user1?->has_active_premium)
+                                                <x-ui.badge variant="warning" size="xs" wire:key="premium-badge-user1-{{ $item->id }}" class="p-1 flex items-center gap-1">
+                                                    <x-lucide-crown class="w-3 h-3" />
+                                                </x-ui.badge>
+                                            @endif  
+                                            @if($item->user1?->is_banned)
+                                                <x-ui.badge variant="destructive" size="xs" wire:key="ban-badge-user1-{{ $item->id }}">Бан</x-ui.badge>
+                                            @endif       
+                                            <span class="text-xs text-muted-foreground font-normal">(ID: {{ $item->user1->id }})</span>
+                                        </div>                                        
                                         <span class="text-xs text-muted-foreground group-hover:text-primary/80 transition-colors">{{ $item->user1->email }}</span>
                                     </div>
                                 </a>
@@ -379,7 +412,18 @@ new #[Layout('layouts.admin')] class extends Component
                                 <a href="{{ route('admin.users.show', $item->user2->id) }}" wire:navigate class="group flex items-center gap-3 hover:text-primary transition-colors">
                                     <x-avatar src="{{ $item->user2->avatar_url }}" name="{{ $item->user2->name }}" size="sm" userId="{{ $item->user2->id }}" showStatus="true" />
                                     <div class="flex flex-col">
-                                        <span class="text-sm font-medium">{{ $item->user2->name }} <span class="text-xs text-muted-foreground font-normal">(ID: {{ $item->user2->id }})</span></span>
+                                        <div class="flex gap-2 items-center">
+                                            <span class="text-sm font-medium">{{ $item->user2->name }} </span>
+                                            @if($item->user2?->has_active_premium)
+                                                <x-ui.badge variant="warning" size="xs" wire:key="premium-badge-user2-{{ $item->id }}" class="p-1 flex items-center gap-1">
+                                                    <x-lucide-crown class="w-3 h-3" />
+                                                </x-ui.badge>
+                                            @endif  
+                                            @if($item->user2?->is_banned)
+                                                <x-ui.badge variant="destructive" size="xs" wire:key="ban-badge-user2-{{ $item->id }}">Бан</x-ui.badge>
+                                            @endif       
+                                            <span class="text-xs text-muted-foreground font-normal">(ID: {{ $item->user2->id }})</span>
+                                        </div>                                              
                                         <span class="text-xs text-muted-foreground group-hover:text-primary/80 transition-colors">{{ $item->user2->email }}</span>
                                     </div>
                                 </a>

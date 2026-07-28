@@ -21,29 +21,23 @@ class BroadcastNotification extends Notification implements ShouldQueue
     }
 
     /**
-     * Определяем каналы доставки в зависимости от типа оповещения
+     * Определяем каналы доставки в зависимости от типа оповещения и настроек юзера
      */
     public function via($notifiable): array
     {
-        $channels = [];
+        $channels = ['database']; // В базу (колокольчик) пишем ВСЕГДА
 
-        // Для system – только база данных
-        if ($this->broadcast->type === 'system') {
-            $channels[] = 'database';
-        }
-
-        // Для email – база данных + email
-        if ($this->broadcast->type === 'email') {
-            $channels[] = 'database';
+        // Если это email-рассылка, проверяем, включена ли у юзера настройка on_broadcast
+        if ($this->broadcast->type === 'email' && ($notifiable->email_settings['on_broadcast'] ?? true)) {
             $channels[] = 'mail';
         }
 
-        // Для push – база данных + broadcast (WebSocket) 
-        if ($this->broadcast->type === 'push') {
-            $channels[] = 'database';
+        // Если это push-рассылка, проверяем глобальный тумблер push_enabled
+        if ($this->broadcast->type === 'push' && $notifiable->push_enabled) {
             $channels[] = 'broadcast';
         }
 
+        // Для 'system' мы ничего не добавляем, остается только 'database'
         return $channels;
     }
 

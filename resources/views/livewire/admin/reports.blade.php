@@ -308,17 +308,17 @@ new #[Layout('layouts.admin')] class extends Component
                             'moderator_id' => auth()->id(),
                         ]);
                         
-                        // Уведомляем авторов жалоб о том, что нарушитель забанен
+                        // Уведомляем авторов жалоб о том, что нарушитель Бан
                         if ($report->user) {
                             $report->user->notify(new ReportModerated($report, 'user_banned'));
                         }
                     }
                     
-                    // Уведомляем самого забаненного
+                    // Уведомляем самого Банного
                     $user->notify(new ReportModerated(
                         null, 
                         'user_banned',
-                        "Вы были забанены на основании жалоб пользователей."
+                        "Вы были Баны на основании жалоб пользователей."
                     ));                   
                 }
             });
@@ -326,7 +326,7 @@ new #[Layout('layouts.admin')] class extends Component
             $this->dispatch('$refresh');
             $this->dispatch('show-toast', 
                 type: 'success', 
-                message: $user->is_banned ? "Пользователь {$user->name} забанен" : "Пользователь {$user->name} разбанен"
+                message: $user->is_banned ? "Пользователь {$user->name} Бан" : "Пользователь {$user->name} разбанен"
             );
         }
     }
@@ -513,7 +513,17 @@ new #[Layout('layouts.admin')] class extends Component
                         <div class="flex items-center gap-2">
                             <x-avatar src="{{ $report->user?->avatar_url }}" name="{{ $report->user?->name ?? 'Удален' }}" size="sm" userId="{{ $report->user_id }}" showStatus="true" />
                             <div>
-                                <div class="font-medium text-sm">{{ $report->user?->name ?? 'Удален' }}</div>
+                                <div class="flex gap-2 items-center">
+                                    <span class="text-sm font-medium">{{ $report->user?->name ?? 'Удален' }}</span>
+                                    @if($report->user?->has_active_premium)
+                                        <x-ui.badge variant="warning" size="xs" wire:key="premium-badge-complainer-{{ $report->id }}" class="p-1 flex items-center gap-1">
+                                            <x-lucide-crown class="w-3 h-3" />
+                                        </x-ui.badge>
+                                    @endif      
+                                    @if($report->user?->is_banned)
+                                        <x-ui.badge variant="destructive" size="xs">Бан</x-ui.badge>
+                                    @endif                                             
+                                </div>                                    
                                 <div class="text-xs text-muted-foreground">{{ $report->user?->email ?? '-' }}</div>
                             </div>
                         </div>
@@ -523,12 +533,17 @@ new #[Layout('layouts.admin')] class extends Component
                             <div class="flex items-center gap-2">
                                 <x-avatar src="{{ $report->reportedUser?->avatar_url }}" name="{{ $report->reportedUser?->name ?? 'Удален' }}" size="sm" userId="{{ $report->reported_user_id }}" showStatus="true" />
                                 <div>
-                                    <div class="font-medium text-sm flex items-center gap-1">
-                                        {{ $report->reportedUser?->name ?? 'Удален' }}
+                                    <div class="flex gap-2 items-center">
+                                        <span class="text-sm font-medium">{{ $report->reportedUser?->name ?? 'Удален' }}</span>
+                                        @if($report->reportedUser?->has_active_premium)
+                                            <x-ui.badge variant="warning" size="xs" wire:key="premium-badge-reported-{{ $report->id }}" class="p-1 flex items-center gap-1">
+                                                <x-lucide-crown class="w-3 h-3" />
+                                            </x-ui.badge>
+                                        @endif      
                                         @if($report->reportedUser?->is_banned)
-                                            <x-ui.badge variant="destructive" size="xs">Забанен</x-ui.badge>
-                                        @endif
-                                    </div>
+                                            <x-ui.badge variant="destructive" size="xs">Бан</x-ui.badge>
+                                        @endif                                             
+                                    </div>                                        
                                     <div class="text-xs text-muted-foreground">{{ $report->reportedUser?->email ?? '-' }}</div>
                                 </div>
                             </div>

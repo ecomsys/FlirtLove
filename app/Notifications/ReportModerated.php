@@ -27,12 +27,21 @@ class ReportModerated extends Notification implements ShouldQueue
         $this->additionalInfo = $additionalInfo;
     }
 
+    /**
+     *  Обновляем каналы доставки с учетом настроек юзера
+     */
     public function via($notifiable): array
     {
-        $channels = ['database', 'mail'];
+        $channels = ['database']; // В базу (колокольчик) пишем ВСЕГДА
 
-        if (in_array($this->action, ['resolved', 'rejected'])) {
+        // Проверяем глобальный тумблер Push
+        if ($notifiable->push_enabled && in_array($this->action, ['resolved', 'rejected'])) {
             $channels[] = 'broadcast';
+        }
+
+        // Проверяем настройку Email для жалоб (?? true — дефолт для старых юзеров)
+        if ($notifiable->email_settings['on_report'] ?? true) {
+            $channels[] = 'mail';
         }
 
         return $channels;
