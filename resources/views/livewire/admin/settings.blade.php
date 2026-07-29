@@ -1,30 +1,49 @@
 <?php
 
 use App\Models\Setting;
-use Livewire\Volt\Component;
-use Livewire\WithPagination;
-use Livewire\Attributes\Layout;
-use Livewire\Attributes\Computed;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
+use Livewire\Attributes\Computed;
+use Livewire\Attributes\Layout;
+use Livewire\Volt\Component;
 
 new #[Layout('layouts.admin')] class extends Component 
 {
+    /** @var string Текущая выбранная группа настроек */
     public string $group = 'general';
+    
+    /** @var array Массив настроек для отображения и редактирования */
     public array $settings = [];
 
+    /**
+     * Инициализация при загрузке страницы.
+     * Восстанавливаем последнюю выбранную вкладку из сессии.
+     * 
+     * @return void
+     */
     public function mount(): void
     {
+        // Восстанавливаем выбранную вкладку из сессии (дефолт - general)
+        $this->group = session('admin_settings_group', 'general');
         $this->loadSettings();
     }
 
-   public function loadSettings(): void
+    /**
+     * Загрузка настроек текущей группы из БД.
+     * Преобразует булевы значения для корректной работы чекбоксов.
+     * 
+     * @return void
+     */
+    public function loadSettings(): void
     {
         $settings = Setting::where('group', $this->group)->get();
         
         foreach ($settings as $setting) {
+            // Приводим булевы значения для правильной работы чекбоксов в Livewire
             if ($setting->type === 'boolean') {
                 $setting->value = $setting->value == '1' || $setting->value === true;
             }
+            
             // Если null — ставим дефолт
             if ($setting->value === null && $setting->type !== 'boolean') {
                 $defaults = $this->getDefaultSettings();
@@ -37,110 +56,137 @@ new #[Layout('layouts.admin')] class extends Component
         })->toArray();
     }
 
+    /**
+     * Переключение группы настроек.
+     * Сохраняет выбранную вкладку в сессию.
+     * 
+     * @param string $group
+     * @return void
+     */
     public function setGroup(string $group): void
     {
         $this->group = $group;
+        // Сохраняем выбранную вкладку в сессию
+        session(['admin_settings_group' => $group]);
         $this->loadSettings();
     }
 
- 
+    /**
+     * Сохранение настроек в БД.
+     * Использует транзакцию и один сброс кэша в конце.
+     * 
+     * @return void
+     */
     public function save(): void
     {
         try {
-            foreach ($this->settings as $id => $setting) {
-                $value = $setting['value'];
-                
-                if (is_bool($value)) {
-                    $value = $value ? '1' : '0';
+            DB::transaction(function () {
+                foreach ($this->settings as $id => $setting) {
+                    $value = $setting['value'];
+                    
+                    if (is_bool($value)) {
+                        $value = $value ? '1' : '0';
+                    }
+                    
+                    Setting::where('id', $id)->update(['value' => (string) $value]);
                 }
-                
-                Setting::where('id', $id)->update([
-                    'value' => (string) $value
-                ]);
-            }
+            });
 
+            // Сбрасываем кэш один раз после всех обновлений
             Cache::forget('settings');
             
-            $this->dispatch('show-toast', 
-                type: 'success', 
-                message: 'Настройки сохранены!'
-            );
-            
+            $this->dispatch('show-toast', type: 'success', message: 'Настройки сохранены!');
             $this->loadSettings();
         } catch (\Exception $e) {
-            $this->dispatch('show-toast', 
-                type: 'error', 
-                message: 'Ошибка сохранения: ' . $e->getMessage()
-            );
+            $this->dispatch('show-toast', type: 'error', message: 'Ошибка сохранения: ' . $e->getMessage());
         }
     }
 
+    /**
+     * Отмена несохраненных изменений (просто перезагружаем из БД).
+     * 
+     * @return void
+     */
     public function resetSettings(): void
     {
         $this->loadSettings();
-        $this->dispatch('show-toast', 
-            type: 'info', 
-            message: 'Изменения отменены, настройки возвращены к сохраненным'
-        );
+        $this->dispatch('show-toast', type: 'info', message: 'Изменения отменены');
     }
 
+    /**
+     * Сброс настроек текущей группы к заводским значениям.
+     * 
+     * @return void
+     */
     public function resetToDefault(): void
     {              
+        if (empty($this->settings)) {
+            $this->dispatch('show-toast', type: 'info', message: 'Нет настроек для сброса');
+            return;
+        }
+
         $defaults = $this->getDefaultSettings();
         $count = 0;
 
-        if (empty($this->settings)) {
-            $this->dispatch('show-toast', 
-                type: 'info', 
-                message: 'Нет настроек для сброса'
-            );
-            return;
-        }
-        
-        foreach ($this->settings as &$setting) {
-            if (isset($defaults[$setting['key']])) {
-                $defaultValue = $defaults[$setting['key']];
-                
-                if ($setting['type'] === 'boolean') {
-                    $defaultValue = $defaultValue == '1' || $defaultValue === true;
+        DB::transaction(function () use ($defaults, &$count) {
+            foreach ($this->settings as $id => $setting) {
+                if (isset($defaults[$setting['key']])) {
+                    $defaultValue = $defaults[$setting['key']];
+                    
+                    if ($setting['type'] === 'boolean') {
+                        $defaultValue = ($defaultValue == '1' || $defaultValue === true) ? '1' : '0';
+                    }
+                    
+                    Setting::where('id', $id)->update(['value' => (string) $defaultValue]);
+                    $count++;
                 }
-                
-                $setting['value'] = $defaultValue;
-                $count++;
             }
-        }
-        
-        foreach ($this->settings as $id => $setting) {
-            $value = $setting['value'];
-            
-            if (is_bool($value)) {
-                $value = $value ? '1' : '0';
-            }
-            
-            Setting::where('id', $id)->update([
-                'value' => (string) $value
-            ]);
-        }
+        });
 
+        Cache::forget('settings');
+        
         if ($count === 0) {
-            $this->dispatch('show-toast', 
-                type: 'info', 
-                message: 'Нет настроек для сброса'
-            );
+            $this->dispatch('show-toast', type: 'info', message: 'Нет настроек для сброса');
             return;
         }
         
-        Cache::forget('settings');
         $this->loadSettings();
-        
-        if ($count > 0) {
-            $this->dispatch('show-toast', 
-                type: 'success', 
-                message: "Сброшено {$count} настроек к заводским значениям"
-            );
-        }
+        $this->dispatch('show-toast', type: 'success', message: "Сброшено {$count} настроек к заводским значениям");
     }
 
+    /**
+     * Список доступных групп настроек.
+     * 
+     * @return array
+     */
+    #[Computed]
+    public function groups(): array
+    {
+        return [
+            'general' => 'Основные',
+            'moderation' => 'Модерация',
+            'security' => 'Безопасность',
+            'social' => 'Социальные сети',
+        ];
+    }
+
+    /**
+     * Получение настроек текущей группы (для подсчета и отображения).
+     * 
+     * @return \Illuminate\Database\Eloquent\Collection
+     */
+    #[Computed]
+    public function groupSettings()
+    {
+        return Setting::where('group', $this->group)->get();
+    }
+
+    /**
+     * Массив заводских настроек по умолчанию.
+     * В будущем можно вынести в config/settings.php.
+     * 
+     * @return array
+     */
     private function getDefaultSettings(): array
     {
         return [
@@ -158,24 +204,8 @@ new #[Layout('layouts.admin')] class extends Component
             'vk_url' => 'https://vk.com/loveplanet',
         ];
     }
-
-    #[Computed]
-    public function groups(): array
-    {
-        return [
-            'general' => 'Основные',
-            'moderation' => 'Модерация',
-            'security' => 'Безопасность',
-            'social' => 'Социальные сети',
-        ];
-    }
-
-    #[Computed]
-    public function groupSettings()
-    {
-        return Setting::where('group', $this->group)->get();
-    }
-}; ?>
+}; 
+?>
 
 <div x-data class="space-y-6">
     <!-- Заголовок -->

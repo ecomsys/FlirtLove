@@ -2,196 +2,99 @@
 
 use App\Models\Swipe;
 use App\Models\UserMatch;
-use Livewire\Volt\Component;
-use Livewire\WithPagination;
-use Livewire\Attributes\Layout;
-use Livewire\Attributes\Computed;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Livewire\Attributes\Computed;
+use Livewire\Attributes\Layout;
+use Livewire\Volt\Component;
+use Livewire\WithPagination;
 
-/**
- * Компонент модерации знакомств (Свайпы и Матчи).
- * Отвечает за просмотр истории взаимодействий пользователей,
- * фильтрацию, поиск и удаление нежелательных связей (матчей/свайпов).
- */
 new #[Layout('layouts.admin')] class extends Component 
 {
     use WithPagination;
 
-    /** @var string Поисковый запрос по имени пользователя */
     public string $search = '';
-    
-    /** @var string|null Начальная дата для фильтрации по дате */
     public ?string $dateFrom = null;
-    
-    /** @var string|null Конечная дата для фильтрации по дате */
     public ?string $dateTo = null;
-    
-    /** @var string Фильтр типа свайпа (all, like, dislike, superlike) */
     public string $typeFilter = 'all'; 
-    
-    /** @var string Текущий режим просмотра (swipes, matches) */
     public string $viewMode = 'swipes'; 
-    
-    /** @var int Количество элементов на странице */
     public int $perPage = 10;
 
-    /**
-     * Хуки Livewire: сброс пагинации при изменении любого фильтра.
-     */
     public function updatingSearch(): void { $this->resetPage(); }
     public function updatingDateFrom(): void { $this->resetPage(); }
     public function updatingDateTo(): void { $this->resetPage(); }
     public function updatingTypeFilter(): void { $this->resetPage(); }
     public function updatingViewMode(): void { $this->resetPage(); }
 
-   /**
-     * Инициализация компонента.
-     * Восстанавливает сохраненные в сессии фильтры и режим просмотра.
+    /**
+     * Инициализация. Восстанавливаем фильтры из сессии.
+     * 
+     * @return void
      */
     public function mount()
     {
         $saved = session('moderate_dating', []);
-        
-        if (isset($saved['viewMode'])) {
-            $this->viewMode = $saved['viewMode'];
-        }
-        if (isset($saved['typeFilter'])) {
-            $this->typeFilter = $saved['typeFilter'];
-        }
+        if (isset($saved['viewMode'])) $this->viewMode = $saved['viewMode'];
+        if (isset($saved['typeFilter'])) $this->typeFilter = $saved['typeFilter'];
     }
 
     /**
-     * Переключение режима просмотра (Свайпы/Матчи).
-     * Сохраняет выбор в сессию.
+     * Переключение режима (Свайпы/Матчи) и сохранение в сессию.
      * 
-     * @param string $mode Выбранный режим
+     * @param string $mode
+     * @return void
      */
     public function setViewMode(string $mode): void
     {
         $this->viewMode = $mode;
-        session([
-            'moderate_dating' => array_merge(
-                session('moderate_dating', []),
-                ['viewMode' => $mode]
-            )
-        ]);
+        session(['moderate_dating' => array_merge(session('moderate_dating', []), ['viewMode' => $mode])]);
         $this->resetPage();
     }
 
     /**
-     * Установка фильтра типа свайпа (Лайк/Дизлайк/Суперлайк).
-     * Сохраняет выбор в сессию.
+     * Установка фильтра типа свайпа и сохранение в сессию.
      * 
-     * @param string $type Выбранный тип
+     * @param string $type
+     * @return void
      */
     public function setTypeFilter(string $type): void
     {
         $this->typeFilter = $type;
-        session([
-            'moderate_dating' => array_merge(
-                session('moderate_dating', []),
-                ['typeFilter' => $type]
-            )
-        ]);
+        session(['moderate_dating' => array_merge(session('moderate_dating', []), ['typeFilter' => $type])]);
         $this->resetPage();
     }
 
     /**
-     * Полный сброс текстовых и дата-фильтров.
+     * Сброс всех фильтров.
+     * 
+     * @return void
      */
     public function resetFilters(): void
     {
-        // ✅ ИСПРАВЛЕНО: Добавлен typeFilter в сброс, чтобы очищались и кнопки Лайков/Дизлайков
         $this->reset(['search', 'dateFrom', 'dateTo', 'typeFilter']);
-        $this->typeFilter = 'all'; // Возвращаем по умолчанию
-        
+        $this->typeFilter = 'all'; 
         $this->resetPage();
     }
-    
-    /**
-     * Вычисляемое свойство: Статистика для бейджей.
-     * Кешируется на 60 секунд, чтобы не нагружать БД 5 COUNT-запросами при каждом рендере.
-     */
-    #[Computed]
-    public function stats()
-    {
-        return Cache::remember('dating_admin_stats', 60, function () {
-            return [
-                'total_likes' => Swipe::where('type', 'like')->excludeAdmins()->count(),
-                'total_dislikes' => Swipe::where('type', 'dislike')->excludeAdmins()->count(),
-                'total_superlikes' => Swipe::where('type', 'superlike')->excludeAdmins()->count(),
-                'total_swipes' => Swipe::excludeAdmins()->count(),
-                'total_matches' => UserMatch::excludeAdmins()->count(),
-            ];
-        });
-    }
+
+    // ============================================
+    // ДЕЙСТВИЯ (БЫЛИ В ACTION)
+    // ============================================
 
     /**
-     * Вычисляемое свойство: Список элементов для текущей страницы.
-     * Возвращает свайпы или матчи в зависимости от выбранного режима.
-     */
-    #[Computed]
-    public function items()
-    {
-        return $this->viewMode === 'matches' ? $this->getMatches() : $this->getSwipes();
-    }
-
-    /**
-     * Получение списка свайпов с пагинацией.
-     */
-    private function getSwipes()
-    {
-        return Swipe::with(['user', 'targetUser'])
-            ->excludeAdmins() 
-            ->when($this->typeFilter !== 'all', fn($q) => $q->where('type', $this->typeFilter))
-            ->when($this->search, function ($q) {
-                $q->where(function ($innerQ) {
-                    $innerQ->whereHas('user', fn($q2) => $q2->where('name', 'ilike', "%{$this->search}%"))
-                           ->orWhereHas('targetUser', fn($q2) => $q2->where('name', 'ilike', "%{$this->search}%"));
-                });
-            })
-            ->when($this->dateFrom, fn($q) => $q->whereDate('created_at', '>=', $this->dateFrom))
-            ->when($this->dateTo, fn($q) => $q->whereDate('created_at', '<=', $this->dateTo))
-            ->latest()
-            ->paginate($this->perPage)->onEachSide(2);
-    }
-
-    /**
-     * Получение списка матчей с пагинацией.
-     */
-    private function getMatches()
-    {
-          return UserMatch::with(['user1', 'user2'])
-            ->excludeAdmins() 
-            ->when($this->search, function ($q) {
-                $q->where(function ($innerQ) {
-                    $innerQ->whereHas('user1', fn($q2) => $q2->where('name', 'ilike', "%{$this->search}%"))
-                           ->orWhereHas('user2', fn($q2) => $q2->where('name', 'ilike', "%{$this->search}%"));
-                });
-            })
-            ->when($this->dateFrom, fn($q) => $q->whereDate('created_at', '>=', $this->dateFrom))
-            ->when($this->dateTo, fn($q) => $q->whereDate('created_at', '<=', $this->dateTo))
-            ->latest()
-            ->paginate($this->perPage)->onEachSide(2);
-    }
-
-    /**
-     * Удаление элемента (Свайпа или Матча).
-     * Обернуто в транзакцию для поддержания целостности БД.
+     * Удаление свайпа или матча.
+     * Если удаляется лайк/суперлайк — связанный матч тоже удаляется.
+     * Если удаляется матч — свайпы в обе стороны тоже удаляются.
      * 
-     * @param int $id ID удаляемого элемента
+     * @param int $id
+     * @return void
      */
     public function deleteItem(int $id): void
     {
-        // Передаем $id внутрь транзакции через use()
         DB::transaction(function () use ($id) {
             if ($this->viewMode === 'matches') {
                 $match = UserMatch::find($id);
                 if ($match) {
-                    $match->delete();
-
-                    // Чистим "осиротевшие" свайпы между этими двумя пользователями
+                    // Удаляем свайпы в обе стороны
                     Swipe::where(function ($q) use ($match) {
                         $q->where('user_id', $match->user1_id)
                           ->where('target_user_id', $match->user2_id);
@@ -200,31 +103,134 @@ new #[Layout('layouts.admin')] class extends Component
                           ->where('target_user_id', $match->user1_id);
                     })->delete();
 
+                    // Удаляем сам матч
+                    $match->delete();
+
+                    Cache::forget('dating_admin_stats');
                     $this->dispatch('show-toast', type: 'success', message: 'Матч и история свайпов удалены');
                 }
             } else {
                 $swipe = Swipe::find($id);
                 if ($swipe) {
-                    // Если удаляем лайк/суперлайк, нужно удалить и связанный с ним матч
-                    if ($swipe->type === 'like' || $swipe->type === 'superlike') {
+                    // Если удаляем лайк/суперлайк, нужно удалить и связанный матч
+                    if (in_array($swipe->type, ['like', 'superlike'])) {
                         UserMatch::where(function ($q) use ($swipe) {
-                            $q->where('user1_id', $swipe->user_id)->where('user2_id', $swipe->target_user_id);
+                            $q->where('user1_id', $swipe->user_id)
+                              ->where('user2_id', $swipe->target_user_id);
                         })->orWhere(function ($q) use ($swipe) {
-                            $q->where('user1_id', $swipe->target_user_id)->where('user2_id', $swipe->user_id);
+                            $q->where('user1_id', $swipe->target_user_id)
+                              ->where('user2_id', $swipe->user_id);
                         })->delete();
                     }
                     
                     $swipe->delete();
+
+                    Cache::forget('dating_admin_stats');
                     $this->dispatch('show-toast', type: 'success', message: 'Свайп (и связанный матч, если был) удалён');
                 }
             }
         });
-        
-        // Сбрасываем кэш статистики, т.к. количество записей изменилось
-        Cache::forget('dating_admin_stats');
+
         $this->dispatch('$refresh');
     }
-}; 
+    
+    // ============================================
+    // ВЫВОД ДАННЫХ (Computed)
+    // ============================================
+
+    /**
+     * Статистика по свайпам и матчам (кешируется на 1 минуту).
+     * 
+     * @return array
+     */
+    #[Computed]
+    public function stats(): array
+    {
+        return Cache::remember('dating_admin_stats', 60, function () {
+            $baseSwipeQuery = Swipe::whereHas('user', fn($q) => $q->where('is_admin', false))
+                ->whereHas('targetUser', fn($q) => $q->where('is_admin', false));
+                
+            $baseMatchQuery = UserMatch::whereHas('user1', fn($q) => $q->where('is_admin', false))
+                ->whereHas('user2', fn($q) => $q->where('is_admin', false));
+
+            return [
+                'total_likes' => (clone $baseSwipeQuery)->where('type', 'like')->count(),
+                'total_dislikes' => (clone $baseSwipeQuery)->where('type', 'dislike')->count(),
+                'total_superlikes' => (clone $baseSwipeQuery)->where('type', 'superlike')->count(),
+                'total_swipes' => $baseSwipeQuery->count(),
+                'total_matches' => $baseMatchQuery->count(),
+            ];
+        });
+    }
+
+    /**
+     * Получение элементов для текущего режима (Свайпы или Матчи).
+     * 
+     * @return \Illuminate\Contracts\Pagination\LengthAwarePaginator
+     */
+    #[Computed]
+    public function items()
+    {
+        return $this->viewMode === 'matches' ? $this->getMatches() : $this->getSwipes();
+    }
+
+        /**
+     * Запрос свайпов с фильтрацией.
+     * 
+     * @return \Illuminate\Contracts\Pagination\LengthAwarePaginator
+     */
+    private function getSwipes()
+    {
+        $searchOperator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
+
+        return Swipe::with([
+                //  Жадно загружаем юзеров и по 1 аватарке для каждого
+                'user.photos' => fn($q) => $q->where('status', 'approved')->orderBy('is_primary', 'desc')->limit(1),
+                'targetUser.photos' => fn($q) => $q->where('status', 'approved')->orderBy('is_primary', 'desc')->limit(1),
+            ])
+            ->whereHas('user', fn($q) => $q->where('is_admin', false))
+            ->whereHas('targetUser', fn($q) => $q->where('is_admin', false))
+            ->when($this->typeFilter !== 'all', fn($q) => $q->where('type', $this->typeFilter))
+            ->when($this->search, function ($q) use ($searchOperator) {
+                $q->where(function ($innerQ) use ($searchOperator) {
+                    $innerQ->whereHas('user', fn($q2) => $q2->where('name', $searchOperator, "%{$this->search}%"))
+                           ->orWhereHas('targetUser', fn($q2) => $q2->where('name', $searchOperator, "%{$this->search}%"));
+                });
+            })
+            ->when($this->dateFrom, fn($q) => $q->whereDate('created_at', '>=', $this->dateFrom))
+            ->when($this->dateTo, fn($q) => $q->whereDate('created_at', '<=', $this->dateTo))
+            ->latest()
+            ->paginate($this->perPage)->onEachSide(2);
+    }
+
+    /**
+     * Запрос матчей с фильтрацией.
+     * 
+     * @return \Illuminate\Contracts\Pagination\LengthAwarePaginator
+     */
+    private function getMatches()
+    {
+        $searchOperator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
+
+        return UserMatch::with([
+                //  Жадно загружаем юзеров и по 1 аватарке для каждого
+                'user1.photos' => fn($q) => $q->where('status', 'approved')->orderBy('is_primary', 'desc')->limit(1),
+                'user2.photos' => fn($q) => $q->where('status', 'approved')->orderBy('is_primary', 'desc')->limit(1),
+            ])
+            ->whereHas('user1', fn($q) => $q->where('is_admin', false))
+            ->whereHas('user2', fn($q) => $q->where('is_admin', false))
+            ->when($this->search, function ($q) use ($searchOperator) {
+                $q->where(function ($innerQ) use ($searchOperator) {
+                    $innerQ->whereHas('user1', fn($q2) => $q2->where('name', $searchOperator, "%{$this->search}%"))
+                           ->orWhereHas('user2', fn($q2) => $q2->where('name', $searchOperator, "%{$this->search}%"));
+                });
+            })
+            ->when($this->dateFrom, fn($q) => $q->whereDate('created_at', '>=', $this->dateFrom))
+            ->when($this->dateTo, fn($q) => $q->whereDate('created_at', '<=', $this->dateTo))
+            ->latest()
+            ->paginate($this->perPage)->onEachSide(2);
+    }
+};
 ?>
 
 <!-- ========================================== -->
@@ -261,29 +267,29 @@ new #[Layout('layouts.admin')] class extends Component
                     Суперлайки <x-ui.badge size="xs">{{ $this->stats['total_superlikes'] }}</x-ui.badge>
                 </x-ui.button>
             </div>
-        @endif
-
-        <div class="flex items-center gap-2 flex-1 justify-end ml-auto">
-            <x-ui.input wire:model.live.debounce.300ms="search" placeholder="Поиск по имени..." class="w-48" />
-            <x-ui.date-picker wire:model.live="dateFrom" placeholder="с" width="w-[10rem]" />
-            <span class="text-muted-foreground">—</span>
-            <x-ui.date-picker wire:model.live="dateTo" placeholder="по" width="w-[10rem]" />
-            <!-- Кнопка сброса фильтров -->
-            <x-ui.button wire:click="resetFilters" variant="outline" size="sm">
-                <x-lucide-rotate-ccw class="w-4 h-4 inline mr-2" />
-                <span>Сбросить</span>
-            </x-ui.button>
-        </div>
+        @endif       
     </div>
 
     <!-- Переключатель режима (Свайпы/Матчи) -->
-   <div class="flex flex-wrap items-center gap-3" wire:key="filters-wrapper">
+   <div class="flex justify-between items-center flex-wrap gap-3" wire:key="filters-wrapper">
         <div class="flex gap-1.5" wire:key="mode-buttons">
             <x-ui.button wire:click="setViewMode('swipes')" variant="{{ $viewMode === 'swipes' ? 'default' : 'secondary' }}" size="sm" wire:key="mode-swipes">
                 Свайпы <x-ui.badge size="xs">{{ $this->stats['total_swipes'] }}</x-ui.badge>
             </x-ui.button>
             <x-ui.button wire:click="setViewMode('matches')" variant="{{ $viewMode === 'matches' ? 'default' : 'secondary' }}" size="sm" wire:key="mode-matches">
                 Матчи <x-ui.badge size="xs">{{ $this->stats['total_matches'] }}</x-ui.badge>
+            </x-ui.button>
+        </div>
+
+         <div class="flex items-center gap-2 flex-1 justify-end ml-auto">
+            <x-ui.input wire:model.live.debounce.300ms="search" placeholder="Поиск по имени..." class="w-48" />
+            <x-ui.date-picker wire:model.live="dateFrom" placeholder="с" width="w-[10rem]" wire:key="date-from-search" />
+            <span class="text-muted-foreground">—</span>
+            <x-ui.date-picker wire:model.live="dateTo" placeholder="по" width="w-[10rem]" wire:key="date-to-search" />
+            <!-- Кнопка сброса фильтров -->
+            <x-ui.button wire:click="resetFilters" variant="outline" size="sm">
+                <x-lucide-rotate-ccw class="w-4 h-4 inline mr-2" />
+                <span>Сбросить</span>
             </x-ui.button>
         </div>
     </div>

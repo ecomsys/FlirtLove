@@ -1,83 +1,43 @@
 <?php
 
+use App\Actions\Admin\Photos\ModerateCommentAction;
 use App\Models\Photo;
 use App\Models\PhotoComment;
-use App\Notifications\CommentModerated;
 use Livewire\Volt\Component;
 use Livewire\WithPagination;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Computed;
-use Illuminate\Support\Facades\Log;
 
-/**
- * Компонент модерации комментариев к фотографиям.
- * Поддерживает древовидную структуру (комментарии + ответы),
- * фильтрацию, массовую обработку, защиту от одобрения ответов без родителя
- * и сохранение состояния фильтров в сессии.
- */
-new #[Layout('layouts.admin')] class extends Component {
+new #[Layout('layouts.admin')] class extends Component 
+{
     use WithPagination;
 
-    /** @var string Текущий фильтр статуса (pending, all, approved, rejected, spam) */
     public string $statusFilter = 'pending';
-
-    /** @var string Поисковый запрос по тексту или автору */
     public string $search = '';
-
-    /** @var int Количество фото на странице */
     public int $perPage = 5;
 
-    // Свойства модалки превью фото
     public bool $showPreviewModal = false;
     public ?Photo $previewPhoto = null;
 
-    /**
-     * Проверка прав администратора.
-     */
-    private function checkAdminAccess(): void
-    {
-        if (!auth()->user()?->is_admin) {
-            abort(403, 'Доступ запрещен. Только для администраторов.');
-        }
-    }
-
-    /**
-     * Инициализация компонента.
-     * Восстанавливает фильтры из сессии.
-     */
     public function mount()
     {
         $saved = session('moderate_photo_comments', []);
-
-        if (isset($saved['statusFilter'])) {
-            $this->statusFilter = $saved['statusFilter'];
-        }
-        if (isset($saved['search'])) {
-            $this->search = $saved['search'];
-        }
+        if (isset($saved['statusFilter'])) $this->statusFilter = $saved['statusFilter'];
+        if (isset($saved['search'])) $this->search = $saved['search'];
     }
 
-    /**
-     * Хук Livewire: срабатывает при вводе поиска.
-     */
     public function updatedSearch(): void
     {
         session(['moderate_photo_comments.search' => $this->search]);
         $this->resetPage();
     }
 
-    /**
-     * Хук Livewire: срабатывает при смене фильтра статуса.
-     */
     public function updatedStatusFilter(): void
     {
         session(['moderate_photo_comments.statusFilter' => $this->statusFilter]);
         $this->resetPage();
     }
 
-    /**
-     * Установка фильтра статуса (вызывается из HTML).
-     */
     public function setStatusFilter(string $status): void
     {
         $this->statusFilter = $status;
@@ -85,9 +45,6 @@ new #[Layout('layouts.admin')] class extends Component {
         $this->resetPage();
     }
 
-    /**
-     * Полный сброс всех фильтров и очистка сессии.
-     */
     public function resetFilters(): void
     {
         $this->reset(['search', 'statusFilter']);
@@ -96,25 +53,165 @@ new #[Layout('layouts.admin')] class extends Component {
         $this->resetPage();
     }
 
-    /**
-     * Открыть модалку превью фото.
-     * Загружаем модель здесь, а не в Blade-шаблоне, чтобы избежать N+1.
-     *
-     * @param int $photoId
-     */
     public function previewPhoto(int $photoId): void
     {
         $this->previewPhoto = Photo::with('user')->find($photoId);
         $this->showPreviewModal = true;
     }
 
-    /**
-     * Применить фильтры к запросу комментариев (для корневых комментариев).
-     * ВАЖНО: orWhereHas обернут в замыкание where, чтобы не ломать основной фильтр.
-     */
+    // === ДЕЙСТВИЯ (Вызывают Action!) ===
+
+    public function approveComment(int $commentId): void
+    {
+        $comment = PhotoComment::with('parent')->find($commentId);
+        if (!$comment) return;
+
+        $success = (new ModerateCommentAction)->approve($comment);
+
+        if (!$success) {
+            $this->dispatch('show-toast', type: 'error', message: 'Нельзя одобрить ответ на неодобренный комментарий!');
+            return;
+        }
+
+        $this->dispatch('show-toast', type: 'success', message: 'Комментарий одобрен');
+        $this->dispatch('$refresh');
+    }
+
+    public function rejectComment(int $commentId): void
+    {
+        $comment = PhotoComment::find($commentId);
+        if (!$comment) return;
+
+        (new ModerateCommentAction)->reject($comment);
+
+        $this->dispatch('show-toast', type: 'info', message: 'Комментарий отклонен');
+        $this->dispatch('$refresh');
+    }
+
+    public function markSpam(int $commentId): void
+    {
+        $comment = PhotoComment::find($commentId);
+        if (!$comment) return;
+
+        (new ModerateCommentAction)->markSpam($comment);
+
+        $this->dispatch('show-toast', type: 'error', message: 'Комментарий помечен как спам');
+        $this->dispatch('$refresh');
+    }
+
+    public function deleteComment(int $commentId): void
+    {
+        $comment = PhotoComment::find($commentId);
+        if (!$comment) return;
+
+        (new ModerateCommentAction)->delete($comment);
+
+        $this->dispatch('show-toast', type: 'success', message: 'Комментарий удален');
+        $this->dispatch('$refresh');
+    }
+
+    public function restoreComment(int $commentId): void
+    {
+        $comment = PhotoComment::find($commentId);
+        if (!$comment) return;
+
+        (new ModerateCommentAction)->restore($comment);
+
+        $this->dispatch('show-toast', type: 'info', message: 'Комментарий возвращен на модерацию');
+        $this->dispatch('$refresh');
+    }
+
+    public function approveRemaining(int $photoId): void
+    {
+        $pendingComments = PhotoComment::where('photo_id', $photoId)
+            ->where('status', 'pending')
+            ->whereHas('user', fn($q) => $q->where('is_admin', false))
+            ->with('parent', 'user')
+            ->get();
+
+        if ($pendingComments->isEmpty()) {
+            $this->dispatch('show-toast', type: 'info', message: 'Нет комментариев для одобрения');
+            return;
+        }
+
+        $count = (new ModerateCommentAction)->bulkApprove($pendingComments);
+
+        $this->dispatch('show-toast', type: 'success', message: "Одобрено {$count} комментариев");
+        $this->dispatch('$refresh');
+    }
+
+    public function rejectRemaining(int $photoId): void
+    {
+        $pendingComments = PhotoComment::where('photo_id', $photoId)
+            ->where('status', 'pending')
+            ->whereHas('user', fn($q) => $q->where('is_admin', false))
+            ->with('user')
+            ->get();
+
+        if ($pendingComments->isEmpty()) {
+            $this->dispatch('show-toast', type: 'info', message: 'Нет комментариев для отклонения');
+            return;
+        }
+
+        $count = (new ModerateCommentAction)->bulkReject($pendingComments);
+
+        $this->dispatch('show-toast', type: 'info', message: "Отклонено {$count} комментариев");
+        $this->dispatch('$refresh');
+    }
+
+    public function approveAllPending(): void
+    {
+        $pendingComments = PhotoComment::where('status', 'pending')
+            ->whereHas('user', fn($q) => $q->where('is_admin', false))
+            ->with('parent', 'user')
+            ->get();
+
+        if ($pendingComments->isEmpty()) {
+            $this->dispatch('show-toast', type: 'info', message: 'Нет комментариев для одобрения');
+            return;
+        }
+
+        $count = (new ModerateCommentAction)->bulkApprove($pendingComments);
+
+        $this->dispatch('show-toast', type: 'success', message: "Одобрено {$count} комментариев");
+        $this->dispatch('$refresh');
+    }
+
+    public function rejectAllPending(): void
+    {
+        $pendingComments = PhotoComment::where('status', 'pending')
+            ->whereHas('user', fn($q) => $q->where('is_admin', false))
+            ->with('user')
+            ->get();
+
+        if ($pendingComments->isEmpty()) {
+            $this->dispatch('show-toast', type: 'info', message: 'Нет комментариев для отклонения');
+            return;
+        }
+
+        $count = (new ModerateCommentAction)->bulkReject($pendingComments);
+
+        $this->dispatch('show-toast', type: 'info', message: "Отклонено {$count} комментариев");
+        $this->dispatch('$refresh');
+    }
+
+    public function getStatusBadge(string $status): array
+    {
+        return match ($status) {
+            'pending' => ['variant' => 'warning', 'label' => 'Ожидает'],
+            'approved' => ['variant' => 'success', 'label' => 'Одобрен'],
+            'rejected' => ['variant' => 'destructive', 'label' => 'Отклонен'],
+            'spam' => ['variant' => 'destructive', 'label' => 'Спам'],
+            default => ['variant' => 'secondary', 'label' => 'Неизвестно'],
+        };
+    }
+
+    // === ВЫВОД ДАННЫХ ===
+
     private function applyCommentFilters($query): void
     {
-        $query->excludeAdmins();
+        // Заменили тяжелый excludeAdmins на быстрый whereHas
+        $query->whereHas('user', fn($q) => $q->where('is_admin', false));
 
         if ($this->statusFilter !== 'all') {
             $query->where(function ($sub) {
@@ -142,12 +239,9 @@ new #[Layout('layouts.admin')] class extends Component {
         }
     }
 
-    /**
-     * Применить фильтры к запросу ответов (replies).
-     */
     private function applyReplyFilters($query): void
     {
-        $query->excludeAdmins();
+        $query->whereHas('user', fn($q) => $q->where('is_admin', false));
 
         if ($this->statusFilter !== 'all') {
             $query->where('status', $this->statusFilter);
@@ -163,10 +257,6 @@ new #[Layout('layouts.admin')] class extends Component {
         }
     }
 
-    /**
-     * Вычисляемое свойство: список фото с комментариями.
-     * Использует жадную загрузку (eager loading) для оптимизации.
-     */
     #[Computed]
     public function photos()
     {
@@ -198,14 +288,10 @@ new #[Layout('layouts.admin')] class extends Component {
         return $query->latest()->paginate($this->perPage);
     }
 
-    /**
-     * Вычисляемое свойство: Статистика по статусам.
-     * Оптимизация: один SQL-запрос вместо пяти отдельных COUNT().
-     */
     #[Computed]
     public function counts()
     {
-        $stats = PhotoComment::excludeAdmins()->selectRaw(
+        $stats = PhotoComment::whereHas('user', fn($q) => $q->where('is_admin', false))->selectRaw(
             "
             SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
             SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) as approved,
@@ -223,269 +309,7 @@ new #[Layout('layouts.admin')] class extends Component {
             'total' => (int) ($stats->total ?? 0),
         ];
     }
-
-    /**
-     * Одобрить комментарий (единичный).
-     */
-    public function approveComment(int $commentId): void
-    {
-        $this->checkAdminAccess();
-
-        $comment = PhotoComment::with('parent')->find($commentId);
-
-        if (!$comment || $comment->status !== 'pending') {
-            return;
-        }
-
-        // Бизнес-логика: нельзя одобрить ответ, если родитель еще не одобрен
-        if ($comment->parent_id && $comment->parent->status !== 'approved') {
-            $this->dispatch('show-toast', type: 'error', message: 'Нельзя одобрить ответ на неодобренный комментарий!');
-            return;
-        }
-
-        $comment->approve();
-
-        try {
-            $comment->notifyAuthor('approved');
-        } catch (\Exception $e) {
-            Log::error('Ошибка уведомления: ' . $e->getMessage());
-        }
-
-        $this->dispatch('show-toast', type: 'success', message: 'Комментарий одобрен');
-        $this->dispatch('$refresh');
-    }
-
-    /**
-     * Отклонить комментарий (единичный).
-     */
-    public function rejectComment(int $commentId): void
-    {
-        $this->checkAdminAccess();
-
-        $comment = PhotoComment::find($commentId);
-        if ($comment && $comment->status === 'pending') {
-            $comment->reject();
-
-            try {
-                $comment->notifyAuthor('rejected');
-            } catch (\Exception $e) {
-                Log::error('Ошибка уведомления: ' . $e->getMessage());
-            }
-
-            $this->dispatch('show-toast', type: 'info', message: 'Комментарий отклонен');
-            $this->dispatch('$refresh');
-        }
-    }
-
-    /**
-     * Пометить как спам.
-     */
-    public function markSpam(int $commentId): void
-    {
-        $this->checkAdminAccess();
-
-        $comment = PhotoComment::find($commentId);
-        if ($comment && $comment->status !== 'spam') {
-            $comment->markAsSpam();
-
-            try {
-                $comment->notifyAuthor('spam');
-            } catch (\Exception $e) {
-                Log::error('Ошибка уведомления: ' . $e->getMessage());
-            }
-
-            $this->dispatch('show-toast', type: 'error', message: 'Комментарий помечен как спам');
-            $this->dispatch('$refresh');
-        }
-    }
-
-    /**
-     * Удалить комментарий.
-     * Уведомляем ДО физического удаления, чтобы модель не потеряла связи.
-     */
-    public function deleteComment(int $commentId): void
-    {
-        $this->checkAdminAccess();
-
-        $comment = PhotoComment::find($commentId);
-        if ($comment) {
-            try {
-                $comment->notifyAuthor('deleted');
-            } catch (\Exception $e) {
-                Log::error('Ошибка уведомления: ' . $e->getMessage());
-            }
-
-            $comment->delete();
-
-            $this->dispatch('show-toast', type: 'success', message: 'Комментарий удален');
-            $this->dispatch('$refresh');
-        }
-    }
-
-    /**
-     * Восстановить комментарий (снова на модерацию).
-     */
-    public function restoreComment(int $commentId): void
-    {
-        $this->checkAdminAccess();
-
-        $comment = PhotoComment::find($commentId);
-        if ($comment && in_array($comment->status, ['rejected', 'spam'])) {
-            $comment->update(['status' => 'pending']);
-
-            try {
-                $comment->notifyAuthor('restored');
-            } catch (\Exception $e) {
-                Log::error('Ошибка уведомления: ' . $e->getMessage());
-            }
-
-            $this->dispatch('show-toast', type: 'info', message: 'Комментарий возвращен на модерацию');
-            $this->dispatch('$refresh');
-        }
-    }
-
-    /**
-     * Массовое одобрение комментариев для конкретного фото.
-     * Оптимизация: Обновление статусов одним SQL-запросом, уведомления через очередь (ShouldQueue).
-     */
-    public function approveRemaining(int $photoId): void
-    {
-        $this->checkAdminAccess();
-
-        $pendingComments = PhotoComment::where('photo_id', $photoId)->where('status', 'pending')->excludeAdmins()->with('parent', 'user')->get();
-
-        if ($pendingComments->isEmpty()) {
-            $this->dispatch('show-toast', type: 'info', message: 'Нет комментариев для одобрения');
-            return;
-        }
-
-        // Проверка бизнес-логики перед массовым обновлением
-        foreach ($pendingComments as $reply) {
-            if ($reply->parent_id && $reply->parent && $reply->parent->status !== 'approved') {
-                $this->dispatch('show-toast', type: 'error', message: 'Некоторые ответы имеют неодобренные родительские комментарии.');
-                return;
-            }
-        }
-
-        $ids = $pendingComments->pluck('id');
-
-        // Один SQL-запрос вместо цикла
-        PhotoComment::whereIn('id', $ids)->update(['status' => 'approved']);
-
-        // Отправляем уведомления (они улетят в очередь, т.к. ShouldQueue)
-        foreach ($pendingComments as $comment) {
-            if ($comment->user) {
-                $comment->user->notify(new CommentModerated($comment, 'approved'));
-            }
-        }
-
-        $this->dispatch('show-toast', type: 'success', message: "Одобрено {$pendingComments->count()} комментариев");
-        $this->dispatch('$refresh');
-    }
-
-    /**
-     * Массовое отклонение комментариев для конкретного фото.
-     */
-    public function rejectRemaining(int $photoId): void
-    {
-        $this->checkAdminAccess();
-
-        $pendingComments = PhotoComment::where('photo_id', $photoId)->where('status', 'pending')->excludeAdmins()->with('user')->get();
-
-        if ($pendingComments->isEmpty()) {
-            $this->dispatch('show-toast', type: 'info', message: 'Нет комментариев для отклонения');
-            return;
-        }
-
-        $ids = $pendingComments->pluck('id');
-        PhotoComment::whereIn('id', $ids)->update(['status' => 'rejected']);
-
-        foreach ($pendingComments as $comment) {
-            if ($comment->user) {
-                $comment->user->notify(new CommentModerated($comment, 'rejected'));
-            }
-        }
-
-        $this->dispatch('show-toast', type: 'info', message: "Отклонено {$pendingComments->count()} комментариев");
-        $this->dispatch('$refresh');
-    }
-
-    /**
-     * Одобрить ВСЕ ожидающие комментарии (глобально).
-     */
-    public function approveAllPending(): void
-    {
-        $this->checkAdminAccess();
-
-        $pendingComments = PhotoComment::where('status', 'pending')->excludeAdmins()->with('parent', 'user')->get();
-
-        if ($pendingComments->isEmpty()) {
-            $this->dispatch('show-toast', type: 'info', message: 'Нет комментариев для одобрения');
-            return;
-        }
-
-        foreach ($pendingComments as $reply) {
-            if ($reply->parent_id && $reply->parent && $reply->parent->status !== 'approved') {
-                $this->dispatch('show-toast', type: 'error', message: 'Некоторые ответы имеют неодобренные родительские комментарии.');
-                return;
-            }
-        }
-
-        $ids = $pendingComments->pluck('id');
-        PhotoComment::whereIn('id', $ids)->update(['status' => 'approved']);
-
-        foreach ($pendingComments as $comment) {
-            if ($comment->user) {
-                $comment->user->notify(new CommentModerated($comment, 'approved'));
-            }
-        }
-
-        $this->dispatch('show-toast', type: 'success', message: "Одобрено {$pendingComments->count()} комментариев");
-        $this->dispatch('$refresh');
-    }
-
-    /**
-     * Отклонить ВСЕ ожидающие комментарии (глобально).
-     */
-    public function rejectAllPending(): void
-    {
-        $this->checkAdminAccess();
-
-        $pendingComments = PhotoComment::where('status', 'pending')->excludeAdmins()->with('user')->get();
-
-        if ($pendingComments->isEmpty()) {
-            $this->dispatch('show-toast', type: 'info', message: 'Нет комментариев для отклонения');
-            return;
-        }
-
-        $ids = $pendingComments->pluck('id');
-        PhotoComment::whereIn('id', $ids)->update(['status' => 'rejected']);
-
-        foreach ($pendingComments as $comment) {
-            if ($comment->user) {
-                $comment->user->notify(new CommentModerated($comment, 'rejected'));
-            }
-        }
-
-        $this->dispatch('show-toast', type: 'info', message: "Отклонено {$pendingComments->count()} комментариев");
-        $this->dispatch('$refresh');
-    }
-
-    /**
-     * Хелпер для получения цвета и текста бейджа статуса.
-     */
-    public function getStatusBadge(string $status): array
-    {
-        return match ($status) {
-            'pending' => ['variant' => 'warning', 'label' => 'Ожидает'],
-            'approved' => ['variant' => 'success', 'label' => 'Одобрен'],
-            'rejected' => ['variant' => 'destructive', 'label' => 'Отклонен'],
-            'spam' => ['variant' => 'destructive', 'label' => 'Спам'],
-            default => ['variant' => 'secondary', 'label' => 'Неизвестно'],
-        };
-    }
-};
-?>
+};?>
 
 <!-- ========================================== -->
 <!-- ШАБЛОН                                     -->

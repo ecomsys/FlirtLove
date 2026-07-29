@@ -1,164 +1,398 @@
 <?php
 
+use App\Actions\Admin\Photos\ModeratePhotoAction;
+use App\Actions\Admin\Users\ToggleUserBanAction;
+use App\Models\Photo;
 use App\Models\Report;
 use App\Models\User;
-use App\Models\Photo;
 use App\Notifications\ReportModerated;
-
-use Livewire\Volt\Component;
-use Livewire\WithPagination;
-use Livewire\Attributes\Layout;
-use Livewire\Attributes\Computed;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Storage;
+use Livewire\Attributes\Computed;
+use Livewire\Attributes\Layout;
+use Livewire\WithPagination;
+use Livewire\Volt\Component;
 
-/**
- * Компонент модерации жалоб (пользователи и фото).
- * Обрабатывает фильтрацию, массовое удаление, бан пользователей и удаление фото.
- * Уведомления отправаются через очереди (ShouldQueue).
- */
 new #[Layout('layouts.admin')] class extends Component 
 {
     use WithPagination;
 
-    /** @var string Поисковый запрос (имя, email или причина жалобы) */
+    /** @var string Строка поиска по имени, email или причине жалобы */
     public string $search = '';
     
-    /** @var string Текущий фильтр статуса (all, pending, resolved, rejected) */
+    /** @var string Текущий фильтр статуса (pending, resolved, rejected, all) */
     public string $statusFilter = 'pending';
     
-    /** @var string Текущий фильтр типа жалобы (all, user, photo) */
+    /** @var string Текущий фильтр типа жалобы (user, photo, all) */
     public string $typeFilter = 'all';
     
     /** @var int Количество элементов на странице */
     public int $perPage = 10;
 
+    // Внедряем только глобальные переиспользуемые экшены
+    private ToggleUserBanAction $toggleUserBanAction;
+    private ModeratePhotoAction $moderatePhotoAction; 
+
     /**
-     * Инициализация компонента.
-     * Восстанавливает сохраненные в сессии фильтры, чтобы админ не терял контекст при перезагрузке.
+     * Инициализация компонента и внедрение зависимостей.
+     * 
+     * @param ToggleUserBanAction $toggleUserBanAction
+     * @param ModeratePhotoAction $moderatePhotoAction
+     * @return void
      */
-    public function mount()
+    public function boot(
+        ToggleUserBanAction $toggleUserBanAction,
+        ModeratePhotoAction $moderatePhotoAction
+    ): void {
+        $this->toggleUserBanAction = $toggleUserBanAction;
+        $this->moderatePhotoAction = $moderatePhotoAction;
+    }
+
+    /**
+     * Загрузка сохраненных фильтров из сессии при открытии страницы.
+     * 
+     * @return void
+     */
+    public function mount(): void
     {
         $saved = session('moderate_reports', []);
-        
-        if (isset($saved['statusFilter'])) {
-            $this->statusFilter = $saved['statusFilter'];
-        }
-        if (isset($saved['typeFilter'])) {
-            $this->typeFilter = $saved['typeFilter'];
-        }
+        if (isset($saved['statusFilter'])) $this->statusFilter = $saved['statusFilter'];
+        if (isset($saved['typeFilter'])) $this->typeFilter = $saved['typeFilter'];
     }
 
     /**
-     * Проверка прав доступа.
-     * Вызывается перед любым действием модератора.
+     * Сброс пагинации при изменении строки поиска.
+     * 
+     * @return void
      */
-    private function checkAdminAccess(): void
-    {
-        if (!auth()->user()?->is_admin) {
-            abort(403, 'Доступ запрещен. Только для администраторов.');
-        }
+    public function updatingSearch(): void 
+    { 
+        $this->resetPage(); 
     }
-
-    /**
-     * Хук Livewire: сброс пагинации при вводе поиска.
-     */
-    public function updatingSearch(): void { $this->resetPage(); }
       
     /**
-     * Хук Livewire: срабатывает после изменения типа жалобы в Select.
-     * Сохраняет выбор в сессию и сбрасывает пагинацию.
+     * Сохранение фильтра типа в сессию и сброс пагинации.
      * 
-     * @param string $value Выбранное значение (all, user, photo)
+     * @param string $value
+     * @return void
      */
-    public function updatedTypeFilter($value): void 
+    public function updatedTypeFilter(string $value): void 
     { 
-        session([
-            'moderate_reports' => array_merge(
-                session('moderate_reports', []),
-                ['typeFilter' => $value]
-            )
-        ]);
-        
+        session(['moderate_reports' => array_merge(session('moderate_reports', []), ['typeFilter' => $value])]);
         $this->resetPage(); 
     }
 
     /**
-     * Устанавливает фильтр статуса (вызывается по клику на кнопки).
-     * Сохраняет выбор в сессию и сбрасывает пагинацию.
+     * Установка фильтра статуса и его сохранение в сессию.
      * 
-     * @param string $status Выбранный статус
+     * @param string $status
+     * @return void
      */
     public function setStatusFilter(string $status): void
     {
         $this->statusFilter = $status;
-        
-        session([
-            'moderate_reports' => array_merge(
-                session('moderate_reports', []),
-                ['statusFilter' => $status]
-            )
-        ]);
-        
+        session(['moderate_reports' => array_merge(session('moderate_reports', []), ['statusFilter' => $status])]);
         $this->resetPage();
     }
 
     /**
-     * Полный сброс всех фильтров и очистка сессии.
-     * Вызывается при нажатии кнопки "Сбросить фильтры" в пустом состоянии.
+     * Полный сброс всех фильтров к значениям по умолчанию.
+     * 
+     * @return void
      */
     public function resetFilters(): void
     {
         $this->reset(['search', 'statusFilter', 'typeFilter']);
         $this->statusFilter = 'pending'; 
         $this->typeFilter = 'all';       
-        
         session()->forget('moderate_reports');
         $this->resetPage();
     }
 
+    // ============================================
+    // ДЕЙСТВИЯ МОДЕРАТОРА
+    // ============================================
+
     /**
-     * Вычисляемое свойство: список жалоб с пагинацией.
-     * Исключает жалобы, где замешаны админы (как жалобщики или нарушители).
+     * Отметить жалобу как решенную.
+     * Обновляет статус и отправляет уведомление жалобщику.
+     * 
+     * @param int $reportId
+     * @return void
+     */
+    public function resolve(int $reportId): void
+    {
+        $report = Report::find($reportId);
+        if ($report && $report->status === 'pending') {
+            
+            $report->update([
+                'status' => 'resolved',
+                'resolved_at' => now(),
+                'moderator_id' => auth()->id(),
+            ]);
+
+            if ($report->user) {
+                $report->user->notify(new ReportModerated($report, 'resolved'));
+            }
+
+            $this->dispatch('show-toast', type: 'success', message: 'Жалоба отмечена как решенная');
+        }
+    }
+
+    /**
+     * Отклонить жалобу.
+     * Обновляет статус и отправляет уведомление жалобщику.
+     * 
+     * @param int $reportId
+     * @return void
+     */
+    public function reject(int $reportId): void
+    {
+        $report = Report::find($reportId);
+        if ($report && $report->status === 'pending') {
+            
+            $report->update([
+                'status' => 'rejected',
+                'resolved_at' => now(),
+                'moderator_id' => auth()->id(),
+            ]);
+
+            if ($report->user) {
+                $report->user->notify(new ReportModerated($report, 'rejected'));
+            }
+
+            $this->dispatch('show-toast', type: 'info', message: 'Жалоба отклонена');
+        }
+    }
+
+    /**
+     * Удалить жалобу из базы (только если она не в статусе pending).
+     * 
+     * @param int $reportId
+     * @return void
+     */
+    public function deleteReport(int $reportId): void
+    {
+        $report = Report::find($reportId);
+        if (!$report) return;
+
+        try {
+            if ($report->status === 'pending') {
+                throw new \Exception('Нельзя удалить необработанную жалобу.');
+            }
+            $report->delete();
+            $this->dispatch('show-toast', type: 'success', message: 'Жалоба удалена');
+        } catch (\Exception $e) {
+            $this->dispatch('show-toast', type: 'error', message: $e->getMessage());
+        }
+    }
+
+    /**
+     * Массовая очистка архива (удаление всех решенных и отклоненных жалоб).
+     * 
+     * @return void
+     */
+    public function deleteResolvedReports(): void
+    {
+        $count = Report::whereIn('status', ['resolved', 'rejected'])->count();
+
+        if ($count === 0) {
+            $this->dispatch('show-toast', type: 'info', message: 'Нет жалоб для удаления');
+            return;
+        }
+
+        DB::transaction(function () use ($count) {
+            Report::whereIn('status', ['resolved', 'rejected'])->delete();
+            Log::info('Массовое удаление жалоб', ['count' => $count, 'moderator_id' => auth()->id()]);
+        });
+
+        $this->resetPage(); 
+        $this->dispatch('show-toast', type: 'success', message: "Удалено {$count} жалоб");
+    }
+
+    /**
+     * Бан/Разбан пользователя из карточки жалобы.
+     * При бане автоматически закрывает все активные жалобы на этого юзера.
+     * 
+     * @param int $userId
+     * @return void
+     */
+    public function toggleBan(int $userId): void
+    {
+        $user = User::find($userId);
+        if (!$user) return;
+
+        // Вызываем глобальный экшен бана
+        $result = $this->toggleUserBanAction->execute($user, 'Нарушение по жалобе пользователей');
+
+        if (!$result['success']) {
+            $this->dispatch('show-toast', type: 'error', message: 'Не удалось забанить (возможно, это админ).');
+            return;
+        }
+
+        // Если пользователя забанили — закрываем его жалобы
+        if ($result['is_banned']) {
+            $reports = Report::where('reported_user_id', $user->id)
+                ->where('status', 'pending')
+                ->get();
+
+            foreach ($reports as $report) {
+                $report->update([
+                    'status' => 'resolved',
+                    'resolved_at' => now(),
+                    'moderator_id' => auth()->id(),
+                ]);
+
+                if ($report->user) {
+                    $report->user->notify(new ReportModerated($report, 'user_banned'));
+                }
+            }
+        }
+        
+        $isUnbanned = !$result['is_banned'];
+        $this->dispatch('show-toast', type: 'success', message: $isUnbanned ? "Пользователь {$user->name} разбанен" : "Пользователь {$user->name} забанен");
+    }
+
+    /**
+     * Удаление фото из карточки жалобы.
+     * Автоматически закрывает все жалобы на это фото и удаляет файлы.
+     * 
+     * @param int $photoId
+     * @return void
+     */
+    public function deletePhoto(int $photoId): void
+    {
+        $photo = Photo::find($photoId);
+        if (!$photo) return;
+
+        DB::transaction(function () use ($photo) {
+            // 1. Закрываем жалобы на это фото
+            $reports = Report::where('photo_id', $photo->id)
+                ->where('status', 'pending')
+                ->get();
+
+            foreach ($reports as $report) {
+                $report->update([
+                    'status' => 'resolved',
+                    'resolved_at' => now(),
+                    'moderator_id' => auth()->id(),
+                ]);
+
+                if ($report->user) {
+                    $report->user->notify(new ReportModerated($report, 'photo_deleted'));
+                }
+            }
+
+            // 2. Уведомляем владельца фото
+            if ($photo->user) {
+                $photo->user->notify(new ReportModerated(
+                    report: null,
+                    action: 'photo_deleted',
+                    additionalInfo: "Ваше фото #{$photo->id} было удалено по жалобе пользователей."
+                ));
+            }
+
+            // 3. Удаляем само фото через глобальный экшен
+            $this->moderatePhotoAction->destroy($photo);
+        });
+        
+        $this->dispatch('show-toast', type: 'success', message: 'Фото удалено. Все жалобы на него решены.');
+    }
+
+    // ============================================
+    // ВЫВОД ДАННЫХ (Computed)
+    // ============================================
+
+    /**
+     * Получение списка жалоб с фильтрацией, пагинацией и оптимизацией запросов.
+     * 
+     * @return \Illuminate\Contracts\Pagination\LengthAwarePaginator
      */
     #[Computed]
     public function reports()
     {
-        return Report::query()
-            ->with(['user', 'reportedUser', 'photo'])
-            ->excludeAdmins() 
-            // ВАЖНО: orWhere обернут в замыкание where(), 
-            // чтобы поиск не ломал основные фильтры (статус и тип).
-            ->when($this->search, function ($query) {
+        // Кросс-БД совместимый поиск (ilike для PostgreSQL, like для остальных)
+        $searchOperator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
+
+        $reports = Report::query()
+            ->with([
+                'user.photos' => function ($q) {
+                    $q->where('status', 'approved')
+                      ->orderBy('is_primary', 'desc')
+                      ->orderBy('position', 'asc')
+                      ->limit(1);
+                },
+                'reportedUser.photos' => function ($q) {
+                    $q->where('status', 'approved')
+                      ->orderBy('is_primary', 'desc')
+                      ->orderBy('position', 'asc')
+                      ->limit(1);
+                },
+                'photo'
+            ])
+            ->whereHas('user', fn($q) => $q->where('is_admin', false))
+            ->where(function ($q) {
+                $q->whereNull('reported_user_id')
+                  ->orWhereHas('reportedUser', fn($q2) => $q2->where('is_admin', false));
+            })
+            ->when($this->search, function ($query) use ($searchOperator) {
                 $search = $this->search;
-                $query->where(function ($q) use ($search) {
-                    $q->whereHas('user', function ($q2) use ($search) {
-                        $q2->where('name', 'ilike', "%{$search}%")
-                           ->orWhere('email', 'ilike', "%{$search}%");
+                $query->where(function ($q) use ($search, $searchOperator) {
+                    $q->whereHas('user', function ($q2) use ($search, $searchOperator) {
+                        $q2->where('name', $searchOperator, "%{$search}%")
+                           ->orWhere('email', $searchOperator, "%{$search}%");
                     })
-                    ->orWhereHas('reportedUser', function ($q2) use ($search) {
-                        $q2->where('name', 'ilike', "%{$search}%")
-                           ->orWhere('email', 'ilike', "%{$search}%");
+                    ->orWhereHas('reportedUser', function ($q2) use ($search, $searchOperator) {
+                        $q2->where('name', $searchOperator, "%{$search}%")
+                           ->orWhere('email', $searchOperator, "%{$search}%");
                     })
-                    ->orWhere('reason', 'ilike', "%{$search}%");
+                    ->orWhere('reason', $searchOperator, "%{$search}%");
                 });
             })
             ->when($this->statusFilter !== 'all', fn($q) => $q->where('status', $this->statusFilter))
             ->when($this->typeFilter !== 'all', fn($q) => $q->where('type', $this->typeFilter))
             ->latest()
             ->paginate($this->perPage);
+
+        // Оптимизация онлайн-статуса (один запрос к таблице сессий)
+        $onlineUserIds = \DB::table('sessions')
+            ->where('last_activity', '>=', now()->subMinutes(5)->timestamp)
+            ->pluck('user_id')
+            ->filter()
+            ->toArray();
+
+        // Назначаем is_online без вызова save() в базу
+        $reports->getCollection()->transform(function ($report) use ($onlineUserIds) {
+            if ($report->user) {
+                $report->user->setAttribute('is_online', in_array($report->user->id, $onlineUserIds));
+            }
+            
+            if ($report->reportedUser) {
+                $report->reportedUser->setAttribute('is_online', in_array($report->reportedUser->id, $onlineUserIds));
+            }
+            
+            return $report;
+        });
+
+        return $reports;
     }
 
     /**
-     * Вычисляемое свойство: счетчики для бейджей.
-     * Оптимизация: один SQL-запрос вместо четырех отдельных COUNT().
-     * Также исключает админов.
+     * Подсчет количества жалоб для бейджей в фильтрах.
+     * Учитывает текущий фильтр типов.
+     * 
+     * @return array
      */
     #[Computed]
-    public function counts()
+    public function counts(): array
     {
-        $baseQuery = Report::query()->excludeAdmins(); 
+        $baseQuery = Report::query()
+            ->whereHas('user', fn($q) => $q->where('is_admin', false))
+            ->where(function ($q) {
+                $q->whereNull('reported_user_id')
+                  ->orWhereHas('reportedUser', fn($q2) => $q2->where('is_admin', false));
+            })
+            ->when($this->typeFilter !== 'all', fn($q) => $q->where('type', $this->typeFilter));
 
         $stats = $baseQuery->selectRaw("
             SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
@@ -174,213 +408,8 @@ new #[Layout('layouts.admin')] class extends Component
             'total' => (int) ($stats->total ?? 0),
         ];
     }
-
-    /**
-     * Одобрить (решить) жалобу.
-     */
-    public function resolve(int $reportId): void
-    {
-        $this->checkAdminAccess();
-        
-        $report = Report::find($reportId);
-        if ($report && $report->status === 'pending') {
-            DB::transaction(function () use ($report) {
-                $report->update([
-                    'status' => 'resolved',
-                    'resolved_at' => now(),
-                    'moderator_id' => auth()->id(),
-                ]);
-            });
-
-            // Защита от NullPointer: автор жалобы мог быть удален к этому моменту.
-            // Уведомление уходит в очередь (ShouldQueue).
-            if ($report->user) {
-                $report->user->notify(new ReportModerated($report, 'resolved'));
-            }
-
-            $this->dispatch('$refresh');
-            $this->dispatch('show-toast', type: 'success', message: 'Жалоба отмечена как решенная');
-        }
-    }
-
-    /**
-     * Отклонить жалобу.
-     */
-    public function reject(int $reportId): void
-    {
-        $this->checkAdminAccess();
-        
-        $report = Report::find($reportId);
-        if ($report && $report->status === 'pending') {
-            DB::transaction(function () use ($report) {
-                $report->update([
-                    'status' => 'rejected',
-                    'resolved_at' => now(),
-                    'moderator_id' => auth()->id(),
-                ]);
-            });
-            
-            if ($report->user) {
-                $report->user->notify(new ReportModerated($report, 'rejected'));
-            }
-
-            $this->dispatch('$refresh');
-            $this->dispatch('show-toast', type: 'info', message: 'Жалоба отклонена');
-        }
-    }
-
-    /**
-     * Удаление единичной жалобы (только из архива).
-     */
-    public function deleteReport(int $reportId): void
-    {
-        $this->checkAdminAccess();
-
-        $report = Report::find($reportId);
-        if ($report) {
-            if ($report->status === 'pending') {
-                $this->dispatch('show-toast', type: 'error', message: 'Нельзя удалить необработанную жалобу.');
-                return;
-            }
-            
-            DB::transaction(function () use ($report) {
-                $report->delete();
-            });
-            $this->dispatch('show-toast', type: 'success', message: 'Жалоба удалена');
-        }
-    }
-
-    /**
-     * Массовая очистка архива (решенные и отклоненные жалобы).
-     */
-    public function deleteResolvedReports(): void
-    {
-        $this->checkAdminAccess();
-        
-        $count = Report::whereIn('status', ['resolved', 'rejected'])->count();
-        
-        if ($count === 0) {
-            $this->dispatch('show-toast', type: 'info', message: 'Нет жалоб для удаления');
-            return;
-        }
-        
-        DB::transaction(function () use ($count) {
-            Report::whereIn('status', ['resolved', 'rejected'])->delete();
-            
-            // Логируем массовые действия админов для безопасности
-            Log::info('Массовое удаление жалоб', [
-                'count' => $count,
-                'moderator_id' => auth()->id(),
-            ]);
-        });
-        
-        // Сбрасываем страницу, т.к. записей могло стать меньше, чем текущая страница пагинации
-        $this->resetPage(); 
-        $this->dispatch('$refresh');
-        $this->dispatch('show-toast', type: 'success', message: "Удалено {$count} жалоб");
-    }
-
-    /**
-     * Бан/Разбан пользователя напрямую из жалобы.
-     * При бане автоматически закрывает все pending жалобы на этого юзера.
-     */
-    public function toggleBan(int $userId): void
-    {
-        $this->checkAdminAccess();     
-
-        $user = User::find($userId);
-        // Нельзя забанить админа
-        if ($user && !$user->is_admin) {
-            DB::transaction(function () use ($user) {
-                $newStatus = !$user->is_banned;
-                $user->update(['is_banned' => $newStatus]);
-                
-                // Логика срабатывает только при НАЛОЖЕНИИ бана
-                if ($newStatus) {
-                    $reports = Report::where('reported_user_id', $user->id)
-                        ->where('status', 'pending')
-                        ->get();
-                    
-                    foreach ($reports as $report) {
-                        $report->update([
-                            'status' => 'resolved',
-                            'resolved_at' => now(),
-                            'moderator_id' => auth()->id(),
-                        ]);
-                        
-                        // Уведомляем авторов жалоб о том, что нарушитель Бан
-                        if ($report->user) {
-                            $report->user->notify(new ReportModerated($report, 'user_banned'));
-                        }
-                    }
-                    
-                    // Уведомляем самого Банного
-                    $user->notify(new ReportModerated(
-                        null, 
-                        'user_banned',
-                        "Вы были Баны на основании жалоб пользователей."
-                    ));                   
-                }
-            });
-            
-            $this->dispatch('$refresh');
-            $this->dispatch('show-toast', 
-                type: 'success', 
-                message: $user->is_banned ? "Пользователь {$user->name} Бан" : "Пользователь {$user->name} разбанен"
-            );
-        }
-    }
-
-    /**
-     * Удаление фото напрямую из жалобы.
-     * Автоматически закрывает все pending жалобы на это фото.
-     */
-    public function deletePhoto(int $photoId): void
-    {
-        $this->checkAdminAccess();
-        
-        $photo = Photo::find($photoId);
-        if ($photo) {
-            DB::transaction(function () use ($photo, $photoId) {
-                $reports = Report::where('photo_id', $photoId)
-                    ->where('status', 'pending')
-                    ->get();
-                
-                foreach ($reports as $report) {
-                    $report->update([
-                        'status' => 'resolved',
-                        'resolved_at' => now(),
-                        'moderator_id' => auth()->id(),
-                    ]);
-                    
-                    if ($report->user) {
-                        $report->user->notify(new ReportModerated($report, 'photo_deleted'));
-                    }
-                }
-                
-                // Уведомляем владельца фото об удалении
-                if ($photo->user) {
-                    $photo->user->notify(new ReportModerated(
-                        null, 
-                        'photo_deleted',
-                        "Ваше фото #{$photo->id} было удалено по жалобе пользователей."
-                    ));
-                }
-                
-                // Удаляем файл с диска, только если это локальный файл, а не внешняя ссылка (URL)
-                if (!filter_var($photo->path, FILTER_VALIDATE_URL)) {
-                    Storage::disk('public')->delete($photo->path);
-                }
-                $photo->delete();
-            });
-            
-            $this->dispatch('$refresh');
-            $this->dispatch('show-toast', type: 'success', message: 'Фото удалено. Все жалобы на него решены.');
-        }
-    }
-}; 
+};
 ?>
-
 
 <div class="space-y-6">
     <!-- Заголовок -->
@@ -510,10 +539,10 @@ new #[Layout('layouts.admin')] class extends Component
                 <x-ui.table-row wire:key="report-{{ $report->id }}">
                     <x-ui.table-cell class="text-muted-foreground text-xs">{{ $report->id }}</x-ui.table-cell>
                     <x-ui.table-cell>
-                        <div class="flex items-center gap-2">
-                            <x-avatar src="{{ $report->user?->avatar_url }}" name="{{ $report->user?->name ?? 'Удален' }}" size="sm" userId="{{ $report->user_id }}" showStatus="true" />
+                       <a href="{{ route('admin.users.show', $report->user?->id) }}" class="flex items-center gap-2 block group" wire:navigate>                                                 
+                            <x-avatar src="{{ $report->user?->avatar_url }}" name="{{ $report->user?->name ?? 'Удален' }}" size="sm" userId="{{ $report->user_id }}" showStatus="true"  isOnline="{{ $report->user?->is_online ?? false }}"/>
                             <div>
-                                <div class="flex gap-2 items-center">
+                                <div class="flex gap-2 items-center group-hover:text-primary transition-colors">
                                     <span class="text-sm font-medium">{{ $report->user?->name ?? 'Удален' }}</span>
                                     @if($report->user?->has_active_premium)
                                         <x-ui.badge variant="warning" size="xs" wire:key="premium-badge-complainer-{{ $report->id }}" class="p-1 flex items-center gap-1">
@@ -526,14 +555,14 @@ new #[Layout('layouts.admin')] class extends Component
                                 </div>                                    
                                 <div class="text-xs text-muted-foreground">{{ $report->user?->email ?? '-' }}</div>
                             </div>
-                        </div>
+                        </a>
                     </x-ui.table-cell>
                     <x-ui.table-cell>
                         @if($report->type === 'user')
-                            <div class="flex items-center gap-2">
+                        <a href="{{ route('admin.users.show', $report->reportedUser?->id) }}" class="flex items-center gap-2 block group" wire:navigate>                           
                                 <x-avatar src="{{ $report->reportedUser?->avatar_url }}" name="{{ $report->reportedUser?->name ?? 'Удален' }}" size="sm" userId="{{ $report->reported_user_id }}" showStatus="true" />
                                 <div>
-                                    <div class="flex gap-2 items-center">
+                                    <div class="flex gap-2 items-center group-hover:text-primary transition-colors">
                                         <span class="text-sm font-medium">{{ $report->reportedUser?->name ?? 'Удален' }}</span>
                                         @if($report->reportedUser?->has_active_premium)
                                             <x-ui.badge variant="warning" size="xs" wire:key="premium-badge-reported-{{ $report->id }}" class="p-1 flex items-center gap-1">
@@ -546,11 +575,11 @@ new #[Layout('layouts.admin')] class extends Component
                                     </div>                                        
                                     <div class="text-xs text-muted-foreground">{{ $report->reportedUser?->email ?? '-' }}</div>
                                 </div>
-                            </div>
+                            </a>
                         @else
                             <div class="flex items-center gap-2">
                                 @if($report->photo)
-                                    <img src="{{ $report->photo->thumb_url ?? $report->photo->url }}" class="w-10 h-10 object-cover rounded" alt="photo">
+                                    <img src="{{ $report->photo->thumb_url ?: $report->photo->url }}" class="w-10 h-10 object-cover rounded" alt="photo">
                                     <span class="text-sm">Фото #{{ $report->photo_id }}</span>
                                 @else
                                     <span class="text-sm text-muted-foreground">Фото удалено</span>
@@ -603,9 +632,9 @@ new #[Layout('layouts.admin')] class extends Component
                                     
                                     @if($report->type === 'user' && $report->reportedUser && !$report->reportedUser->is_admin)
                                         <x-ui.dropdown-menu-separator />
-                                        <x-ui.dropdown-menu-item wire:key="toggleBan-{{ $report->reported_user_id }}" wire:click="toggleBan({{ $report->reported_user_id }})" wire:confirm="Изменить статус блокировки этого пользователя?">
+                                        <x-ui.dropdown-menu-item variant="destructive" wire:key="toggleBan-{{ $report->reported_user_id }}" wire:click="toggleBan({{ $report->reported_user_id }})" wire:confirm="Забанить этого пользователя?">
                                             <x-lucide-lock class="w-4 h-4" />
-                                            Снять/наложить бан
+                                            Забанить
                                         </x-ui.dropdown-menu-item>
                                     @endif
                                     
@@ -642,7 +671,6 @@ new #[Layout('layouts.admin')] class extends Component
                         <x-lucide-inbox class="w-12 h-12 opacity-30" />
                         <p>Нет жалоб</p>
                         @if(!empty($search) || $statusFilter !== 'pending' || $typeFilter !== 'all')
-                            <!-- ✅ ИСПРАВЛЕНО: Используем метод resetFilters -->
                             <x-ui.button wire:click="resetFilters" variant="outline" size="sm" wire:key="reset-filters">
                                 Сбросить фильтры
                             </x-ui.button>

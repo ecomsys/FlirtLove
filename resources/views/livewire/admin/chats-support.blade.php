@@ -1,36 +1,24 @@
 <?php
 
 use App\Models\Chat;
-use App\Models\Message;
 use App\Models\ChatParticipant;
+use App\Models\Message;
+use App\Models\User;
+use Illuminate\Support\Facades\DB;
+use Livewire\Attributes\Computed;
+use Livewire\Attributes\Layout;
+use Livewire\Attributes\On;
 use Livewire\Volt\Component;
 use Livewire\WithPagination;
-use Livewire\Attributes\Layout;
-use Livewire\Attributes\Computed;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Cache;
-use Livewire\Attributes\On;
 
-/**
- * Компонент админки: Чат поддержки (Helpdesk).
- * Отвечает за переписку администрации с пользователями.
- * Поддерживает шаблонные ответы, поиск и авто-открытие непрочитанных тикетов.
- */
-new #[Layout('layouts.admin')] class extends Component {
+new #[Layout('layouts.admin')] class extends Component 
+{
     use WithPagination;
 
-    /** @var int|null ID активного чата (правая панель) */
     public ?int $activeChatId = null;
-
-    /** @var string Текст набираемого сообщения */
     public string $messageBody = '';
-
-    /** @var array История сообщений активного чата */
     public array $messages = [];
-
-    /** @var string Поисковый запрос по имени пользователя (левая панель) */
     public string $search = '';
-
     public bool $showNewTicketModal = false;
 
     /**
@@ -66,8 +54,9 @@ new #[Layout('layouts.admin')] class extends Component {
     ];
 
     /**
-     * Вычисляемое свойство: преобразует дерево категорий в плоский массив
-     * с глобальными индексами для быстрого поиска в Alpine.js.
+     * Распаковка шаблонов в плоский массив для Alpine.js.
+     * 
+     * @return array
      */
     #[Computed]
     public function flatTemplates(): array
@@ -87,9 +76,10 @@ new #[Layout('layouts.admin')] class extends Component {
     }
 
     /**
-     * Вставить выбранный шаблон в поле ввода сообщения.
-     *
-     * @param int $index Глобальный индекс шаблона в массиве flatTemplates
+     * Вставка выбранного шаблона в поле ввода.
+     * 
+     * @param int $index
+     * @return void
      */
     public function setTemplate(int $index): void
     {
@@ -98,26 +88,30 @@ new #[Layout('layouts.admin')] class extends Component {
     }
 
     /**
-     *  Слушаем событие выбора юзера из компонента UserSearch.
+     * Обработка события выбора юзера из модалки поиска.
+     * 
+     * @param int $id
+     * @return void
      */
     #[On('user-selected')]
     public function startChatWithUser(int $id): void
     {
         $admin = auth()->user();
-        $user = \App\Models\User::find($id);
+        $user = User::find($id);
 
         if ($user) {
             $chat = Chat::getOrCreateSupportChat($admin, $user);
             $this->selectChat($chat->id);
         }
 
-        // Закрываем модалку
         $this->showNewTicketModal = false;
         $this->dispatch('$refresh');
     }
 
     /**
-     * Открыть модалку создания нового тикета.
+     * Открытие модалки поиска юзера.
+     * 
+     * @return void
      */
     public function openNewTicketModal(): void
     {
@@ -125,30 +119,28 @@ new #[Layout('layouts.admin')] class extends Component {
     }
 
     /**
-     * Инициализация компонента.
-     * Если передан user_id (переход из профиля) — открывает чат с ним.
-     * Если нет — авто-открывает первый непрочитанный тикет (или последний по дате).
-     *
+     * Инициализация компонента. Открывает последний активный чат.
+     * 
      * @param int|null $user_id
+     * @return void
      */
     public function mount($user_id = null): void
     {
+        $adminId = auth()->id();
+
         if ($user_id) {
             $admin = auth()->user();
-            $user = \App\Models\User::find($user_id);
+            $user = User::find($user_id);
             if ($user) {
                 $chat = Chat::getOrCreateSupportChat($admin, $user);
                 $this->selectChat($chat->id);
             }
         } else {
-            // Авто-открытие: Ищем первый непрочитанный тикет
-            $adminId = auth()->id();
             $unreadChat = Chat::where('type', 'support')->where('user1_id', $adminId)->whereHas('participants', fn($q) => $q->where('user_id', $adminId)->where('unread_count', '>', 0))->latest('last_message_at')->first();
 
             if ($unreadChat) {
                 $this->selectChat($unreadChat->id);
             } else {
-                // Если непрочитанных нет, открываем просто последний тикет
                 $latestChat = Chat::where('type', 'support')->where('user1_id', $adminId)->latest('last_message_at')->first();
                 if ($latestChat) {
                     $this->selectChat($latestChat->id);
@@ -158,61 +150,66 @@ new #[Layout('layouts.admin')] class extends Component {
     }
 
     /**
-     * Выбор чата для просмотра в правой панели.
-     * Сбрасывает черновик сообщения и счетчик непрочитанных.
-     *
+     * Выбор чата и сброс счетчика непрочитанных.
+     * 
      * @param int $chatId
+     * @return void
      */
     public function selectChat(int $chatId): void
     {
         $this->activeChatId = $chatId;
         $this->messageBody = '';
 
-        // Сбрасываем счетчик непрочитанных для админа
-        ChatParticipant::where('chat_id', $chatId)
-            ->where('user_id', auth()->id())
-            ->update(['unread_count' => 0]);
+        $chat = Chat::find($chatId);
+        if ($chat) {
+            // Логика markAsRead прямо здесь
+            ChatParticipant::where('chat_id', $chat->id)
+                ->where('user_id', auth()->id())
+                ->update(['unread_count' => 0]);
+        }
 
         $this->loadMessages();
     }
 
     /**
-     * Загрузка истории сообщений для активного чата.
+     * Загрузка сообщений активного чата.
+     * 
+     * @return void
      */
     public function loadMessages(): void
     {
-        if (!$this->activeChatId) {
-            return;
-        }
-
+        if (!$this->activeChatId) return;
         $this->messages = Message::where('chat_id', $this->activeChatId)->with('sender')->orderBy('created_at', 'asc')->get()->toArray();
     }
 
     /**
-     * Отправка сообщения от имени админа.
-     * Обернуто в транзакцию. Инкрементит счетчик непрочитанных у юзера.
+     * Отправка сообщения от администратора.
+     * 
+     * @return void
      */
     public function sendMessage(): void
     {
         $this->validate(['messageBody' => 'required|string|max:2000']);
 
         $chat = Chat::find($this->activeChatId);
-        if (!$chat) {
-            return;
-        }
+        if (!$chat) return;
 
-        DB::transaction(function () use ($chat) {
+        $sender = auth()->user();
+
+        // Логика sendMessage прямо здесь
+        DB::transaction(function () use ($chat, $sender) {
             Message::create([
-                'chat_id' => $this->activeChatId,
-                'sender_id' => auth()->id(),
+                'chat_id' => $chat->id,
+                'sender_id' => $sender->id,
                 'type' => 'text',
                 'body' => $this->messageBody,
             ]);
 
             $chat->update(['last_message_at' => now()]);
 
-            ChatParticipant::where('chat_id', $this->activeChatId)
-                ->where('user_id', '!=', auth()->id())
+            // Увеличиваем счетчик непрочитанных у собеседника
+            ChatParticipant::where('chat_id', $chat->id)
+                ->where('user_id', '!=', $sender->id)
                 ->increment('unread_count');
         });
 
@@ -222,16 +219,21 @@ new #[Layout('layouts.admin')] class extends Component {
     }
 
     /**
-     * Полная очистка истории переписки в чате.
-     *
+     * Полная очистка истории чата (жесткое удаление).
+     * 
      * @param int $chatId
+     * @return void
      */
     public function clearChat(int $chatId): void
     {
-        DB::transaction(function () use ($chatId) {
-            Message::where('chat_id', $chatId)->delete();
-            Chat::where('id', $chatId)->update(['last_message_at' => null]);
-            ChatParticipant::where('chat_id', $chatId)->update(['unread_count' => 0]);
+        $chat = Chat::find($chatId);
+        if (!$chat) return;
+
+        // Логика clearChat прямо здесь
+        DB::transaction(function () use ($chat) {
+            Message::where('chat_id', $chat->id)->delete();
+            $chat->update(['last_message_at' => null]);
+            ChatParticipant::where('chat_id', $chat->id)->update(['unread_count' => 0]);
         });
 
         $this->messages = [];
@@ -239,36 +241,41 @@ new #[Layout('layouts.admin')] class extends Component {
     }
 
     /**
-     * Вычисляемое свойство: Список тикетов (левая панель) с пагинацией.
+     * Получение списка чатов (тикетов) с поиском и пагинацией.
+     * 
+     * @return \Illuminate\Contracts\Pagination\LengthAwarePaginator
      */
-    #[Computed]
+        #[Computed]
     public function chats()
     {
         $adminId = auth()->id();
         $operator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
 
         return Chat::where('type', 'support')
-            ->where('user1_id', $adminId)
-            ->whereHas('user2', fn($q) => $q->where('name', $operator, "%{$this->search}%"))
+            ->where('user1_id', $adminId)            
+            ->when($this->search, function ($query) use ($operator) {
+                $query->whereHas('user2', fn($q) => $q->where('name', $operator, "%{$this->search}%"));
+            })
             ->with(['user2.photos', 'messages' => fn($q) => $q->latest()->limit(1)])
             ->orderByDesc('last_message_at')
             ->paginate(15);
     }
 
     /**
-     * Вычисляемое свойство: Статистика для бейджей в заголовке страницы.
+     * Статистика по чатам для бейджей.
+     * 
+     * @return array
      */
     #[Computed]
     public function stats(): array
     {
         $adminId = auth()->id();
-
         return [
             'total' => Chat::where('type', 'support')->where('user1_id', $adminId)->count(),
             'today' => Chat::where('type', 'support')->where('user1_id', $adminId)->whereDate('last_message_at', today())->count(),
         ];
     }
-};
+}; 
 ?>
 
 <div class="space-y-6">
@@ -282,7 +289,7 @@ new #[Layout('layouts.admin')] class extends Component {
             @endif
         </h1>
 
-        <!-- ✅ КНОПКА НОВОГО ТИКЕТА -->
+        <!-- КНОПКА НОВОГО ТИКЕТА -->
         <x-ui.button wire:click="openNewTicketModal" variant="default" size="sm">
             <x-lucide-plus class="w-4 h-4" />
             Написать пользователю
@@ -302,7 +309,7 @@ new #[Layout('layouts.admin')] class extends Component {
                 <x-lucide-search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             </div>
 
-            <!--  Внутренний скроллируемый блок со списком -->
+            <!-- Внутренний скроллируемый блок со списком -->
             <div class="flex-1 min-h-0 overflow-y-auto space-y-2 little-scroll pr-1">
                 @forelse ($this->chats as $chat)
                     @php
@@ -354,7 +361,7 @@ new #[Layout('layouts.admin')] class extends Component {
                 @endforelse
             </div>
 
-            <!--  Пагинация всегда прижата к низу и не скроллится -->
+            <!-- Пагинация всегда прижата к низу и не скроллится -->
             <div class="shrink-0 pt-4 mt-2 border-t border-border" wire:key="pagination-support">
                 {{ $this->chats->links('partials.pagination') }}
             </div>
@@ -363,11 +370,11 @@ new #[Layout('layouts.admin')] class extends Component {
         <!-- Правая панель: Переписка -->
         <div class="lg:col-span-2 flex flex-col bg-muted/10 rounded-lg px-4 pt-4 h-[calc(100vh-14rem)] overflow-hidden">
             @if ($this->activeChatId)
-                @php
-                    $chat = \App\Models\Chat::with('user2')->find($this->activeChatId);
-                    $user = $chat->user2;
+                @php               
+                   $chat = \App\Models\Chat::with(['user2' => function($q) {
+                        $q->with(['photos' => fn($q2) => $q2->where('status', 'approved')->orderBy('is_primary', 'desc')->limit(1)]);
+                    }])->find($this->activeChatId);
                 @endphp
-
                 <!-- Шапка чата -->
                 <div class="shrink-0 flex items-center justify-between border-b border-border pb-3 mb-4">
                     <div class="flex items-center gap-3">

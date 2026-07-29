@@ -1,135 +1,135 @@
 <?php
 
+use App\Actions\Admin\DeleteUserAction;
+use App\Actions\Admin\ToggleUserBanAction;
 use App\Models\User;
-use App\Notifications\UserBanned;
-use App\Notifications\UserDeleted;
+use Livewire\Attributes\Computed;
+use Livewire\Attributes\Layout;
 use Livewire\Volt\Component;
 use Livewire\WithPagination;
-use Livewire\Attributes\Layout;
-use Illuminate\Support\Facades\DB;
 
-/**
- * Компонент списка пользователей админки.
- * Отвечает за просмотр, поиск, сортировку, бан и удаление пользователей.
- */
 new #[Layout('layouts.admin')] class extends Component 
 {
     use WithPagination;
 
-    /** @var int Количество пользователей на странице */
     public int $perPage = 10;
-    
-    /** @var string Поисковый запрос (имя, почта, город) */
     public string $search = '';
-    
-    /** @var string Направление сортировки (asc или desc) */
     public string $sortDirection = 'desc';
 
-    /**
-     * Хук Livewire: сброс пагинации при вводе поиска.
-     */
+    private ToggleUserBanAction $toggleBanAction;
+    private DeleteUserAction $deleteUserAction;
+
+    public function boot(
+        ToggleUserBanAction $toggleBanAction,
+        DeleteUserAction $deleteUserAction
+    ): void {
+        $this->toggleBanAction = $toggleBanAction;
+        $this->deleteUserAction = $deleteUserAction;
+    }
+
     public function updatingSearch(): void
     {
         $this->resetPage();
     }
 
-    /**
-     * Переключение направления сортировки.
-     */
     public function toggleSort(): void
     {
         $this->sortDirection = $this->sortDirection === 'desc' ? 'asc' : 'desc';
         $this->resetPage();
     }
 
-       /**
-     * Вычисляемое свойство: подготовка данных для страницы.
-     * Оптимизация: тянем только нужные поля, чтобы не грузить память.
-     */
-    public function with(): array
-    {        
-        $columns = [
-            'id', 'name', 'email', 'city', 'created_at', 
-            'last_login_at', 'last_login_ip', 'is_banned', 
-            'is_admin', 'has_completed_onboarding',
-            'is_premium', 'premium_expires_at'
-        ];
+    // ============================================
+    // ВЫВОД ДАННЫХ (Computed)
+    // ============================================
 
-        $users = User::query()
-            ->select($columns)
-            ->excludeAdmins()
-            ->with('photos') // Жадная загрузка фото для аватарок (убивает N+1)
-            ->when($this->search, function ($query) {
-                $search = $this->search;
-                $operator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
-                
+    #[Computed]
+    public function users()
+    {
+        $operator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
+        $search = $this->search;
+
+        return User::query()
+            ->select(['id', 'name', 'email', 'created_at', 'last_login_at', 'last_login_ip', 'is_banned', 'is_admin', 'has_completed_onboarding', 'is_premium', 'premium_expires_at'])
+            ->where('is_admin', false)
+            ->with([
+                'profile',
+                'photos' => fn($q) => $q->where('status', 'approved')->orderBy('is_primary', 'desc')->orderBy('position', 'asc')->limit(1)
+            ])
+            ->when($search, function ($query) use ($search, $operator) {
                 $query->where(function ($q) use ($search, $operator) {
-                    $q->where('name', $operator, '%' . $search . '%')
-                      ->orWhere('email', $operator, '%' . $search . '%')
-                      ->orWhere('city', $operator, '%' . $search . '%');
+                    $q->where('name', $operator, "%{$search}%")
+                      ->orWhere('email', $operator, "%{$search}%")
+                      ->orWhereHas('profile', function ($sub) use ($search, $operator) {
+                          $sub->where('city', $operator, "%{$search}%");
+                      });
                 });
             })
+            // ✅ ФИКС СКАЧКОВ: Добавили вторичную сортировку по id, чтобы порядок строк был 100% стабильным
             ->orderBy('created_at', $this->sortDirection)
+            ->orderBy('id', $this->sortDirection) 
             ->paginate($this->perPage);
-
-        return [
-            'users' => $users,
-            'sortDirection' => $this->sortDirection,
-        ];
     }
 
-    /**
-     * Забанить / Разбанить пользователя.
-     * 
-     * @param int $userId
-     */
+    // ============================================
+    // ДЕЙСТВИЯ
+    // ============================================
+
     public function toggleBan(int $userId): void
     {
         $user = User::find($userId);
-        if (!$user) return;
-
-        if ($user->is_admin) {
-            $this->dispatch('show-toast', type: 'error', message: 'Нельзя забанить администратора');
+        
+        if (!$user) {
+            $this->dispatch('show-toast', type: 'error', message: 'Пользователь не найден');
             return;
         }
 
-        $newStatus = !$user->is_banned;
-        $user->update(['is_banned' => $newStatus]);
-        
-        $user->notify(new UserBanned($newStatus));
+        $result = $this->toggleBanAction->execute($user, 'Нарушение правил через список пользователей');
         
         $this->dispatch('show-toast', 
-            type: 'success', 
-            message: $newStatus ? "Пользователь {$user->name} забанен" : "Пользователь {$user->name} разбанен"
+            type: $result['success'] ? 'success' : 'error',
+            message: $result['message']
         );
         
-        $this->dispatch('$refresh');
+        if ($result['success']) {
+            // ✅ Меняем статус в памяти, чтобы не делать запрос в БД и не перестраивать таблицу
+            $this->users->getCollection()->transform(function ($u) use ($userId, $result) {
+                if ($u->id === $userId) {
+                    $u->is_banned = $result['is_banned'];
+                }
+                return $u;
+            });
+        }
     }
 
-    /**
-     * Удаление пользователя.
-     * 
-     * @param int $userId
-     */
     public function deleteUser(int $userId): void
     {
-        $user = User::find($userId);
-        if (!$user) return;
-
-        if ($user->is_admin) {
-            $this->dispatch('show-toast', type: 'error', message: 'Нельзя удалить администратора');
-            return;
+        $result = $this->deleteUserAction->execute($userId);
+        
+        $this->dispatch('show-toast', 
+            type: $result['success'] ? 'success' : 'error',
+            message: $result['message']
+        );
+        
+        if ($result['success']) {
+            // ✅ Удаляем юзера из коллекции в памяти
+            $newCollection = $this->users->getCollection()->reject(function ($u) use ($userId) {
+                return $u->id === $userId;
+            })->values();
+            
+            $this->users->setCollection($newCollection);
         }
-        
-        $userName = $user->name;
+    }
 
-        DB::transaction(function () use ($user) {
-            $user->notify(new UserDeleted());
-            $user->delete();
-        });
-        
-        $this->dispatch('show-toast', type: 'success', message: "Пользователь {$userName} удален");
-        $this->dispatch('$refresh');
+    #[Computed]
+    public function stats(): array
+    {
+        return [
+            'total' => User::where('is_admin', false)->count(),
+            'banned' => User::where('is_admin', false)->where('is_banned', true)->count(),
+            'premium' => User::where('is_admin', false)->where('is_premium', true)->count(),
+            'verified' => User::where('is_admin', false)->where('is_verified', true)->count(),
+            'onboarding_complete' => User::where('is_admin', false)->where('has_completed_onboarding', true)->count(),
+        ];
     }
 }; 
 ?>
@@ -140,25 +140,25 @@ new #[Layout('layouts.admin')] class extends Component
         <h1 class="text-2xl font-semibold">
             Пользователи 
             <span class="text-sm font-normal text-muted-foreground">
-                (всего: {{ $users->total() }})
+                (всего: {{ $this->users->total() }})
             </span>
         </h1>
         
         <!-- Поиск -->
-        <div class="relative w-72" wire:key="search-wrapper">
+        <div class="relative w-72" wire:key="search-wrapper-main">
             <x-ui.input 
                 wire:model.live.debounce.300ms="search" 
                 type="search" 
                 placeholder="Поиск (имя, почта, город)..." 
                 class="pl-9 pr-8"
-                wire:key="search-input"
+                wire:key="search-input-main"
             />
             <x-lucide-search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             @if(!empty($search))
                 <button 
                     wire:click="$set('search', '')"
                     class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                    wire:key="clear-search"
+                    wire:key="clear-search-btn-main"
                 >
                     <x-lucide-x class="w-4 h-4" />
                 </button>
@@ -167,20 +167,18 @@ new #[Layout('layouts.admin')] class extends Component
     </div>
 
     <!-- Таблица -->
-    <x-ui.table wire:key="users-table">
+    <x-ui.table wire:key="users-table-main">
         <x-ui.table-header>
             <x-ui.table-row>
                 <x-ui.table-head class="w-12">ID</x-ui.table-head>
                 <x-ui.table-head class="w-12">Аватар</x-ui.table-head>
                 <x-ui.table-head>Имя</x-ui.table-head>
                 <x-ui.table-head>Город</x-ui.table-head>
-                
-                {{-- Сортировка по дате регистрации --}}
                 <x-ui.table-head>
                     <button 
                         wire:click="toggleSort" 
                         class="flex items-center gap-1 hover:text-foreground transition-colors"
-                        wire:key="sort-button"
+                        wire:key="sort-button-main"
                     >
                         Регистрация
                         @if($sortDirection === 'desc')
@@ -190,7 +188,6 @@ new #[Layout('layouts.admin')] class extends Component
                         @endif
                     </button>
                 </x-ui.table-head>
-                
                 <x-ui.table-head>Последний вход</x-ui.table-head>
                 <x-ui.table-head>Статус</x-ui.table-head>
                 <x-ui.table-head class="w-10"><span class="sr-only">Действия</span></x-ui.table-head>
@@ -198,8 +195,9 @@ new #[Layout('layouts.admin')] class extends Component
         </x-ui.table-header>
 
         <x-ui.table-body>
-            @forelse ($users as $user)
-                <x-ui.table-row wire:key="user-{{ $user->id }}">
+            @forelse ($this->users as $user)
+                {{-- ✅ Уникальный ключ строки --}}
+                <x-ui.table-row wire:key="user-row-{{ $user->id }}">
                     <x-ui.table-cell class="text-muted-foreground text-xs">{{ $user->id }}</x-ui.table-cell>
                     <x-ui.table-cell>
                         <x-avatar 
@@ -211,25 +209,23 @@ new #[Layout('layouts.admin')] class extends Component
                         />
                     </x-ui.table-cell>
                     <x-ui.table-cell>
-                        <!-- Обернули ссылкой -->
                         <a href="{{ route('admin.users.show', $user->id) }}" class="block group" wire:navigate>
                             <div class="font-medium text-foreground flex items-center gap-2 flex-wrap group-hover:text-primary transition-colors">
                                 {{ $user->name }}                                
-                                <!-- БЕЙДЖ PREMIUM -->
                                 @if($user->has_active_premium)
-                                    <x-ui.badge variant="warning" size="xs" wire:key="premium-badge-{{ $user->id }}" class="p-1 flex items-center gap-1">
+                                    <x-ui.badge variant="warning" size="xs" wire:key="premium-{{ $user->id }}" class="p-1 flex items-center gap-1">
                                         <x-lucide-crown class="w-3 h-3" />
                                     </x-ui.badge>
                                 @endif                              
                                 @if(!$user->has_completed_onboarding || !$user->avatar_url)
-                                    <x-ui.badge variant="warning" size="xs" wire:key="onboarding-badge-{{ $user->id }}">Нет фото</x-ui.badge>
+                                    <x-ui.badge variant="warning" size="xs" wire:key="onboarding-{{ $user->id }}">Нет фото</x-ui.badge>
                                 @endif
                                 <span class="text-xs text-muted-foreground font-normal">(ID: {{ $user->id }})</span>
                             </div>
                             <div class="text-xs text-muted-foreground group-hover:text-primary/80 transition-colors">{{ $user->email }}</div>
                         </a>
                     </x-ui.table-cell>
-                    <x-ui.table-cell>{{ $user->city ?? '—' }}</x-ui.table-cell>
+                    <x-ui.table-cell>{{ $user->profile?->city ?? '—' }}</x-ui.table-cell>
                     <x-ui.table-cell class="text-muted-foreground text-xs whitespace-nowrap">
                         {{ $user->created_at->format('d.m.Y') }}
                         <span class="text-[0.65rem] text-muted-foreground/60">
@@ -245,11 +241,14 @@ new #[Layout('layouts.admin')] class extends Component
                         @endif
                     </x-ui.table-cell>
                     <x-ui.table-cell>
-                        @if($user->is_banned)
-                            <x-ui.badge variant="destructive" size="sm" wire:key="banned-badge-{{ $user->id }}">Забанен</x-ui.badge>
-                        @else
-                            <x-ui.badge variant="success" size="sm" wire:key="active-badge-{{ $user->id }}">Активен</x-ui.badge>
-                        @endif
+                        {{-- ✅ Фикс: Один и тот же ключ для бейджа статуса, чтобы Livewire не путался при бане --}}
+                        <x-ui.badge 
+                            variant="{{ $user->is_banned ? 'destructive' : 'success' }}" 
+                            size="sm" 
+                            wire:key="status-badge-{{ $user->id }}"
+                        >
+                            {{ $user->is_banned ? 'Забанен' : 'Активен' }}
+                        </x-ui.badge>
                     </x-ui.table-cell>
                     <x-ui.table-cell class="text-right">
                         <x-ui.dropdown-menu wire:key="dropdown-{{ $user->id }}">
@@ -290,13 +289,13 @@ new #[Layout('layouts.admin')] class extends Component
                     </x-ui.table-cell>
                 </x-ui.table-row>
             @empty
-                <x-ui.table-row wire:key="empty-state">
+                <x-ui.table-row wire:key="empty-state-main">
                     <x-ui.table-cell colspan="8" class="py-12 text-center text-muted-foreground">
                         <div class="flex flex-col items-center gap-2">
                             <x-lucide-users class="w-12 h-12 opacity-30" />
                             <p>Пользователи не найдены</p>
                             @if(!empty($search))
-                                <x-ui.button wire:click="$set('search', '')" variant="outline" size="sm" wire:key="clear-search-btn">
+                                <x-ui.button wire:click="$set('search', '')" variant="outline" size="sm" wire:key="clear-search-empty-main">
                                     Очистить поиск
                                 </x-ui.button>
                             @endif
@@ -308,10 +307,10 @@ new #[Layout('layouts.admin')] class extends Component
     </x-ui.table>
 
     <!-- Пагинация -->
-    <div class="flex items-center justify-between flex-wrap gap-2" wire:key="pagination-wrapper">
+    <div class="flex items-center justify-between flex-wrap gap-2" wire:key="pagination-wrapper-main">
         <div class="text-xs text-muted-foreground">
-            Показано {{ $users->firstItem() ?? 0 }} - {{ $users->lastItem() ?? 0 }} из {{ $users->total() }}
+            Показано {{ $this->users->firstItem() ?? 0 }} - {{ $this->users->lastItem() ?? 0 }} из {{ $this->users->total() }}
         </div>
-        {{ $users->links('partials.pagination') }}
+        {{ $this->users->links('partials.pagination') }}
     </div>
 </div>

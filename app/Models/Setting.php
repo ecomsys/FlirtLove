@@ -16,14 +16,26 @@ class Setting extends Model
         'is_public' => 'boolean',
     ];
 
-    // Получить значение настройки
+    /**
+     * Получить значение настройки (ВСЕГДА из кеша)
+     */
     public static function get(string $key, $default = null)
     {
-        $setting = static::where('key', $key)->first();
-        return $setting ? $setting->value : $default;
+        $settings = static::getAllCached();
+        $value = $settings[$key] ?? $default;
+
+        // Автокаст: если в БД тип 'boolean', вернем настоящий bool
+        $settingModel = static::where('key', $key)->first();
+        if ($settingModel && $settingModel->type === 'boolean') {
+            return filter_var($value, FILTER_VALIDATE_BOOLEAN);
+        }
+
+        return $value;
     }
 
-    // Установить настройку
+    /**
+     * Установить настройку и сбросить кеш
+     */
     public static function set(string $key, $value, array $attributes = [])
     {
         $setting = static::updateOrCreate(
@@ -35,32 +47,21 @@ class Setting extends Model
         return $setting;
     }
 
-    // Получить все настройки группы
+    /**
+     * Получить все настройки группы
+     */
     public static function getGroup(string $group): array
     {
         return static::where('group', $group)->pluck('value', 'key')->toArray();
     }
 
-    // Кеширование настроек
+    /**
+     * Кеширование настроек навсегда (пока не сбросим вручную)
+     */
     public static function getAllCached(): array
     {
-        return Cache::remember('settings', 3600, function () {
+        return Cache::rememberForever('settings', function () {
             return static::all()->pluck('value', 'key')->toArray();
         });
     }
 }
-
-
-
-// Использование настроек в коде:
-// php
-// // Получить настройку
-// $siteName = Setting::get('site_name');
-// $maxPhotos = Setting::get('max_photos_per_user', 5);
-
-// // В Blade
-// {{ Setting::get('site_name') }}
-
-// // В контроллере
-// use App\Models\Setting;
-// $contactEmail = Setting::get('contact_email');

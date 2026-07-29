@@ -10,7 +10,7 @@ return new class extends Migration
     {
         Schema::create('broadcasts', function (Blueprint $table) {
             $table->id();
-            $table->foreignId('user_id')->nullable()->constrained()->onDelete('cascade');
+            $table->foreignId('user_id')->nullable()->constrained()->onDelete('cascade'); // Кто создал (админ)
             $table->enum('type', ['system', 'email', 'push'])->default('system');
             $table->string('title');
             $table->text('message');
@@ -19,6 +19,9 @@ return new class extends Migration
             $table->timestamp('sent_at')->nullable();
             $table->json('data')->nullable();
             $table->timestamps();
+
+            // ИНДЕКСЫ: Для крон-задачи, которая ищет рассылки к отправке
+            $table->index(['status', 'scheduled_at']);
         });
     }
 

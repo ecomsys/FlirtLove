@@ -1,47 +1,36 @@
 <?php
 
 use App\Models\Chat;
-use App\Models\User;
+use App\Models\UserMatch;
+use App\Notifications\ChatDeletedByAdmin;
+use Illuminate\Support\Facades\Cache; //  Добавили кэш
+use Illuminate\Support\Facades\DB;
+use Livewire\Attributes\Computed;
+use Livewire\Attributes\Layout;
 use Livewire\Volt\Component;
 use Livewire\WithPagination;
-use Livewire\Attributes\Layout;
-use Livewire\Attributes\Computed;
-use Illuminate\Support\Facades\DB;
-use App\Notifications\ChatDeletedByAdmin;
 
-/**
- * Компонент админки: Чаты пользователей.
- * Отображает список приватных чатов, фильтры по дате и типу, поиск и переписку.
- * Администраторы исключены из выдачи.
- */
-
-//  НА ФРОНТЕ ПОТОМ !!!
-//  Если у чата нет мэтча, инпут ввода сообщения будет скрыт,
-//  а вместо него будет плашка: "Ожидание взаимного лайка. Чтобы написать сейчас, оформите Premium".
-
-new #[Layout('layouts.admin')] class extends Component {
+new #[Layout('layouts.admin')] class extends Component 
+{
     use WithPagination;
 
     public string $search = '';
     public string $dateFilter = 'all';
-    public string $typeFilter = 'all'; // all, match, paywall
+    public string $typeFilter = 'all';
     public int $perPage = 10;
     public ?int $activeChatId = null;
     public string $deleteReason = 'нарушение правил сайта';
 
     /**
      * Инициализация. Восстанавливаем фильтры из сессии.
+     * 
+     * @return void
      */
     public function mount()
     {
         $saved = session('admin_chats', []);
-
-        if (isset($saved['dateFilter'])) {
-            $this->dateFilter = $saved['dateFilter'];
-        }
-        if (isset($saved['typeFilter'])) {
-            $this->typeFilter = $saved['typeFilter'];
-        }
+        if (isset($saved['dateFilter'])) $this->dateFilter = $saved['dateFilter'];
+        if (isset($saved['typeFilter'])) $this->typeFilter = $saved['typeFilter'];
     }
 
     public function updatingSearch(): void
@@ -50,6 +39,12 @@ new #[Layout('layouts.admin')] class extends Component {
         $this->activeChatId = null;
     }
 
+    /**
+     * Установка фильтра даты и сохранение в сессию.
+     * 
+     * @param string $filter
+     * @return void
+     */
     public function setDateFilter(string $filter): void
     {
         $this->dateFilter = $filter;
@@ -58,6 +53,12 @@ new #[Layout('layouts.admin')] class extends Component {
         $this->activeChatId = null;
     }
 
+    /**
+     * Установка фильтра типа и сохранение в сессию.
+     * 
+     * @param string $filter
+     * @return void
+     */
     public function setTypeFilter(string $filter): void
     {
         $this->typeFilter = $filter;
@@ -66,11 +67,22 @@ new #[Layout('layouts.admin')] class extends Component {
         $this->activeChatId = null;
     }
 
+    /**
+     * Выбор чата для просмотра переписки.
+     * 
+     * @param int $chatId
+     * @return void
+     */
     public function selectChat(int $chatId): void
     {
         $this->activeChatId = $chatId;
     }
 
+    /**
+     * Сброс всех фильтров.
+     * 
+     * @return void
+     */
     public function resetFilters(): void
     {
         $this->reset(['search', 'dateFilter', 'typeFilter']);
@@ -78,9 +90,81 @@ new #[Layout('layouts.admin')] class extends Component {
         $this->resetPage();
     }
 
+    // ============================================
+    // ДЕЙСТВИЯ
+    // ============================================
+
     /**
-     * Вычисляемое свойство: Список чатов (левая панель).
-     * Исключает чаты, где замешаны админы.
+     * Удаление чата и отправка уведомлений.
+     * 
+     * @param int $chatId
+     * @return void
+     */
+    public function deleteChat(int $chatId): void
+    {
+        $chat = Chat::with(['user1', 'user2'])->find($chatId);
+        if (!$chat) return;
+
+        DB::transaction(function () use ($chat) {
+            $user1 = $chat->user1;
+            $user2 = $chat->user2;
+
+            if ($user1 && !$user1->is_admin) {
+                $user1->notify(new ChatDeletedByAdmin($this->deleteReason));
+            }
+            if ($user2 && !$user2->is_admin) {
+                $user2->notify(new ChatDeletedByAdmin($this->deleteReason));
+            }
+
+            $chat->delete();
+        });
+
+        //  Чистим кэш счетчиков, чтобы они сразу обновились
+        Cache::forget('admin_chats_counts');
+
+        if ($this->activeChatId === $chatId) {
+            $this->activeChatId = null;
+        }
+        
+        $this->reset('deleteReason');
+        $this->dispatch('show-toast', type: 'success', message: 'Чат удален. Пользователи уведомлены.');
+        $this->dispatch('$refresh');
+    }
+
+    // ============================================
+    // ВЫВОД ДАННЫХ
+    // ============================================
+
+    /**
+     * Базовый запрос (исключает чаты с админами).
+     * Сразу добавляем виртуальную колонку has_match, чтобы не делать N+1 запросов в шаблоне!
+     * 
+     * @return \Illuminate\Database\Eloquent\Builder
+     */
+    private function baseChatsQuery()
+    {
+        return Chat::where('type', 'private')
+            ->whereHas('user1', fn($q) => $q->where('is_admin', false))
+            ->whereHas('user2', fn($q) => $q->where('is_admin', false))
+            //  ТРЮК: Добавляем has_match через подзапрос (1 запрос на весь список, а не на каждый чат)
+            ->addSelect([
+                'has_match' => UserMatch::selectRaw('1')
+                    ->where(function ($q) {
+                        $q->whereColumn('user_matches.user1_id', 'chats.user1_id')
+                          ->whereColumn('user_matches.user2_id', 'chats.user2_id');
+                    })
+                    ->orWhere(function ($q) {
+                        $q->whereColumn('user_matches.user1_id', 'chats.user2_id')
+                          ->whereColumn('user_matches.user2_id', 'chats.user1_id');
+                    })
+                    ->limit(1)
+            ]);
+    }
+
+    /**
+     * Список чатов с фильтрацией.
+     * 
+     * @return \Illuminate\Contracts\Pagination\LengthAwarePaginator
      */
     #[Computed]
     public function chats()
@@ -88,20 +172,16 @@ new #[Layout('layouts.admin')] class extends Component {
         $operator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
         $search = trim($this->search);
 
-        return Chat::query()
-            ->where('type', 'private')
-            ->excludeAdmins()
+        return $this->baseChatsQuery()
             ->with([
-                'user1.photos',
-                'user2.photos',
-                'match',
-                'messages' => function ($q) {
-                    $q->latest()->limit(1);
-                },
+                'user1.photos' => fn($q) => $q->where('status', 'approved')->orderBy('is_primary', 'desc')->limit(1),
+                'user2.photos' => fn($q) => $q->where('status', 'approved')->orderBy('is_primary', 'desc')->limit(1),
+                'messages' => fn($q) => $q->latest()->limit(1),
             ])
             ->when($search, function ($query) use ($search, $operator) {
                 $query->where(function ($q) use ($search, $operator) {
-                    $q->whereHas('user1', fn($q2) => $q2->where('name', $operator, "%{$search}%"))->orWhereHas('user2', fn($q2) => $q2->where('name', $operator, "%{$search}%"));
+                    $q->whereHas('user1', fn($q2) => $q2->where('name', $operator, "%{$search}%"))
+                      ->orWhereHas('user2', fn($q2) => $q2->where('name', $operator, "%{$search}%"));
                 });
             })
             ->when($this->dateFilter !== 'all', function ($query) {
@@ -115,9 +195,19 @@ new #[Layout('layouts.admin')] class extends Component {
                     $query->where('last_message_at', '>=', $date);
                 }
             })
+            //  Фильтр по матчам теперь использует whereExists
             ->when($this->typeFilter === 'match', function ($query) {
-                $query->whereExists(function ($subQuery) {
-                    $subQuery->select(DB::raw(1))->from('user_matches')->whereColumn('user_matches.user1_id', 'chats.user1_id')->whereColumn('user_matches.user2_id', 'chats.user2_id');
+                $query->whereExists(function ($q) {
+                    $q->select(DB::raw(1))
+                      ->from('user_matches')
+                      ->where(function ($q2) {
+                          $q2->whereColumn('user_matches.user1_id', 'chats.user1_id')
+                             ->whereColumn('user_matches.user2_id', 'chats.user2_id');
+                      })
+                      ->orWhere(function ($q2) {
+                          $q2->whereColumn('user_matches.user1_id', 'chats.user2_id')
+                             ->whereColumn('user_matches.user2_id', 'chats.user1_id');
+                      });
                 });
             })
             ->when($this->typeFilter === 'paywall', fn($q) => $q->whereHas('messages', fn($q2) => $q2->where('type', 'system')))
@@ -125,72 +215,74 @@ new #[Layout('layouts.admin')] class extends Component {
             ->paginate($this->perPage);
     }
 
-    /**
-     * Вычисляемое свойство: Счетчики для кнопок фильтров.
-     * Использует базовый запрос (clone) для оптимизации и исключения админов.
+
+     /**
+     * Счетчики для фильтров (Кэшируются на 1 минуту).
+     * 
+     * @return array
      */
     #[Computed]
-    public function counts()
+    public function counts(): array
     {
-        $baseQuery = Chat::where('type', 'private')->excludeAdmins(); 
+        return Cache::remember('admin_chats_counts', 60, function () {
+            $baseQuery = $this->baseChatsQuery();
 
-        return [
-            'total' => (clone $baseQuery)->count(),
-            'day' => (clone $baseQuery)->where('last_message_at', '>=', now()->startOfDay())->count(),
-            'week' => (clone $baseQuery)->where('last_message_at', '>=', now()->startOfWeek())->count(),
-            'month' => (clone $baseQuery)->where('last_message_at', '>=', now()->startOfMonth())->count(),
-            'match' => (clone $baseQuery)
-                ->whereExists(function ($query) {
-                    $query->select(DB::raw(1))->from('user_matches')->whereColumn('user_matches.user1_id', 'chats.user1_id')->whereColumn('user_matches.user2_id', 'chats.user2_id');
-                })
-                ->count(),
-            'paywall' => (clone $baseQuery)->whereHas('messages', fn($q) => $q->where('type', 'system'))->count(),
-        ];
+            return [
+                'total' => (clone $baseQuery)->count(),
+                'day' => (clone $baseQuery)->where('last_message_at', '>=', now()->startOfDay())->count(),
+                'week' => (clone $baseQuery)->where('last_message_at', '>=', now()->startOfWeek())->count(),
+                'month' => (clone $baseQuery)->where('last_message_at', '>=', now()->startOfMonth())->count(),
+                //  Считаем матчи тем же безопасным способом
+                'match' => (clone $baseQuery)->whereExists(function ($q) {
+                    $q->select(DB::raw(1))
+                      ->from('user_matches')
+                      ->where(function ($q2) {
+                          $q2->whereColumn('user_matches.user1_id', 'chats.user1_id')
+                             ->whereColumn('user_matches.user2_id', 'chats.user2_id');
+                      })
+                      ->orWhere(function ($q2) {
+                          $q2->whereColumn('user_matches.user1_id', 'chats.user2_id')
+                             ->whereColumn('user_matches.user2_id', 'chats.user1_id');
+                      });
+                })->count(),
+                'paywall' => (clone $baseQuery)->whereHas('messages', fn($q) => $q->where('type', 'system'))->count(),
+            ];
+        });
     }
 
-    /**
-     * Вычисляемое свойство: Сообщения активного чата (правая панель).
+        /**
+     * Данные активного чата.
+     * 
+     * @return \App\Models\Chat|null
      */
     #[Computed]
     public function activeChatMessages()
     {
-        if (!$this->activeChatId) {
-            return null;
-        }
-        return Chat::with(['user1.photos', 'user2.photos', 'match', 'messages.sender'])->find($this->activeChatId);
+        if (!$this->activeChatId) return null;
+        
+        //  Используем first() вместо find(), чтобы добавить наш трюк с has_match
+        return Chat::where('id', $this->activeChatId)
+            ->addSelect([
+                'has_match' => UserMatch::selectRaw('1')
+                    ->where(function ($q) {
+                        $q->whereColumn('user_matches.user1_id', 'chats.user1_id')
+                          ->whereColumn('user_matches.user2_id', 'chats.user2_id');
+                    })
+                    ->orWhere(function ($q) {
+                        $q->whereColumn('user_matches.user1_id', 'chats.user2_id')
+                          ->whereColumn('user_matches.user2_id', 'chats.user1_id');
+                    })
+                    ->limit(1)
+            ])
+            ->with([
+                'user1.photos' => fn($q) => $q->where('status', 'approved')->orderBy('is_primary', 'desc')->limit(1),
+                'user2.photos' => fn($q) => $q->where('status', 'approved')->orderBy('is_primary', 'desc')->limit(1),
+                'messages' // Убрали 'match', оставили только messages
+            ])->first();
     }
-
-    /**
-     * Удаление чата с уведомлением пользователей.
-     * Защита от уведомления админов.
-     */
-    public function deleteChat(int $chatId): void
-    {
-        $chat = Chat::with(['user1', 'user2'])->find($chatId);
-        if ($chat) {
-            $user1 = $chat->user1;
-            $user2 = $chat->user2;
-
-            DB::transaction(function () use ($chat, $user1, $user2) {
-                if ($user1 && !$user1->is_admin) {
-                    $user1->notify(new ChatDeletedByAdmin($this->deleteReason));
-                }
-                if ($user2 && !$user2->is_admin) {
-                    $user2->notify(new ChatDeletedByAdmin($this->deleteReason));
-                }
-                $chat->delete();
-            });
-
-            if ($this->activeChatId === $chatId) {
-                $this->activeChatId = null;
-            }
-            $this->reset('deleteReason');
-            $this->dispatch('show-toast', type: 'success', message: 'Чат удален. Пользователи уведомлены.');
-            $this->dispatch('$refresh');
-        }
-    }
-};
+}; 
 ?>
+
 
 <div class="space-y-6">
 
@@ -318,7 +410,7 @@ new #[Layout('layouts.admin')] class extends Component {
 
                                     <!-- Время и Мэтч (справа) -->
                                     <div class="flex flex-col items-end gap-1 shrink-0">
-                                        @if ($chat->match)
+                                        @if ($chat->has_match)
                                             <x-lucide-heart class="w-3 h-3 text-pink-500 fill-current" />
                                         @endif
                                         @if ($chat->last_message_at)
@@ -407,7 +499,7 @@ new #[Layout('layouts.admin')] class extends Component {
                             </div>
                         </div>
 
-                        @if ($chat->match)
+                       @if ($chat->has_match)
                             <x-ui.badge variant="info" size="xs" class="ml-2">Взаимный лайк</x-ui.badge>
                         @endif
                     </div>
@@ -458,7 +550,7 @@ new #[Layout('layouts.admin')] class extends Component {
                 <!-- Лента сообщений -->
                 <div wire:poll.10s="$refresh" x-data x-init="setTimeout(() => { $el.scrollTop = $el.scrollHeight; }, 50)"
                     class="flex-1 overflow-y-auto space-y-4 pr-2 max-h-[calc(100vh-23rem)] flex flex-col little-scroll">
-                    @php $messages = $chat->messages->reverse(); @endphp
+                    @php $messages = $chat->messages; @endphp
                           @foreach ($messages as $message)
                             @if ($message->type === 'system')
                                 <div class="flex justify-center" wire:key="msg-{{ $message->id }}">
@@ -475,7 +567,7 @@ new #[Layout('layouts.admin')] class extends Component {
                                         <x-avatar src="{{ $sender?->avatar_url }}" name="{{ $sender?->name }}" size="xs" userId="{{ $sender?->id }}" showStatus="true" />
                                     @endif
                                     <div class="max-w-[70%]">
-                                        <!-- ✅ Фикс: текст и тег в одну строку -->
+                                        <!--  Фикс: текст и тег в одну строку -->
                                         <div class="text-left whitespace-pre-line break-words {{ $isUser1 ? 'bg-muted text-foreground' : 'bg-primary text-primary-foreground' }} rounded-2xl px-4 py-2 text-sm">{{ trim($message->body) }}</div>
                                         <div class="text-[10px] text-muted-foreground mt-1 {{ $isUser1 ? 'text-left' : 'text-right' }}">
                                             {{ $message->created_at->format('d.m H:i') }}

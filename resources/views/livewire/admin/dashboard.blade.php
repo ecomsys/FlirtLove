@@ -1,62 +1,56 @@
 <?php
 
-use App\Models\User;
 use App\Models\Photo;
-use App\Models\Report;
-use App\Models\Broadcast;
 use App\Models\PhotoComment;
-
-use Livewire\Volt\Component;
-use Livewire\Attributes\Layout;
+use App\Models\Report;
+use App\Models\User;
+use App\Models\UserProfile;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Cache; 
-use Illuminate\Support\Facades\Artisan;
+use Livewire\Attributes\Layout;
+use Livewire\Volt\Component;
 
 new #[Layout('layouts.admin')] class extends Component 
 {
-
+    /**
+     * Передача данных в представление.
+     * 
+     * @return array
+     */
     public function with(): array
     {
-        // Правильно получаем метрики из кеша
+        // Получаем закешированные метрики (кэш на 10 минут)
         $metrics = Cache::remember('admin_dashboard_metrics', 600, function () {
             return [
-                // ✅ Исключаем админов из статистики юзеров
-                'totalUsers' => User::excludeAdmins()->count(),
-                'newUsersToday' => User::excludeAdmins()->whereDate('created_at', today())->count(),
-                'newUsersWeek' => User::excludeAdmins()->where('created_at', '>=', now()->subDays(7))->count(),
+                'totalUsers' => User::where('is_admin', false)->count(),
+                'newUsersToday' => User::where('is_admin', false)->whereDate('created_at', today())->count(),
+                'newUsersWeek' => User::where('is_admin', false)->where('created_at', '>=', now()->subDays(7))->count(),
                 
-                // ✅ Исключаем фото, загруженные админами
-                'photosTotal' => Photo::excludeAdmins()->count(),
-                'photosPending' => Photo::excludeAdmins()->where('status', 'pending')->count(),
-                'photosApproved' => Photo::excludeAdmins()->where('status', 'approved')->count(),
+                'photosTotal' => Photo::whereHas('user', fn($q) => $q->where('is_admin', false))->count(),
+                'photosPending' => Photo::whereHas('user', fn($q) => $q->where('is_admin', false))->where('status', 'pending')->count(),
+                'photosApproved' => Photo::whereHas('user', fn($q) => $q->where('is_admin', false))->where('status', 'approved')->count(),
                 
-                // ✅ Исключаем жалобы, где замешаны админы
-                'reportsPending' => Report::excludeAdmins()->where('status', 'pending')->count(),
-                'reportsTotal' => Report::excludeAdmins()->count(),
+                'reportsPending' => Report::whereHas('user', fn($q) => $q->where('is_admin', false))->where('status', 'pending')->count(),
+                'reportsTotal' => Report::whereHas('user', fn($q) => $q->where('is_admin', false))->count(),
                 
-                // Оповещения не трогаем (это сами рассылки, а не юзеры)
-                'notificationsTotal' => Broadcast::count(),
-                'notificationsScheduled' => Broadcast::where('status', 'scheduled')->count(),
+                'commentsTotal' => PhotoComment::whereHas('user', fn($q) => $q->where('is_admin', false))->count(),
+                'commentsPending' => PhotoComment::whereHas('user', fn($q) => $q->where('is_admin', false))->where('status', 'pending')->count(),
+                'commentsApproved' => PhotoComment::whereHas('user', fn($q) => $q->where('is_admin', false))->where('status', 'approved')->count(),
+                'commentsRejected' => PhotoComment::whereHas('user', fn($q) => $q->where('is_admin', false))->where('status', 'rejected')->count(),
+                'commentsSpam' => PhotoComment::whereHas('user', fn($q) => $q->where('is_admin', false))->where('status', 'spam')->count(),
+                'newCommentsToday' => PhotoComment::whereHas('user', fn($q) => $q->where('is_admin', false))->whereDate('created_at', today())->count(),
                 
                 'genderStats' => $this->getGenderStats(),
                 'ageStats' => $this->getAgeStats(),
                 'topCities' => $this->getTopCities(),
                 'registrationData' => $this->getRegistrationData(),
                 'categories' => $this->getCategories(),
-                
-                // ✅ Исключаем комментарии админов
-                'commentsTotal' => PhotoComment::excludeAdmins()->count(),
-                'commentsPending' => PhotoComment::excludeAdmins()->where('status', 'pending')->count(),
-                'commentsApproved' => PhotoComment::excludeAdmins()->where('status', 'approved')->count(),
-                'commentsRejected' => PhotoComment::excludeAdmins()->where('status', 'rejected')->count(),
-                'commentsSpam' => PhotoComment::excludeAdmins()->where('status', 'spam')->count(),
-                'newCommentsToday' => PhotoComment::excludeAdmins()->whereDate('created_at', today())->count(),
                 'commentsData' => $this->getCommentsData(),
-                'commentCategories' => $this->getCommentCategories(),        
+                'commentCategories' => $this->getCategories(),
             ];
         });
 
-        // ✅ Онлайн считаем отдельно (не кешируем). Соединяем с таблицей users, чтобы исключить админов
+        // Онлайн считаем всегда в реальном времени (без кэша)
         $onlineUsers = DB::table('sessions')
             ->join('users', 'sessions.user_id', '=', 'users.id')
             ->where('users.is_admin', false)
@@ -64,17 +58,44 @@ new #[Layout('layouts.admin')] class extends Component
             ->distinct('sessions.user_id')
             ->count('sessions.user_id');
 
-        // Объединяем
         return array_merge($metrics, ['onlineUsers' => $onlineUsers]);
     }
 
-    // Вспомогательные методы для кеша
+    /**
+     * Мягкое обновление данных (сбрасываем кэш).
+     * 
+     * @return void
+     */
+    public function refresh(): void
+    {
+        Cache::forget('admin_dashboard_metrics');
+        $this->dispatch('show-toast', type: 'success', message: 'Данные обновлены!');
+    }
+
+    /**
+     * Полная очистка кеша проекта (через Artisan).
+     * 
+     * @return void
+     */
+    public function clearCache(): void
+    {
+        try {
+            \Artisan::call('cache:project-clear');
+            Cache::forget('admin_dashboard_metrics'); // Сбрасываем и локальный кэш дашборда
+            $this->dispatch('show-toast', type: 'success', message: 'Кеш успешно очищен!');
+        } catch (\Exception $e) {
+            $this->dispatch('show-toast', type: 'error', message: 'Ошибка: ' . $e->getMessage());
+        }
+    }
+
+    // ============================================
+    // ПРИВАТНЫЕ МЕТОДЫ (Оптимизированные запросы)
+    // ============================================
 
     private function getGenderStats(): array
     {
-        // ✅ Исключаем админов
-        return User::excludeAdmins()->select('gender', DB::raw('count(*) as total'))
-            ->whereNotNull('gender')
+        return UserProfile::whereNotNull('gender')
+            ->select('gender', DB::raw('count(*) as total'))
             ->groupBy('gender')
             ->pluck('total', 'gender')
             ->toArray();
@@ -82,27 +103,33 @@ new #[Layout('layouts.admin')] class extends Component
 
     private function getAgeStats(): array
     {
-        // ✅ Исключаем админов
-        $users = User::excludeAdmins()->whereNotNull('birth_date')->get();
-        $stats = ['18-24' => 0, '25-34' => 0, '35-44' => 0, '45-54' => 0, '55+' => 0];
+        $stats = UserProfile::whereNotNull('birth_date')
+            ->selectRaw("
+                CASE 
+                    WHEN extract(year from age(birth_date)) BETWEEN 18 AND 24 THEN '18-24'
+                    WHEN extract(year from age(birth_date)) BETWEEN 25 AND 34 THEN '25-34'
+                    WHEN extract(year from age(birth_date)) BETWEEN 35 AND 44 THEN '35-44'
+                    WHEN extract(year from age(birth_date)) BETWEEN 45 AND 54 THEN '45-54'
+                    WHEN extract(year from age(birth_date)) >= 55 THEN '55+'
+                END as age_group,
+                COUNT(*) as total
+            ")
+            ->groupBy('age_group')
+            ->pluck('total', 'age_group')
+            ->toArray();
 
-        foreach ($users as $user) {
-            if (!$user->birth_date) continue;
-            $age = $user->birth_date->age;
-            if ($age >= 18 && $age <= 24) $stats['18-24']++;
-            elseif ($age >= 25 && $age <= 34) $stats['25-34']++;
-            elseif ($age >= 35 && $age <= 44) $stats['35-44']++;
-            elseif ($age >= 45 && $age <= 54) $stats['45-54']++;
-            elseif ($age >= 55) $stats['55+']++;
-        }
-
-        return $stats;
+        return [
+            '18-24' => $stats['18-24'] ?? 0,
+            '25-34' => $stats['25-34'] ?? 0,
+            '35-44' => $stats['35-44'] ?? 0,
+            '45-54' => $stats['45-54'] ?? 0,
+            '55+' => $stats['55+'] ?? 0,
+        ];
     }
 
     private function getTopCities(): array
     {
-        // ✅ Исключаем админов
-        return User::excludeAdmins()->whereNotNull('city')
+        return UserProfile::whereNotNull('city')
             ->select('city', DB::raw('count(*) as total'))
             ->groupBy('city')
             ->orderBy('total', 'desc')
@@ -113,8 +140,8 @@ new #[Layout('layouts.admin')] class extends Component
 
     private function getRegistrationData(): array
     {
-        // ✅ Исключаем админов
-        $stats = User::excludeAdmins()->select(DB::raw('DATE(created_at) as date'), DB::raw('count(*) as total'))
+        $stats = User::where('is_admin', false)
+            ->select(DB::raw('DATE(created_at) as date'), DB::raw('count(*) as total'))
             ->where('created_at', '>=', now()->subDays(7))
             ->groupBy('date')
             ->orderBy('date')
@@ -138,29 +165,10 @@ new #[Layout('layouts.admin')] class extends Component
         return $categories;
     }
 
-    public function refresh(): void
-    {
-        Cache::forget('admin_dashboard_metrics');
-        $this->redirect(route('admin.dashboard'));
-    }
-
-    /**
-     * Очистка кеша проекта
-     */
-    public function clearCache(): void
-    {
-        try {
-            Artisan::call('cache:project-clear');
-            $this->dispatch('show-toast', type: 'success', message: 'Кеш успешно очищен!');
-        } catch (\Exception $e) {
-            $this->dispatch('show-toast', type: 'error', message: 'Ошибка: ' . $e->getMessage());
-        }
-    }
-
     private function getCommentsData(): array
     {
-        // ✅ Исключаем админов
-        $stats = PhotoComment::excludeAdmins()->select(DB::raw('DATE(created_at) as date'), DB::raw('count(*) as total'))
+        $stats = PhotoComment::whereHas('user', fn($q) => $q->where('is_admin', false))
+            ->select(DB::raw('DATE(created_at) as date'), DB::raw('count(*) as total'))
             ->where('created_at', '>=', now()->subDays(7))
             ->groupBy('date')
             ->orderBy('date')
@@ -173,15 +181,6 @@ new #[Layout('layouts.admin')] class extends Component
             $data[] = $stats[$date] ?? 0;
         }
         return $data;
-    }
-
-    private function getCommentCategories(): array
-    {
-        $categories = [];
-        for ($i = 6; $i >= 0; $i--) {
-            $categories[] = now()->subDays($i)->format('D');
-        }
-        return $categories;
     }
 }; 
 ?>

@@ -5,7 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
-class UserMatch  extends Model
+class UserMatch extends Model
 {
     protected $table = 'user_matches'; 
     
@@ -13,6 +13,10 @@ class UserMatch  extends Model
         'user1_id',
         'user2_id',
     ];
+
+    // ============================================
+    // СВЯЗИ
+    // ============================================
 
     public function user1(): BelongsTo
     {
@@ -24,13 +28,21 @@ class UserMatch  extends Model
         return $this->belongsTo(User::class, 'user2_id');
     }
 
+    // ============================================
+    // ХЕЛПЕРЫ
+    // ============================================
+
     /**
-     * Локальный скоуп: Исключает чаты, где замешаны админы.
-     * Используется только для private чатов (знакомства).
+     * Получить второго участника матча.
+     * ВАЖНО: Эта функция загружает юзера из связи, если она уже загружена,
+     * иначе делает запрос в БД.
      */
-    public function scopeExcludeAdmins($query)
+    public function getPartner(int $userId): ?User
     {
-        return $query->whereHas('user1', fn($q) => $q->where('is_admin', false))
-                     ->whereHas('user2', fn($q) => $q->where('is_admin', false));
+        if ($this->user1_id === $userId) {
+            return $this->relationLoaded('user2') ? $this->user2 : $this->user2()->first();
+        }
+        
+        return $this->relationLoaded('user1') ? $this->user1 : $this->user1()->first();
     }
 }

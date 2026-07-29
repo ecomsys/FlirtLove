@@ -14,12 +14,14 @@ class Broadcast extends Model
         'message',
         'status',
         'scheduled_at',
-        'sent_at',       
+        'sent_at',
+        'data', 
     ];
 
     protected $casts = [
         'scheduled_at' => 'datetime',
-        'sent_at' => 'datetime',    
+        'sent_at' => 'datetime',
+        'data' => 'array', 
     ];
 
     public function user(): BelongsTo
@@ -27,7 +29,6 @@ class Broadcast extends Model
         return $this->belongsTo(User::class);
     }
 
-    // Скоупы
     public function scopeDraft($query)
     {
         return $query->where('status', 'draft');

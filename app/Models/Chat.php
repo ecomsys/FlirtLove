@@ -2,7 +2,6 @@
 
 namespace App\Models;
 
-use Illuminate\Support\Facades\Auth;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -20,6 +19,10 @@ class Chat extends Model
         'last_message_at' => 'datetime',
     ];
 
+    // ============================================
+    // СВЯЗИ
+    // ============================================
+
     public function user1(): BelongsTo
     {
         return $this->belongsTo(User::class, 'user1_id');
@@ -32,7 +35,11 @@ class Chat extends Model
 
     public function messages(): HasMany
     {
-        return $this->hasMany(Message::class)->latest(); // По умолчанию сортируем от новых к старым
+        // Убрал ->latest() из связи! 
+        // Это правило: связи не должны иметь дефолтной сортировки, 
+        // иначе ->create() на этой связи может работать криво.
+        // Сортировку будем делать при вызове: $chat->messages()->latest()->get()
+        return $this->hasMany(Message::class);
     }
 
     public function participants(): HasMany
@@ -40,53 +47,63 @@ class Chat extends Model
         return $this->hasMany(ChatParticipant::class);
     }
 
-    /**
-     * Локальный скоуп: Исключает чаты, где замешаны админы.
-     * Используется только для private чатов (знакомства).
-     */
-    public function scopeExcludeAdmins($query)
+        public function match()
     {
-        return $query->whereHas('user1', fn($q) => $q->where('is_admin', false))
-                     ->whereHas('user2', fn($q) => $q->where('is_admin', false));
+        // Возвращаем запрос, который ищет совпадение в любом порядке (кто кого лайкнул)
+        return UserMatch::where(function ($q) {
+            $q->where('user1_id', $this->user1_id)
+              ->where('user2_id', $this->user2_id);
+        })->orWhere(function ($q) {
+            $q->where('user1_id', $this->user2_id)
+              ->where('user2_id', $this->user1_id);
+        });
+    }
+
+    // ============================================
+    // ХЕЛПЕРЫ
+    // ============================================
+
+    /**
+     * Получить собеседника.
+     * ВАЖНО: Мы убрали Auth::id() из модели! Модель не должна знать о текущем запросе.
+     * Теперь мы передаем ID юзера явно: $chat->getPartner(auth()->id())
+     * Это позволяет использовать метод в очередях (queues) и тестах.
+     */
+    public function getPartner(int $userId): ?User
+    {
+        if ($this->user1_id === $userId) {
+            return $this->relationLoaded('user2') ? $this->user2 : $this->user2()->first();
+        }
+        
+        return $this->relationLoaded('user1') ? $this->user1 : $this->user1()->first();
     }
 
     /**
-     * Получить собеседника (того, кто не я)
-     */
-    public function getOtherUserAttribute()
-    {
-        return Auth::id() == $this->user1_id ? $this->user2 : $this->user1;
-    }
-    
-    /**
-     * Создать или получить чат между двумя юзерами
-     * ВАЖНО: user1_id всегда меньше user2_id, чтобы не было дублей
+     * Создать или получить приватный чат между двумя юзерами
      */
     public static function getOrCreateBetween(User $userA, User $userB): self
     {
         $user1Id = min($userA->id, $userB->id);
         $user2Id = max($userA->id, $userB->id);
 
-        return self::firstOrCreate(
-            ['user1_id' => $user1Id, 'user2_id' => $user2Id],
+        $chat = self::firstOrCreate(
+            ['user1_id' => $user1Id, 'user2_id' => $user2Id, 'type' => 'private'],
             ['last_message_at' => now()]
         );
-    }
-  
-        /**
-     * Связь с матчем (если чат создан на основе взаимных лайков)
-     */
-    public function match()
-    {
-        return $this->hasOne(UserMatch::class, 'user1_id', 'user1_id')
-                    ->where('user2_id', $this->user2_id);
+
+        // Гарантируем, что участники чата существуют в БД (чтобы работали счетчики)
+        // Это важный момент, которого не хватало в старой версии для приватных чатов!
+        self::ensureParticipantsExist($chat, $user1Id, $user2Id);
+
+        return $chat;
     }
 
-        /**
-     * Создать или получить чат поддержки между Админом и Юзером
+    /**
+     * Создать или получить чат поддержки
      */
     public static function getOrCreateSupportChat(User $admin, User $user): self
     {
+        // В саппорте админ всегда user1 (для порядка)
         $chat = self::firstOrCreate(
             [
                 'user1_id' => $admin->id, 
@@ -96,16 +113,23 @@ class Chat extends Model
             ['last_message_at' => now()]
         );
 
-        //  Гарантируем, что участники чата существуют в БД (чтобы работали счетчики)
-        \App\Models\ChatParticipant::firstOrCreate(
-            ['chat_id' => $chat->id, 'user_id' => $admin->id],
-            ['unread_count' => 0]
-        );
-        \App\Models\ChatParticipant::firstOrCreate(
-            ['chat_id' => $chat->id, 'user_id' => $user->id],
-            ['unread_count' => 0]
-        );
+        self::ensureParticipantsExist($chat, $admin->id, $user->id);
 
         return $chat;
+    }
+
+    /**
+     * Внутренний метод для создания участников чата (чтобы не дублировать код)
+     */
+    private static function ensureParticipantsExist(self $chat, int $user1Id, int $user2Id): void
+    {
+        ChatParticipant::firstOrCreate(
+            ['chat_id' => $chat->id, 'user_id' => $user1Id],
+            ['unread_count' => 0]
+        );
+        ChatParticipant::firstOrCreate(
+            ['chat_id' => $chat->id, 'user_id' => $user2Id],
+            ['unread_count' => 0]
+        );
     }
 }

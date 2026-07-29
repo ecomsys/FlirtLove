@@ -13,6 +13,10 @@ class Swipe extends Model
         'type',
     ];
 
+    // ============================================
+    // СВЯЗИ
+    // ============================================
+
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class, 'user_id');
@@ -22,12 +26,20 @@ class Swipe extends Model
     {
         return $this->belongsTo(User::class, 'target_user_id');
     }
-        /**
-     * Локальный скоуп: Исключает свайпы, где админ выступает инициатором или целью.
+
+    // ============================================
+    // СКОПЫ
+    // ============================================
+
+    // Убрали scopeExcludeAdmins, так как это тяжелый whereHas.
+    // Админов мы фильтруем на уровне выбора юзеров для ленты, 
+    // в свайпы они просто не попадут.
+
+    /**
+     * Только лайки и суперлайки (для поиска мэтчей)
      */
-    public function scopeExcludeAdmins($query)
+    public function scopePositive($query)
     {
-        return $query->whereHas('user', fn($q) => $q->where('is_admin', false))
-                     ->whereHas('targetUser', fn($q) => $q->where('is_admin', false));
+        return $query->whereIn('type', ['like', 'superlike']);
     }
 }

@@ -11,9 +11,14 @@ class PhotoAlbumsSeeder extends Seeder
 {
     public function run(): void
     {
-        $this->command->info('📸 Создаём альбомы и фото (идемпотентно)...');
+        $this->command->info('📸 Создаём альбомы и фото (с реальными URL)...');
 
-         $users = User::excludeAdmins()->get();
+        $users = User::where('is_admin', false)->get();
+
+        if ($users->isEmpty()) {
+            $this->command->warn('⚠️ Нет пользователей для создания альбомов.');
+            return;
+        }
 
         $otherAlbumNames = [
             'Путешествия', 'Друзья', 'Семья', 'Хобби',
@@ -25,7 +30,6 @@ class PhotoAlbumsSeeder extends Seeder
 
         foreach ($users as $user) {
             // --- ДЕФОЛТНЫЙ АЛЬБОМ ---
-            // Обновляем или создаём (если уже есть, то не дублируем)
             $defaultAlbum = Album::updateOrCreate(
                 [
                     'user_id' => $user->id,
@@ -37,27 +41,26 @@ class PhotoAlbumsSeeder extends Seeder
                 ]
             );
 
-            // Считаем только если альбом был создан сейчас, а не обновлён
             if ($defaultAlbum->wasRecentlyCreated) {
                 $totalAlbumsCreated++;
             }
 
-            // Фото в дефолтный альбом (если их ещё нет)
             if ($defaultAlbum->photos()->count() === 0) {
-                $defaultPhotoCount = rand(1, 2);
+                $defaultPhotoCount = rand(2, 4);
                 for ($p = 0; $p < $defaultPhotoCount; $p++) {
                     $imgId = rand(1, 70);
+                    
                     Photo::create([
                         'user_id' => $user->id,
                         'album_id' => $defaultAlbum->id,
-                        'path' => "https://i.pravatar.cc/800?img={$imgId}",
                         'path_original' => "https://i.pravatar.cc/800?img={$imgId}",
                         'path_large' => "https://i.pravatar.cc/800?img={$imgId}",
-                        'path_medium' => "https://i.pravatar.cc/800?img={$imgId}",
+                        'path_medium' => "https://i.pravatar.cc/500?img={$imgId}",
                         'path_thumb' => "https://i.pravatar.cc/300?img={$imgId}",
                         'is_primary' => $p === 0,
                         'is_intimate' => false,
                         'status' => 'approved',
+                        'position' => $p,
                     ]);
                     $totalPhotos++;
                 }
@@ -69,7 +72,6 @@ class PhotoAlbumsSeeder extends Seeder
             $selectedNames = array_slice($otherAlbumNames, 0, $extraCount);
 
             foreach ($selectedNames as $name) {
-                // Проверяем, нет ли уже такого альбома у пользователя
                 $album = Album::firstOrCreate(
                     [
                         'user_id' => $user->id,
@@ -85,22 +87,22 @@ class PhotoAlbumsSeeder extends Seeder
                     $totalAlbumsCreated++;
                 }
 
-                // Фото в дополнительный альбом (если ещё нет)
                 if ($album->photos()->count() === 0) {
-                    $photoCount = rand(1, 2);
+                    $photoCount = rand(1, 3);
                     for ($p = 0; $p < $photoCount; $p++) {
                         $imgId = rand(1, 70);
+                        
                         Photo::create([
                             'user_id' => $user->id,
                             'album_id' => $album->id,
-                            'path' => "https://i.pravatar.cc/800?img={$imgId}",
                             'path_original' => "https://i.pravatar.cc/800?img={$imgId}",
                             'path_large' => "https://i.pravatar.cc/800?img={$imgId}",
-                            'path_medium' => "https://i.pravatar.cc/800?img={$imgId}",
+                            'path_medium' => "https://i.pravatar.cc/500?img={$imgId}",
                             'path_thumb' => "https://i.pravatar.cc/300?img={$imgId}",
                             'is_primary' => false,
-                            'is_intimate' => false,
+                            'is_intimate' => rand(0, 1) === 1,
                             'status' => 'approved',
+                            'position' => $p,
                         ]);
                         $totalPhotos++;
                     }
@@ -109,7 +111,6 @@ class PhotoAlbumsSeeder extends Seeder
         }
 
         $this->command->info('   ✅ Создано новых альбомов: ' . $totalAlbumsCreated);
-        $this->command->info('   ✅ Создано/добавлено фото: ' . $totalPhotos);
-        $this->command->info('   🔁 Старые альбомы и фото сохранены, дубли не созданы.');
+        $this->command->info('   ✅ Создано фото: ' . $totalPhotos);
     }
 }

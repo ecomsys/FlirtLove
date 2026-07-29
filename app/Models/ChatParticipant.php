@@ -18,6 +18,10 @@ class ChatParticipant extends Model
         'last_read_at' => 'datetime',
     ];
 
+    // ============================================
+    // СВЯЗИ
+    // ============================================
+
     public function chat(): BelongsTo
     {
         return $this->belongsTo(Chat::class);
@@ -26,5 +30,23 @@ class ChatParticipant extends Model
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
+    }
+
+    // ============================================
+    // ХЕЛПЕРЫ
+    // ============================================
+
+    /**
+     * Пометить сообщения в чате как прочитанные.
+     * Вызываем, когда юзер открывает переписку.
+     */
+    public function markAsRead(): void
+    {
+        if ($this->unread_count > 0) {
+            $this->update([
+                'unread_count' => 0,
+                'last_read_at' => now(),
+            ]);
+        }
     }
 }

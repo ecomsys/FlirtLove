@@ -1,4 +1,5 @@
 <?php
+
 use Livewire\Volt\Component;
 use Illuminate\Support\Facades\Auth;
 
@@ -7,8 +8,9 @@ new class extends Component {
 
     public function mount(): void
     {
-        if (Auth::check() && Auth::user()->theme) {
-            $this->theme = Auth::user()->theme;
+        if (Auth::check()) {
+            // Берем theme из preferences
+            $this->theme = Auth::user()->preferences?->theme ?? session()->get('theme', 'light');
         } else {
             $this->theme = session()->get('theme', 'light');
         }
@@ -20,10 +22,15 @@ new class extends Component {
         session()->put('theme', $this->theme);
 
         if (Auth::check()) {
-            Auth::user()->update(['theme' => $this->theme]);
+            $user = Auth::user();
+            if ($user->preferences) {
+                $user->preferences->update(['theme' => $this->theme]);
+            } else {
+                $user->preferences()->create(['theme' => $this->theme]);
+            }
         }
     }
-}; ?>
+};?>
 
 
 <button x-on:click="window.toggleTheme(); $wire.saveThemeToDb()" type="button"

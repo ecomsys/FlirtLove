@@ -22,6 +22,10 @@ class Album extends Model
         'is_default' => 'boolean',
     ];
 
+    // ============================================
+    // СТАТИЧЕСКИЕ ХЕЛПЕРЫ
+    // ============================================
+
     /**
      * Создать альбом "Общие" для нового пользователя
      */
@@ -40,24 +44,30 @@ class Album extends Model
      */
     public static function getDefaultForUser(User $user): self
     {
-        $default = self::where('user_id', $user->id)
-            ->where('is_default', true)
-            ->first();
-
-        if (!$default) {
-            $default = self::createDefaultForUser($user);
-        }
-
-        return $default;
+        return self::firstOrCreate(
+            ['user_id' => $user->id, 'is_default' => true],
+            ['name' => 'Общие', 'description' => 'Основные фотографии']
+        );
     }
+
+    // ============================================
+    // СВЯЗИ
+    // ============================================
 
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
     }
 
+    /**
+     * Фото в альбоме.
+     * ВАЖНО: Добавлена сортировка по умолчанию!
+     * Сначала идет главная фото (is_primary = 1 -> 0), потом по позиции.
+     */
     public function photos(): HasMany
     {
-        return $this->hasMany(Photo::class);
+        return $this->hasMany(Photo::class)
+            ->orderByDesc('is_primary')
+            ->orderBy('position');
     }
 }

@@ -11,18 +11,26 @@ class PhotoCommentSeeder extends Seeder
 {
     public function run(): void
     {
-        // ✅ Исключаем админов из комментаторов
-        $users = User::excludeAdmins()->get();
+        // Получаем обычных пользователей (не админов)
+        $users = User::where('is_admin', false)->get();
         $photos = Photo::where('status', 'approved')->get();
 
-        if ($users->isEmpty() || $photos->isEmpty()) {
-            $this->command->warn('⚠️ Нет пользователей или фото для комментариев!');
+        if ($users->isEmpty()) {
+            $this->command->warn('⚠️ Нет пользователей для комментариев!');
             return;
         }
 
-        // ✅ Очищаем старые комментарии
-        PhotoComment::truncate();
-        $this->command->info('🗑️ Старые комментарии удалены');
+        if ($photos->isEmpty()) {
+            $this->command->warn('⚠️ Нет одобренных фото для комментариев!');
+            return;
+        }
+
+        // Очищаем старые комментарии (без truncate, чтобы не сбрасывать sequence)
+        $deletedCount = PhotoComment::count();
+        if ($deletedCount > 0) {
+            PhotoComment::query()->delete();
+            $this->command->info("🗑️ Удалено {$deletedCount} старых комментариев");
+        }
 
         $this->command->info('💬 Создаем комментарии к фото...');
 
@@ -34,7 +42,8 @@ class PhotoCommentSeeder extends Seeder
             'Необычный ракурс!', 'Потрясающе!', 'Какая красота!',
             'Очень понравилось!', 'Хочу туда же!', 'Просто вау! 🤩',
             'Отличная композиция!', 'Спасибо за фото!', 'У вас хороший вкус!',
-            'Вдохновляюще!', '😊 Прекрасно!',
+            'Вдохновляюще!', '😊 Прекрасно!', 'Шикарно!', 'Огонь! 🔥',
+            'Красотка!', 'Отличный кадр!', 'Суперски выглядишь!',
         ];
 
         $bar = $this->command->getOutput()->createProgressBar(40);
@@ -52,9 +61,13 @@ class PhotoCommentSeeder extends Seeder
                 'user_id' => $user->id,
                 'content' => $comments[array_rand($comments)],
                 'status' => $statuses[array_rand($statuses)],
-                'parent_id' => null,           // ✅ КОРНЕВОЙ
+                'parent_id' => null,
                 'likes_count' => rand(0, 10),
+                'reports_count' => rand(0, 3),
+                'is_edited' => (bool) rand(0, 1),
+                'is_pinned' => (bool) rand(0, 1),
                 'created_at' => now()->subDays(rand(0, 10)),
+                'updated_at' => now()->subDays(rand(0, 5)),
             ]);
 
             $createdCount++;
@@ -63,23 +76,25 @@ class PhotoCommentSeeder extends Seeder
 
         // ============================================
         // 2. КОММЕНТАРИИ С ОТВЕТАМИ (10 шт)
-        //    Родительский комментарий ВСЕГДА APPROVED
-        //    Ответы могут быть любыми (parent_id = id родителя)
         // ============================================
         for ($i = 0; $i < 10; $i++) {
             $photo = $photos->random();
             $user = $users->random();
             $replyUser = $users->random();
 
-            // ✅ Родительский комментарий — КОРНЕВОЙ, всегда APPROVED
+            // Родительский комментарий — КОРНЕВОЙ, всегда APPROVED
             $parent = PhotoComment::create([
                 'photo_id' => $photo->id,
                 'user_id' => $user->id,
                 'content' => $comments[array_rand($comments)] . ' (родитель)',
-                'status' => 'approved',        // ✅ Только approved!
-                'parent_id' => null,           // ✅ КОРНЕВОЙ
+                'status' => 'approved',
+                'parent_id' => null,
                 'likes_count' => rand(0, 10),
+                'reports_count' => rand(0, 2),
+                'is_edited' => false,
+                'is_pinned' => (bool) rand(0, 1),
                 'created_at' => now()->subDays(rand(0, 10)),
+                'updated_at' => now()->subDays(rand(0, 5)),
             ]);
 
             // ✅ Ответ — parent_id = id родителя
@@ -88,9 +103,13 @@ class PhotoCommentSeeder extends Seeder
                 'user_id' => $replyUser->id,
                 'content' => 'Ответ: ' . $comments[array_rand($comments)],
                 'status' => $statuses[array_rand($statuses)],
-                'parent_id' => $parent->id,    // ✅ ССЫЛКА НА РОДИТЕЛЯ
+                'parent_id' => $parent->id,
                 'likes_count' => rand(0, 5),
+                'reports_count' => rand(0, 2),
+                'is_edited' => (bool) rand(0, 1),
+                'is_pinned' => false,
                 'created_at' => now()->subDays(rand(0, 5)),
+                'updated_at' => now()->subDays(rand(0, 3)),
             ]);
 
             // Иногда второй ответ
@@ -103,8 +122,14 @@ class PhotoCommentSeeder extends Seeder
                     'status' => $statuses[array_rand($statuses)],
                     'parent_id' => $parent->id,
                     'likes_count' => rand(0, 3),
+                    'reports_count' => rand(0, 1),
+                    'is_edited' => false,
+                    'is_pinned' => false,
                     'created_at' => now()->subDays(rand(0, 3)),
+                    'updated_at' => now()->subDays(rand(0, 2)),
                 ]);
+                $createdCount++;
+                $bar->advance();
             }
 
             $createdCount += 2; // parent + reply
@@ -131,7 +156,11 @@ class PhotoCommentSeeder extends Seeder
                     'status' => $statuses[array_rand($statuses)],
                     'parent_id' => $existingParent->id,
                     'likes_count' => rand(0, 5),
+                    'reports_count' => rand(0, 2),
+                    'is_edited' => (bool) rand(0, 1),
+                    'is_pinned' => false,
                     'created_at' => now()->subDays(rand(0, 3)),
+                    'updated_at' => now()->subDays(rand(0, 2)),
                 ]);
                 $createdCount++;
                 $bar->advance();
@@ -150,17 +179,46 @@ class PhotoCommentSeeder extends Seeder
                 'status' => 'approved',
                 'parent_id' => null,
                 'likes_count' => rand(0, 15),
+                'reports_count' => rand(0, 2),
+                'is_edited' => false,
+                'is_pinned' => (bool) rand(0, 1),
                 'created_at' => now()->subDays(rand(0, 7)),
+                'updated_at' => now()->subDays(rand(0, 4)),
             ]);
 
             $createdCount++;
             $bar->advance();
         }
 
-        $bar->finish();
-        $this->command->newLine();
-        $this->command->info('✅ Создано комментариев: ' . PhotoComment::count());
+        // 3.3. Добавляем несколько комментариев от админа (если есть)
+        $admin = User::where('is_admin', true)->first();
+        if ($admin) {
+            for ($i = 0; $i < 3; $i++) {
+                $photo = $photos->random();
+                PhotoComment::create([
+                    'photo_id' => $photo->id,
+                    'user_id' => $admin->id,
+                    'content' => '🔥 Админ одобряет! ' . $comments[array_rand($comments)],
+                    'status' => 'approved',
+                    'parent_id' => null,
+                    'likes_count' => rand(5, 20),
+                    'reports_count' => 0,
+                    'is_edited' => false,
+                    'is_pinned' => (bool) rand(0, 1),
+                    'created_at' => now()->subDays(rand(0, 5)),
+                    'updated_at' => now(),
+                ]);
+                $createdCount++;
+                $bar->advance();
+            }
+        }
 
+        $bar->finish();
+        $this->command->newLine(2);
+
+        // ============================================
+        // СТАТИСТИКА
+        // ============================================
         $stats = [
             'total' => PhotoComment::count(),
             'pending' => PhotoComment::where('status', 'pending')->count(),
@@ -171,13 +229,20 @@ class PhotoCommentSeeder extends Seeder
             'root' => PhotoComment::whereNull('parent_id')->count(),
         ];
 
+        $this->command->info('✅ Создано комментариев: ' . $stats['total']);
+        $this->command->info('');
         $this->command->info('📊 Статистика:');
-        $this->command->info("   - Всего: {$stats['total']}");
-        $this->command->info("   - Корневых: {$stats['root']}");
-        $this->command->info("   - Ответов: {$stats['replies']}");
-        $this->command->info("   - Ожидают: {$stats['pending']}");
-        $this->command->info("   - Одобрены: {$stats['approved']}");
-        $this->command->info("   - Отклонены: {$stats['rejected']}");
-        $this->command->info("   - Спам: {$stats['spam']}");
+        $this->command->info("   ┌─────────────────┬──────────┐");
+        $this->command->info("   │ Тип             │ Количество │");
+        $this->command->info("   ├─────────────────┼──────────┤");
+        $this->command->info("   │ Всего           │ {$stats['total']}        │");
+        $this->command->info("   │ Корневые        │ {$stats['root']}        │");
+        $this->command->info("   │ Ответы          │ {$stats['replies']}        │");
+        $this->command->info("   ├─────────────────┼──────────┤");
+        $this->command->info("   │ Ожидают         │ {$stats['pending']}        │");
+        $this->command->info("   │ Одобрены        │ {$stats['approved']}        │");
+        $this->command->info("   │ Отклонены       │ {$stats['rejected']}        │");
+        $this->command->info("   │ Спам            │ {$stats['spam']}        │");
+        $this->command->info("   └─────────────────┴──────────┘");
     }
 }

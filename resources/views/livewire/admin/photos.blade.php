@@ -1,118 +1,150 @@
 <?php
 
+use App\Actions\Admin\Photos\ModeratePhotoAction;
 use App\Models\Photo;
 use App\Models\User;
-use App\Jobs\ProcessApprovedPhoto;
-use App\Notifications\PhotoModerated;
 use Livewire\Volt\Component;
 use Livewire\Attributes\Layout;
 use Livewire\WithPagination;
-use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Facades\DB;
 
-/**
- * Компонент модерации фотографий.
- * Отвечает за просмотр ожидающих/одобренных фото, массовую обработку,
- * удаление файлов с диска и отправку уведомлений пользователям.
- */
-new #[Layout('layouts.admin')] class extends Component {
+new #[Layout('layouts.admin')] class extends Component 
+{
     use WithPagination;
 
-    /** @var string Текущий статус фильтра (pending, approved, all) */
     public $status = 'pending';
-
-    /** @var int Количество пользователей на странице (для pending) */
     public $perPage = 5;
-
-    /** @var int Количество фото на странице (для approved/all) */
     public $perPhotos = 12;
-
-    /** @var string Поисковый запрос (имя или ID пользователя) */
     public $search = '';
 
-    /**
-     * Инициализация компонента.
-     * Восстанавливает фильтры из сессии.
-     */
     public function mount()
     {
         $saved = session('moderate_photos', []);
-
-        if (isset($saved['status'])) {
-            $this->status = $saved['status'];
-        }
-        if (isset($saved['search'])) {
-            $this->search = $saved['search'];
-        }
+        if (isset($saved['status'])) $this->status = $saved['status'];
+        if (isset($saved['search'])) $this->search = $saved['search'];
     }
 
-    /**
-     * Полное физическое удаление всех версий фото с диска.
-     * Обрабатывает 4 размера (original, large, medium, thumb), чтобы не оставлять мусора.
-     *
-     * @param Photo $photo
-     */
-    private function deletePhotoFiles(Photo $photo): void
-    {
-        $paths = [
-            $photo->path, // Дублирует medium, но на всякий случай
-            $photo->path_original,
-            $photo->path_large,
-            $photo->path_medium,
-            $photo->path_thumb,
-        ];
-
-        foreach ($paths as $path) {
-            // Удаляем только локальные файлы, игнорируя внешние URL (например, аватарки из соцсетей)
-            if ($path && !filter_var($path, FILTER_VALIDATE_URL)) {
-                Storage::disk('public')->delete($path);
-            }
-        }
-    }
-
-    /**
-     * Хук Livewire: срабатывает при смене статуса.
-     * Сохраняет выбор в сессию и сбрасывает пагинацию.
-     */
     public function updatedStatus(): void
     {
         session(['moderate_photos.status' => $this->status]);
         $this->resetPage();
     }
 
-    /**
-     * Хук Livewire: срабатывает при вводе поиска.
-     * Сохраняет выбор в сессию и сбрасывает пагинацию.
-     */
     public function updatedSearch(): void
     {
         session(['moderate_photos.search' => $this->search]);
         $this->resetPage();
     }
 
-    /**
-     * Вычисляемое свойство: подготовка данных для страницы.
-     * Для pending — группирует фото по пользователям.
-     * Для approved/all — выводит общим списком.
-     */
+    public function clearSearch(): void
+    {
+        $this->search = '';
+        session()->forget('moderate_photos.search');
+        $this->resetPage();
+    }
+
+    public function setStatus(string $status): void
+    {
+        $this->status = $status;
+        session(['moderate_photos.status' => $status]);
+        $this->resetPage();
+    }
+
+    // === ДЕЙСТВИЯ (Вызывают Action класс!) ===
+
+    public function approve(int $photoId): void
+    {
+        $photo = Photo::find($photoId);
+        if (!$photo) return;
+
+        (new ModeratePhotoAction)->approve($photo);
+
+        $this->dispatch('show-toast', type: 'success', message: 'Фото одобрено. Запущена обработка...');
+        $this->dispatch('$refresh');
+    }
+
+    public function reject(int $photoId): void
+    {
+        $photo = Photo::find($photoId);
+        if (!$photo) return;
+
+        (new ModeratePhotoAction)->reject($photo);
+
+        $this->dispatch('show-toast', type: 'error', message: 'Фото отклонено и удалено.');
+        $this->dispatch('$refresh');
+    }
+
+    public function destroy(int $photoId): void
+    {
+        $photo = Photo::find($photoId);
+        if (!$photo) return;
+
+        (new ModeratePhotoAction)->destroy($photo);
+
+        $this->dispatch('show-toast', type: 'success', message: 'Фото навсегда удалено.');
+        $this->dispatch('$refresh');
+    }
+
+    public function setPrimary(int $photoId): void
+    {
+        $photo = Photo::find($photoId);
+        if (!$photo) return;
+
+        (new ModeratePhotoAction)->setPrimary($photo);
+
+        $this->dispatch('show-toast', type: 'success', message: 'Фото установлено как основное.');
+        $this->dispatch('$refresh');
+    }
+
+    public function approveUser(int $userId): void
+    {
+        $user = User::find($userId);
+        if (!$user) return;
+
+        $count = (new ModeratePhotoAction)->approveAllForUser($user);
+
+        if ($count === 0) {
+            $this->dispatch('show-toast', type: 'info', message: 'Нет фото для одобрения.');
+        } else {
+            $this->dispatch('show-toast', type: 'success', message: "Все фото пользователя {$user->name} ($count шт.) отправлены на обработку.");
+        }
+        $this->dispatch('$refresh');
+    }
+
+    public function rejectUser(int $userId): void
+    {
+        $user = User::find($userId);
+        if (!$user) return;
+
+        $count = (new ModeratePhotoAction)->rejectAllForUser($user);
+
+        if ($count === 0) {
+            $this->dispatch('show-toast', type: 'info', message: 'Нет фото для отклонения.');
+        } else {
+            $this->dispatch('show-toast', type: 'error', message: "Все фото пользователя {$user->name} ($count шт.) отклонены и удалены.");
+        }
+        $this->dispatch('$refresh');
+    }
+
+    // === ВЫВОД ДАННЫХ (Остается как было, но чисто) ===
+
     public function with(): array
     {
         if ($this->status == 'pending') {
-            // Жадная загрузка: тянем только юзеров, у которых есть pending фото
+            // ИСПРАВЛЕНО: убрали тяжелый scopeExcludeAdmins, просто фильтруем по has_completed_onboarding
             $users = User::withWhereHas('photos', function ($query) {
                 $query->where('status', 'pending')->orderBy('is_primary', 'desc')->oldest();
             })
-                ->excludeAdmins() 
-                ->with([
-                    'photos' => function ($query) {
-                        $query->where('status', 'pending')->orderBy('is_primary', 'desc')->oldest()->with('album');
-                    },
-                ])
-                ->paginate($this->perPage);
+            ->where('is_admin', false) // Простой where вместо whereHas
+            ->with([
+                'photos' => function ($query) {
+                    $query->where('status', 'pending')->orderBy('is_primary', 'desc')->oldest()->with('album');
+                },
+            ])
+            ->paginate($this->perPage);
 
             $photos = collect();
         } else {
-            $query = Photo::with(['user', 'album'])->excludeAdmins(); 
+            $query = Photo::with(['user', 'album'])->whereHas('user', fn($q) => $q->where('is_admin', false));
 
             if ($this->status == 'approved') {
                 $query->where('status', 'approved')->latest();
@@ -122,15 +154,11 @@ new #[Layout('layouts.admin')] class extends Component {
 
             if (!empty($this->search)) {
                 $search = trim($this->search);
-                // Изолируем условия поиска в замыкание
                 $query->where(function ($q) use ($search) {
-                    // Поддержка регистронезависимого поиска для PostgreSQL
                     $operator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
-
                     $q->whereHas('user', function ($subQuery) use ($search, $operator) {
                         $subQuery->where('name', $operator, '%' . $search . '%');
                     });
-
                     if (is_numeric($search)) {
                         $q->orWhere('user_id', (int) $search);
                     }
@@ -141,14 +169,11 @@ new #[Layout('layouts.admin')] class extends Component {
             $users = null;
         }
 
-        // Оптимизация: получаем все счетчики одним SQL-запросом
-        $counts = Photo::excludeAdmins()->selectRaw( // ✅ Исключаем админов из счетчиков
-            "
-            COUNT(*) as total,
-            SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
-            SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) as approved,
-            SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END) as rejected
-        ",
+        $counts = Photo::whereHas('user', fn($q) => $q->where('is_admin', false))->selectRaw(
+            "COUNT(*) as total,
+             SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
+             SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) as approved,
+             SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END) as rejected"
         )->first();
 
         return [
@@ -160,207 +185,7 @@ new #[Layout('layouts.admin')] class extends Component {
             'totalCount' => (int) ($counts->total ?? 0),
         ];
     }
-
-    /**
-     * Очистка поискового запроса.
-     */
-    public function clearSearch(): void
-    {
-        $this->search = '';
-        session()->forget('moderate_photos.search');
-        $this->resetPage();
-    }
-
-    /**
-     * Одобрить ВСЕ pending-фото конкретного пользователя.
-     *
-     * @param int $userId
-     */
-    public function approveUser(int $userId): void
-    {
-        $user = User::find($userId);
-        if (!$user) {
-            return;
-        }
-
-        $photos = $user->photos()->where('status', 'pending')->get();
-        $count = $photos->count();
-
-        if ($count === 0) {
-            $this->dispatch('show-toast', type: 'info', message: 'Нет фото для одобрения.');
-            return;
-        }
-
-        $firstPhotoId = $photos->first()->id;
-
-        DB::transaction(function () use ($photos) {
-            foreach ($photos as $photo) {
-                $photo->update(['status' => 'approved']);
-            }
-        });
-
-        // Отправляем задания в очередь для создания WebP-версий
-        foreach ($photos as $photo) {
-            ProcessApprovedPhoto::dispatch($photo->id);
-        }
-
-        $user->notify(new PhotoModerated($firstPhotoId, $userId, 'approved', $count));
-
-        $this->dispatch('show-toast', type: 'success', message: "Все фото пользователя {$user->name} ({$count} шт.) отправлены на обработку.");
-        $this->dispatch('$refresh');
-    }
-
-    /**
-     * Отклонить ВСЕ pending-фото конкретного пользователя.
-     *
-     * @param int $userId
-     */
-    public function rejectUser(int $userId): void
-    {
-        $user = User::find($userId);
-        if (!$user) {
-            return;
-        }
-
-        $photos = $user->photos()->where('status', 'pending')->get();
-        $count = $photos->count();
-
-        if ($count === 0) {
-            $this->dispatch('show-toast', type: 'info', message: 'Нет фото для отклонения.');
-            return;
-        }
-
-        $firstPhotoId = $photos->first()->id;
-
-        // Сначала удаляем все файлы со всех фото с диска
-        foreach ($photos as $photo) {
-            $this->deletePhotoFiles($photo);
-        }
-
-        // Потом удаляем записи из БД
-        DB::transaction(function () use ($photos) {
-            foreach ($photos as $photo) {
-                $photo->delete();
-            }
-        });
-
-        $user->notify(new PhotoModerated($firstPhotoId, $userId, 'rejected', $count));
-
-        $this->dispatch('show-toast', type: 'error', message: "Все фото пользователя {$user->name} ({$count} шт.) отклонены и удалены.");
-        $this->dispatch('$refresh');
-    }
-
-    /**
-     * Одобрить единичное фото.
-     *
-     * @param int $photoId
-     */
-    public function approve(int $photoId): void
-    {
-        $photo = Photo::find($photoId);
-        if (!$photo) {
-            return;
-        }
-
-        $photo->update(['status' => 'approved']);
-        ProcessApprovedPhoto::dispatch($photoId);
-
-        // Защита от NullPointer: автор фото мог удалить аккаунт
-        if ($photo->user) {
-            $photo->user->notify(new PhotoModerated($photo->id, $photo->user_id, 'approved', 1));
-        }
-
-        $this->dispatch('show-toast', type: 'success', message: 'Фото одобрено. Запущена обработка...');
-        $this->dispatch('$refresh');
-    }
-
-    /**
-     * Отклонить единичное фото (удаляет файлы и БД).
-     *
-     * @param int $photoId
-     */
-    public function reject(int $photoId): void
-    {
-        $photo = Photo::find($photoId);
-        if (!$photo) {
-            return;
-        }
-
-        $userId = $photo->user_id;
-        $user = $photo->user;
-
-        $this->deletePhotoFiles($photo);
-        $photo->delete();
-
-        if ($user) {
-            $user->notify(new PhotoModerated($photo->id, $userId, 'rejected', 1));
-        }
-
-        $this->dispatch('show-toast', type: 'error', message: 'Фото отклонено и удалено.');
-        $this->dispatch('$refresh');
-    }
-
-    /**
-     * Полное удаление уже одобренного фото (из архива).
-     *
-     * @param int $photoId
-     */
-    public function destroy(int $photoId): void
-    {
-        $photo = Photo::find($photoId);
-        if (!$photo) {
-            return;
-        }
-
-        $userId = $photo->user_id;
-        $user = $photo->user;
-
-        // Удаляем все версии файла (оригинал, large, medium, thumb)
-        $this->deletePhotoFiles($photo);
-
-        $photo->delete();
-
-        if ($user) {
-            $user->notify(new PhotoModerated($photo->id, $userId, 'deleted', 1));
-        }
-
-        $this->dispatch('show-toast', type: 'success', message: 'Фото и все его версии удалены.');
-        $this->dispatch('$refresh');
-    }
-
-    /**
-     * Установить фото как основное (аватар).
-     *
-     * @param int $photoId
-     */
-    public function setPrimary(int $photoId): void
-    {
-        $photo = Photo::find($photoId);
-        if ($photo) {
-            // Обернуто в транзакцию: сначала снимаем флаг у старой аватарки, потом ставим новой
-            DB::transaction(function () use ($photo) {
-                Photo::where('user_id', $photo->user_id)->update(['is_primary' => false]);
-                $photo->update(['is_primary' => true]);
-            });
-
-            $this->dispatch('show-toast', type: 'success', message: 'Фото установлено как основное.');
-            $this->dispatch('$refresh');
-        }
-    }
-
-    /**
-     * Установка фильтра статуса.
-     *
-     * @param string $status
-     */
-    public function setStatus(string $status): void
-    {
-        $this->status = $status;
-        session(['moderate_photos.status' => $status]);
-        $this->resetPage();
-    }
-};
-?>
+};?>
 
 <div class="space-y-6">
     <!-- Заголовок -->

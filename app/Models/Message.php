@@ -14,6 +14,10 @@ class Message extends Model
         'body',
     ];
 
+    // ============================================
+    // СВЯЗИ
+    // ============================================
+
     public function chat(): BelongsTo
     {
         return $this->belongsTo(Chat::class);

@@ -57,13 +57,13 @@ Route::middleware(['auth', 'admin'])->prefix('admin')->name('admin.')->group(fun
     Volt::route('/logs', 'admin.logs')->name('logs');
 
     // Модерация фото 
-    Volt::route('/photos', 'admin.moderate-photos')->name('moderate-photos.index');
+    Volt::route('/photos', 'admin.photos')->name('photos.index');
 
     // Модерация комментарии к фото
-    Volt::route('/photo-comments', 'admin.moderate-photo-comments')->name('moderate-photo-comments');
+    Volt::route('/photo-comments', 'admin.photo-comments')->name('photo-comments');
     
     // Модерация знакомств
-    Volt::route('/admin/moderate-dating', 'admin.moderate-dating')->name('moderate-dating');
+    Volt::route('/dating', 'admin.dating')->name('dating');
 
     // Настройки
     Volt::route('/settings', 'admin.settings')->name('settings');    

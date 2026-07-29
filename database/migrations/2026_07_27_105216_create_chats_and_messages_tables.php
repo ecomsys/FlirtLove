@@ -11,29 +11,39 @@ return new class extends Migration
         // Таблица чатов
         Schema::create('chats', function (Blueprint $table) {
             $table->id();
-            $table->enum('type', ['private', 'support'])->default('private')->after('id');
+            $table->enum('type', ['private', 'support'])->default('private');
             $table->foreignId('user1_id')->constrained('users')->onDelete('cascade');
             $table->foreignId('user2_id')->constrained('users')->onDelete('cascade');
-            $table->timestamp('last_message_at')->nullable()->index(); // Для сортировки списка чатов
+            $table->timestamp('last_message_at')->nullable();
             $table->timestamps();
           
-            // Это позволит создать 1 private и 1 support чат между одними и теми же юзерами
+            // Уникальность: 1 private и 1 support чат между юзерами
             $table->unique(['user1_id', 'user2_id', 'type'], 'chats_user1_user2_type_unique');
+            
+            // ИНДЕКС: Для сортировки списка чатов по последнему сообщению
+            $table->index('last_message_at');
+            
+            // ИНДЕКС: Для админки (фильтрация чатов поддержки)
+            $table->index('type');
         });
 
         // Таблица сообщений
         Schema::create('messages', function (Blueprint $table) {
             $table->id();
             $table->foreignId('chat_id')->constrained('chats')->onDelete('cascade');
-            $table->foreignId('sender_id')->nullable()->constrained('users')->onDelete('cascade'); // nullable для системных сообщений от бота
-            $table->enum('type', ['text', 'image', 'system'])->default('text'); // system - для пейвола
+            $table->foreignId('sender_id')->nullable()->constrained('users')->onDelete('cascade'); 
+            $table->enum('type', ['text', 'image', 'system'])->default('text');
             $table->text('body');
             $table->timestamps();
 
-            $table->index(['chat_id', 'created_at']); // Оптимизация выборки сообщений чата
+            // ИНДЕКС: Для пагинации переписки (самый важный индекс!)
+            $table->index(['chat_id', 'created_at']);
+            
+            // ИНДЕКС: Для поиска всех сообщений юзера (или системных)
+            $table->index('sender_id');
         });
 
-        // Счетчик непрочитанных сообщений для каждого юзера
+        // Счетчик непрочитанных сообщений
         Schema::create('chat_participants', function (Blueprint $table) {
             $table->id();
             $table->foreignId('chat_id')->constrained('chats')->onDelete('cascade');
@@ -43,6 +53,9 @@ return new class extends Migration
             $table->timestamps();
 
             $table->unique(['chat_id', 'user_id']);
+            
+            // ИНДЕКС: Для вывода списка чатов конкретного юзера
+            $table->index('user_id');
         });
     }
 

@@ -4,7 +4,7 @@ namespace Database\Seeders;
 
 use App\Models\Setting;
 use Illuminate\Database\Seeder;
-
+use Illuminate\Support\Facades\Cache;
 
 // php artisan db:seed
 
@@ -15,6 +15,8 @@ class SettingSeeder extends Seeder
 {
     public function run(): void
     {
+        $this->command->info('⚙️  Заполняем настройки сайта...');
+
         $settings = [
             // ===== Основные =====
             [
@@ -49,6 +51,14 @@ class SettingSeeder extends Seeder
                 'type' => 'email',
                 'is_public' => true,
             ],
+            [
+                'key' => 'default_locale',
+                'value' => 'ru',
+                'group' => 'general',
+                'label' => 'Язык по умолчанию',
+                'type' => 'text',
+                'is_public' => true,
+            ],
 
             // ===== Модерация =====
             [
@@ -75,6 +85,14 @@ class SettingSeeder extends Seeder
                 'type' => 'boolean',
                 'is_public' => false,
             ],
+            [
+                'key' => 'max_photos_for_moderation',
+                'value' => '5',
+                'group' => 'moderation',
+                'label' => 'Максимум фото на модерацию',
+                'type' => 'number',
+                'is_public' => false,
+            ],
 
             // ===== Безопасность =====
             [
@@ -90,6 +108,48 @@ class SettingSeeder extends Seeder
                 'value' => '5',
                 'group' => 'security',
                 'label' => 'Максимум попыток входа',
+                'type' => 'number',
+                'is_public' => false,
+            ],
+            [
+                'key' => 'session_lifetime',
+                'value' => '120',
+                'group' => 'security',
+                'label' => 'Время жизни сессии (минуты)',
+                'type' => 'number',
+                'is_public' => false,
+            ],
+
+            // ===== Премиум =====
+            [
+                'key' => 'premium_price_monthly',
+                'value' => '499',
+                'group' => 'premium',
+                'label' => 'Цена премиума (месяц)',
+                'type' => 'number',
+                'is_public' => true,
+            ],
+            [
+                'key' => 'premium_price_yearly',
+                'value' => '2999',
+                'group' => 'premium',
+                'label' => 'Цена премиума (год)',
+                'type' => 'number',
+                'is_public' => true,
+            ],
+            [
+                'key' => 'premium_superlikes_per_day',
+                'value' => '5',
+                'group' => 'premium',
+                'label' => 'Суперлайков в день (премиум)',
+                'type' => 'number',
+                'is_public' => false,
+            ],
+            [
+                'key' => 'free_superlikes_per_day',
+                'value' => '1',
+                'group' => 'premium',
+                'label' => 'Суперлайков в день (бесплатно)',
                 'type' => 'number',
                 'is_public' => false,
             ],
@@ -119,15 +179,88 @@ class SettingSeeder extends Seeder
                 'type' => 'url',
                 'is_public' => true,
             ],
+            [
+                'key' => 'youtube_url',
+                'value' => 'https://youtube.com/@loveplanet',
+                'group' => 'social',
+                'label' => 'YouTube',
+                'type' => 'url',
+                'is_public' => true,
+            ],
+
+            // ===== Рассылки =====
+            [
+                'key' => 'broadcast_enabled',
+                'value' => '1',
+                'group' => 'broadcast',
+                'label' => 'Включить рассылки',
+                'type' => 'boolean',
+                'is_public' => false,
+            ],
+            [
+                'key' => 'broadcast_max_per_day',
+                'value' => '3',
+                'group' => 'broadcast',
+                'label' => 'Максимум рассылок в день',
+                'type' => 'number',
+                'is_public' => false,
+            ],
         ];
 
+        $created = 0;
+        $updated = 0;
+
         foreach ($settings as $setting) {
-            Setting::updateOrCreate(
-                ['key' => $setting['key']],
-                $setting
-            );
+            $existing = Setting::where('key', $setting['key'])->first();
+
+            if ($existing) {
+                $existing->update($setting);
+                $updated++;
+            } else {
+                Setting::create($setting);
+                $created++;
+            }
         }
 
-        $this->command->info('✅ Настройки созданы: ' . count($settings));
+        // ============================================
+        // ВАЖНО: Сбрасываем кеш настроек!
+        // ============================================
+        Cache::forget('settings');
+        $this->command->info('   🗑️ Кеш настроек очищен');
+
+        $this->command->newLine();
+        $this->command->info('✅ Настройки созданы/обновлены:');
+        $this->command->info("   - Создано: {$created}");
+        $this->command->info("   - Обновлено: {$updated}");
+        $this->command->info("   - Всего: " . Setting::count());
+
+        // ============================================
+        // Показываем список групп
+        // ============================================
+        $groups = Setting::distinct()->pluck('group');
+        $this->command->info('');
+        $this->command->info('📂 Группы настроек:');
+        foreach ($groups as $group) {
+            $count = Setting::where('group', $group)->count();
+            $this->command->info("   - {$group}: {$count} настройки");
+        }
     }
 }
+
+
+// КАК ИСПОЛЬЗОВАТЬ НАСТРОЙКИ В КОДЕ
+// php
+// // Где угодно в коде
+// use App\Models\Setting;
+
+// // Получить значение
+// $siteName = Setting::get('site_name');
+// $maxPhotos = Setting::get('max_photos_per_user', 10); // с дефолтом
+
+// // В Blade
+// {{ Setting::get('site_name') }}
+
+// // В контроллере
+// if (Setting::get('moderation_auto_approve')) {
+//     // Авто-одобрение включено
+// }

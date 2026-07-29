@@ -10,7 +10,8 @@ new class extends Component {
     public function mount(): void
     {
         if (Auth::check()) {
-            $this->currentLocale = Auth::user()->locale ?? config('app.locale');
+            // Берем locale из preferences
+            $this->currentLocale = Auth::user()->preferences?->locale ?? config('app.locale');
         } else {
             $this->currentLocale = session()->get('locale', config('app.locale'));
         }
@@ -27,13 +28,19 @@ new class extends Component {
         App::setLocale($locale);
 
         if (Auth::check()) {
-            Auth::user()->update(['locale' => $locale]);
+            // Обновляем через preferences
+            $user = Auth::user();
+            if ($user->preferences) {
+                $user->preferences->update(['locale' => $locale]);
+            } else {
+                // На случай, если preferences не создались (хотя должны при регистрации)
+                $user->preferences()->create(['locale' => $locale]);
+            }
         }
 
         $this->redirect(request()->headers->get('Referer'), navigate: false);
     }
-}; ?>
-
+};?>
 
 <x-ui.dropdown-menu>
     <x-ui.dropdown-menu-trigger as-child>

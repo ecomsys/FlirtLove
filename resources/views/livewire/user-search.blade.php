@@ -25,16 +25,26 @@ new class extends Component
 
         $operator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
         $search = '%' . $this->search . '%';
+        
+        // Если ввели цифры, пытаемся искать по ID
+        $searchId = is_numeric($this->search) ? (int) $this->search : 0;
 
         return User::query()
             ->excludeAdmins()
-            ->where(function ($q) use ($operator, $search) {
+            ->where(function ($q) use ($operator, $search, $searchId) {
                 $q->where('name', $operator, $search)
                   ->orWhere('email', $operator, $search);
+                  
+                //  Защита: ищем по ID только если ввели число больше 0
+                if ($searchId > 0) {
+                    $q->orWhere('id', $searchId);
+                }
             })
-            ->orWhere('id', (int) $this->search)
+            //  Загружаем фотки для аксессора аватара (1 запрос на весь список)
+            ->with(['photos' => fn($q) => $q->where('status', 'approved')->orderBy('is_primary', 'desc')->limit(1)])
+            //  Добавили premium_expires_at (для короны) и last_seen (для статуса онлайн)
             ->limit(15)
-            ->get(['id', 'name', 'email', 'is_premium', 'is_banned']);
+            ->get(['id', 'name', 'email', 'is_premium', 'is_banned', 'premium_expires_at', 'last_seen']);
     }
 
     /**
