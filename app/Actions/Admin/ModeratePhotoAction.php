@@ -1,13 +1,12 @@
 <?php
 
-namespace App\Actions\Admin\Photos;
+namespace App\Actions\Admin;
 
 use App\Jobs\ProcessApprovedPhoto;
 use App\Models\Photo;
 use App\Models\User;
 use App\Notifications\PhotoModerated;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Storage;
 
 class ModeratePhotoAction
 {
@@ -18,15 +17,12 @@ class ModeratePhotoAction
     {
         $photo->update(['status' => 'approved']);
 
-        // Твой Job для создания WebP версий
         ProcessApprovedPhoto::dispatch($photo->id);
 
-        // Верификация, если это аватарка
         if ($photo->is_primary && $photo->user) {
             $photo->user->update(['is_verified' => true]);
         }
 
-        // Уведомление юзера (используем твою структуру)
         if ($photo->user) {
             $photo->user->notify(new PhotoModerated($photo->id, $photo->user_id, 'approved', 1));
         }
@@ -37,23 +33,17 @@ class ModeratePhotoAction
     /**
      * Отклонить единичное фото (с полным удалением файлов).
      */
-    public function reject(Photo $photo): Photo
+    public function reject(Photo $photo): void
     {
         $userId = $photo->user_id;
         $user = $photo->user;
 
-        // 1. Удаляем файлы с диска (используем наш метод из модели Photo)
         $photo->deleteFiles();
-
-        // 2. Удаляем запись из БД
         $photo->delete();
 
-        // Уведомление
         if ($user) {
             $user->notify(new PhotoModerated($photo->id, $userId, 'rejected', 1));
         }
-
-        return $photo;
     }
 
     /**
@@ -78,9 +68,7 @@ class ModeratePhotoAction
     public function setPrimary(Photo $photo): void
     {
         DB::transaction(function () use ($photo) {
-            // Снимаем флаг у старой аватарки
             Photo::where('user_id', $photo->user_id)->update(['is_primary' => false]);
-            // Ставим новой
             $photo->update(['is_primary' => true]);
         });
     }
@@ -90,23 +78,26 @@ class ModeratePhotoAction
      */
     public function approveAllForUser(User $user): int
     {
-        $photos = $user->photos()->where('status', 'pending')->get();
-        $count = $photos->count();
+        $photoIds = $user->photos()->where('status', 'pending')->pluck('id');
 
-        if ($count === 0) return 0;
+        if ($photoIds->isEmpty()) return 0;
 
-        // Обновляем статус в БД разом
-        $user->photos()->where('status', 'pending')->update(['status' => 'approved']);
+        DB::transaction(function () use ($photoIds, $user) {
+            Photo::whereIn('id', $photoIds)->update(['status' => 'approved']);
 
-        // Отправляем Job на обработку каждого фото
-        foreach ($photos as $photo) {
-            ProcessApprovedPhoto::dispatch($photo->id);
+            $hasPrimary = Photo::whereIn('id', $photoIds)->where('is_primary', true)->exists();
+            if ($hasPrimary) {
+                $user->update(['is_verified' => true]);
+            }
+        });
+
+        foreach ($photoIds as $id) {
+            ProcessApprovedPhoto::dispatch($id);
         }
 
-        // Уведомление (отправляем ID первого фото и количество)
-        $user->notify(new PhotoModerated($photos->first()->id, $user->id, 'approved', $count));
+        $user->notify(new PhotoModerated($photoIds->first(), $user->id, 'approved', $photoIds->count()));
 
-        return $count;
+        return $photoIds->count();
     }
 
     /**
@@ -115,21 +106,20 @@ class ModeratePhotoAction
     public function rejectAllForUser(User $user): int
     {
         $photos = $user->photos()->where('status', 'pending')->get();
-        $count = $photos->count();
 
-        if ($count === 0) return 0;
+        if ($photos->isEmpty()) return 0;
 
-        // Удаляем физические файлы
-        foreach ($photos as $photo) {
-            $photo->deleteFiles();
-        }
+        $photoIds = $photos->pluck('id');
 
-        // Удаляем записи из БД
-        $user->photos()->where('status', 'pending')->delete();
+        DB::transaction(function () use ($photos, $photoIds) {
+            foreach ($photos as $photo) {
+                $photo->deleteFiles();
+            }
+            Photo::whereIn('id', $photoIds)->delete();
+        });
 
-        // Уведомление
-        $user->notify(new PhotoModerated($photos->first()->id, $user->id, 'rejected', $count));
+        $user->notify(new PhotoModerated($photoIds->first(), $user->id, 'rejected', $photos->count()));
 
-        return $count;
+        return $photos->count();
     }
 }

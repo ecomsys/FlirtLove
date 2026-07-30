@@ -27,12 +27,13 @@ return new class extends Migration
             // Например: "А не забанен ли юзер?", "Может ли он смотреть админку?".
             // Если вынести их в профиль, придется делать JOIN на каждый чих.
             $table->boolean('is_admin')->default(false);
-            $table->boolean('is_banned')->default(false);
+            $table->boolean('is_banned')->default(false);            
+            $table->boolean('is_shadowbanned')->default(false);
             $table->boolean('is_premium')->default(false);
             $table->timestamp('premium_expires_at')->nullable();
             $table->boolean('is_verified')->default(false);
             $table->boolean('has_completed_onboarding')->default(false);
-            $table->boolean('is_deactivated')->default(false); // Заморозка аккаунта
+            $table->boolean('is_deactivated')->default(false); // Заморозка аккаунта           
 
             // === 3. АКТИВНОСТЬ И ЛИМИТЫ ===
             // Эти поля часто обновляются. last_seen обновляется при каждом открытии страницы.

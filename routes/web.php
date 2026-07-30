@@ -67,6 +67,9 @@ Route::middleware(['auth', 'admin'])->prefix('admin')->name('admin.')->group(fun
 
     // Настройки
     Volt::route('/settings', 'admin.settings')->name('settings');    
+
+    // История действий
+    Volt::route('/action-history', 'admin.action-history')->name('action-history.index');
   
 });
 

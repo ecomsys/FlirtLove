@@ -150,6 +150,13 @@ new class extends Component {
             </span>
         @endif
     </a>   
+
+    <!-- История действий -->
+    <a href="{{ route('admin.action-history.index') }}" wire:navigate title="История действий"
+        class="flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium {{ request()->routeIs('admin.action-history.*') ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-accent hover:text-foreground' }}">
+        <x-lucide-scroll-text class="w-4 h-4" />
+        История
+    </a>
     
     <!-- Система -->
     <p class="px-3 text-xs uppercase text-muted-foreground/60 mt-4 mb-1">Система</p>
@@ -175,7 +182,8 @@ new class extends Component {
         class="flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium {{ request()->routeIs('admin.finances') ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-accent hover:text-foreground' }}">
         <x-lucide-wallet class="w-4 h-4" />
         Финансы
-    </a>
+    </a>   
+    
 
     <a href="{{ route('admin.settings') }}" wire:navigate
         class="flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium {{ request()->routeIs('admin.settings') ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-accent hover:text-foreground' }}">

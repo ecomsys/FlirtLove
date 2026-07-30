@@ -76,13 +76,19 @@ class PhotoModerated extends Notification implements ShouldQueue
         $messages = $this->getMessages();
         
         return [
+            // === УНИФИЦИРОВАННАЯ СТРУКТУРА ===
             'type' => 'photo_moderated',
-            'photo_id' => $this->photoId,
-            'user_id' => $this->userId,
-            'status' => $this->status,
-            'count' => $this->count,
             'title' => $messages['title'],
             'message' => $messages['message'],
+            'action_url' => url('/profile'),
+            
+            // === СПЕЦИФИЧНЫЕ ДАННЫЕ ===
+            'data' => [
+                'photo_id' => $this->photoId,
+                'user_id' => $this->userId,
+                'status' => $this->status,
+                'count' => $this->count,
+            ]
         ];
     }
 
@@ -91,14 +97,20 @@ class PhotoModerated extends Notification implements ShouldQueue
         $messages = $this->getMessages();
         
         return new BroadcastMessage([
+            // === УНИФИЦИРОВАННАЯ СТРУКТУРА ===
             'type' => 'photo_moderated',
-            'photo_id' => $this->photoId,
-            'user_id' => $this->userId,
-            'status' => $this->status,
-            'count' => $this->count,
             'title' => $messages['title'],
             'message' => $messages['message'],
+            'action_url' => url('/profile'),
             'timestamp' => now()->toDateTimeString(),
+            
+            // === СПЕЦИФИЧНЫЕ ДАННЫЕ ===
+            'data' => [
+                'photo_id' => $this->photoId,
+                'user_id' => $this->userId,
+                'status' => $this->status,
+                'count' => $this->count,
+            ]
         ]);
     }
 

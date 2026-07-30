@@ -20,7 +20,6 @@ class UserSeeder extends Seeder
         $goals = ['friends', 'romantic', 'family', 'casual'];
         $cities = ['Москва', 'Санкт-Петербург', 'Казань', 'Новосибирск', 'Екатеринбург', 'Сочи', 'Краснодар', 'Владивосток'];
         
-        // Текстовые заготовки
         $bios = [
             "Люблю путешествия и активный отдых. Ищу единомышленников.",
             "Ищу серьезные отношения. Ценю честность и юмор.",
@@ -38,10 +37,8 @@ class UserSeeder extends Seeder
         $activities = ["IT", "Медицина", "Маркетинг", "Финансы", "Дизайн", "Образование", "Продажи"];
         $positions = ["Разработчик", "Менеджер проекта", "Врач-терапевт", "Учитель", "Дизайнер интерфейсов", "Бухгалтер", "Маркетолог"];
 
-        // Подключаем словарь опций
         $options = config('profile_options');
 
-        // Хелпер для получения случайного набора ID из массива
         $getRandomIds = function(array $options, int $min = 1, int $max = 3): array {
             $keys = array_keys($options);
             shuffle($keys);
@@ -49,7 +46,6 @@ class UserSeeder extends Seeder
             return array_slice($keys, 0, $count);
         };
 
-        // Отключаем события модели, чтобы не создавались дубликаты
         User::unsetEventDispatcher();
 
         for ($i = 1; $i <= 10; $i++) {
@@ -58,62 +54,63 @@ class UserSeeder extends Seeder
             $day = rand(1, 28);
             $birthDate = "{$year}-{$month}-{$day}";
 
-            // Рандомно решаем, будет ли юзер премиумом (30% шанс)
             $isPremium = rand(1, 10) <= 3;
             $premiumExpires = $isPremium ? now()->addDays(rand(10, 365)) : null;
 
-            // Рандомный пол
             $gender = $genders[array_rand($genders)];
 
-            // ============================================
-            // 1. СОЗДАЕМ ПОЛЬЗОВАТЕЛЯ
-            // ============================================
+            // ✅ ГАРАНТИРОВАННЫЙ ТЕСТ МУЛЬТИАККОВ
+            // Пользователи 8, 9 и 10 будут сидеть с одного IP (имитация ботоварни)
+            if (in_array($i, [8, 9, 10])) {
+                $ip = '185.23.44.12'; 
+            } else {
+                // Остальные - случайные уникальные
+                $ip = rand(100, 220) . '.' . rand(10, 250) . '.' . rand(1, 255) . '.' . rand(1, 255);
+            }
+
             $user = User::create([
                 'name' => 'Пользователь ' . $i,
                 'email' => 'user' . $i . '@test.com',
                 'password' => Hash::make('password'),
                 'email_verified_at' => now(),
                 
-                // Статусы и флаги
                 'is_admin' => false,
                 'is_banned' => false,
+                'is_shadowbanned' => (bool) (rand(1, 20) === 1), 
                 'is_premium' => $isPremium,
                 'premium_expires_at' => $premiumExpires,
                 'is_verified' => (bool) rand(0, 1),
                 'has_completed_onboarding' => true,
                 'is_deactivated' => false,
                 
-                // Активность
                 'superlikes_remaining' => rand(0, 5),
                 'last_login_at' => now()->subDays(rand(0, 30)),
-                'last_login_ip' => '127.0.0.1',
+                'last_login_ip' => $ip, 
                 'last_seen' => now()->subMinutes(rand(1, 4320)),
             ]);
 
-            // ============================================
-            // 2. СОЗДАЕМ ПРОФИЛЬ
-            // ============================================
-            $profile = UserProfile::create([
+            $lat = 55.5 + (rand(0, 100) / 100); 
+            $lng = 37.3 + (rand(0, 100) / 100); 
+
+            UserProfile::create([
                 'user_id' => $user->id,
                 'gender' => $gender,
                 'birth_date' => $birthDate,
                 'dating_goal' => $goals[array_rand($goals)],
                 'city' => $cities[array_rand($cities)],
+                'country' => 'Россия',
                 
-                // Тексты
                 'status' => $bios[array_rand($bios)],
                 'bio' => $bios[array_rand($bios)],
                 'looking_for' => $lookingFors[array_rand($lookingFors)],
                 'interests' => ['музыка', 'кино', 'спорт', 'путешествия', 'книги'],
                 
-                // Внешность (одиночный выбор)
                 'body_type' => array_rand($options['body_type']),
                 'eye_color' => array_rand($options['eye_color']),
                 'hair_color' => array_rand($options['hair_color']),
                 'height' => rand(155, 200),
                 'weight' => rand(45, 110),
                 
-                // Личные данные (одиночный выбор)
                 'relationship_status' => array_rand($options['relationship_status']),
                 'children_status' => array_rand($options['children_status']),
                 'pets' => array_rand($options['pets']),
@@ -122,12 +119,10 @@ class UserSeeder extends Seeder
                 'smoking' => array_rand($options['smoking']),
                 'alcohol' => array_rand($options['alcohol']),
                 
-                // Множественный выбор (JSON)
                 'body_decorations' => $getRandomIds($options['body_decorations'], 0, 2),
                 'languages' => $getRandomIds($options['languages'], 1, 3),
                 'sports' => $getRandomIds($options['sports'], 0, 4),
                 
-                // Работа и образование
                 'education' => array_rand($options['education_level']),
                 'occupation' => $positions[array_rand($positions)],
                 'institution' => $institutions[array_rand($institutions)],
@@ -135,19 +130,14 @@ class UserSeeder extends Seeder
                 'activity' => $activities[array_rand($activities)],
                 'position' => $positions[array_rand($positions)],
                 
-                // Гороскоп
                 'zodiac_sign' => $this->getZodiacSign($month, $day),
                 
-                // Счетчики
                 'profile_views' => rand(0, 500),
                 'likes_count' => rand(0, 150),
+                
+                'location' => DB::raw("ST_SetSRID(ST_MakePoint({$lng}, {$lat}), 4326)"),
             ]);
 
-            // ============================================
-            // 3. СОЗДАЕМ НАСТРОЙКИ
-            // ============================================
-            
-            // Настройки фильтров чата (только для Premium)
             if ($isPremium) {
                 $chatFilterEnabled = (bool) rand(0, 1);
                 $chatFilterSettings = [
@@ -162,7 +152,6 @@ class UserSeeder extends Seeder
                 $chatFilterSettings = null;
             }
 
-            // Расширенный поиск (Доступен ВСЕМ юзерам)
             $searchFilters = [
                 'body_type' => array_rand($options['body_type']),
                 'height_from' => rand(160, 175),
@@ -171,7 +160,6 @@ class UserSeeder extends Seeder
                 'is_premium_only' => (bool) rand(0, 1),
             ];
 
-            // Настройки уведомлений
             $emailSettings = [
                 'on_message' => (bool) rand(0, 1),
                 'on_like' => (bool) rand(0, 1),
@@ -187,7 +175,6 @@ class UserSeeder extends Seeder
                 'locale' => ['en', 'ru'][array_rand(['en', 'ru'])],
                 'theme' => ['light', 'dark'][array_rand(['light', 'dark'])],
                 
-                // Предпочтения поиска
                 'preferred_age_min' => rand(18, 25),
                 'preferred_age_max' => rand(30, 45),
                 'preferred_gender' => $genders[array_rand($genders)],
@@ -197,20 +184,15 @@ class UserSeeder extends Seeder
                 'chat_filter_enabled' => $chatFilterEnabled,
                 'chat_filter_settings' => $chatFilterSettings,
                 
-                // Приватность
                 'is_invisible' => $isPremium ? (bool) rand(0, 1) : false,
                 'hide_intimate' => (bool) rand(0, 1),
                 'disable_photo_comments' => (bool) rand(0, 1),
                 'hide_from_search' => (bool) rand(0, 1),
                 
-                // Уведомления
                 'push_enabled' => (bool) rand(0, 1),
                 'email_settings' => $emailSettings,
             ]);
 
-            // ============================================
-            // 4. СОЗДАЕМ АЛЬБОМ ПО УМОЛЧАНИЮ
-            // ============================================
             Album::create([
                 'user_id' => $user->id,
                 'name' => 'Общие',
@@ -218,7 +200,6 @@ class UserSeeder extends Seeder
                 'is_default' => true,
             ]);
 
-            // Прогресс-бар
             if ($i % 5 === 0) {
                 $this->command->info("   ⏳ Создано {$i} пользователей...");
             }
@@ -227,24 +208,21 @@ class UserSeeder extends Seeder
         $this->command->info('   ✅ Создано пользователей: ' . User::where('is_admin', false)->count());
     }
 
-    /**
-     * Определяем знак зодиака по дате
-     */
     private function getZodiacSign(int $month, int $day): string
     {
         $zodiacs = [
-            'aries' => ['start' => '03-21', 'end' => '04-19'],
-            'taurus' => ['start' => '04-20', 'end' => '05-20'],
-            'gemini' => ['start' => '05-21', 'end' => '06-20'],
-            'cancer' => ['start' => '06-21', 'end' => '07-22'],
-            'leo' => ['start' => '07-23', 'end' => '08-22'],
-            'virgo' => ['start' => '08-23', 'end' => '09-22'],
-            'libra' => ['start' => '09-23', 'end' => '10-22'],
-            'scorpio' => ['start' => '10-23', 'end' => '11-21'],
-            'sagittarius' => ['start' => '11-22', 'end' => '12-21'],
-            'capricorn' => ['start' => '12-22', 'end' => '01-19'],
-            'aquarius' => ['start' => '01-20', 'end' => '02-18'],
-            'pisces' => ['start' => '02-19', 'end' => '03-20'],
+            'Овен' => ['start' => '03-21', 'end' => '04-19'],
+            'Телец' => ['start' => '04-20', 'end' => '05-20'],
+            'Близнецы' => ['start' => '05-21', 'end' => '06-20'],
+            'Рак' => ['start' => '06-21', 'end' => '07-22'],
+            'Лев' => ['start' => '07-23', 'end' => '08-22'],
+            'Дева' => ['start' => '08-23', 'end' => '09-22'],
+            'Весы' => ['start' => '09-23', 'end' => '10-22'],
+            'Скорпион' => ['start' => '10-23', 'end' => '11-21'],
+            'Стрелец' => ['start' => '11-22', 'end' => '12-21'],
+            'Козерог' => ['start' => '12-22', 'end' => '01-19'],
+            'Водолей' => ['start' => '01-20', 'end' => '02-18'],
+            'Рыбы' => ['start' => '02-19', 'end' => '03-20'],
         ];
 
         $date = sprintf('%02d-%02d', $month, $day);
@@ -255,6 +233,6 @@ class UserSeeder extends Seeder
             }
         }
 
-        return 'unknown';
+        return 'Неизвестно';
     }
 }

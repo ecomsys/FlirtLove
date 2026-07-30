@@ -82,13 +82,19 @@ class CommentModerated extends Notification implements ShouldQueue
         $messages = $this->getMessages();
         
         return [
+            // === УНИФИЦИРОВАННАЯ СТРУКТУРА ===
             'type' => 'comment_moderated',
-            'comment_id' => $this->comment->id,
-            'photo_id' => $this->comment->photo_id,
-            'status' => $this->status,
             'title' => $messages['title'],
             'message' => $messages['message'],
-            'content' => $this->comment->content,
+            'action_url' => url('/photos/' . $this->comment->photo_id), // Ссылка на фото          
+            
+            // === СПЕЦИФИЧНЫЕ ДАННЫЕ ===
+            'data' => [
+                'comment_id' => $this->comment->id,
+                'photo_id' => $this->comment->photo_id,
+                'status' => $this->status,
+                'content' => $this->comment->content,
+            ]
         ];
     }
 
@@ -100,14 +106,20 @@ class CommentModerated extends Notification implements ShouldQueue
         $messages = $this->getMessages();
         
         return new BroadcastMessage([
+            // === УНИФИЦИРОВАННАЯ СТРУКТУРА ===
             'type' => 'comment_moderated',
-            'comment_id' => $this->comment->id,
-            'photo_id' => $this->comment->photo_id,
-            'status' => $this->status,
             'title' => $messages['title'],
             'message' => $messages['message'],
-            'content' => $this->comment->content,
+            'action_url' => url('/photos/' . $this->comment->photo_id),
             'timestamp' => now()->toDateTimeString(),
+            
+            // === СПЕЦИФИЧНЫЕ ДАННЫЕ ===
+            'data' => [
+                'comment_id' => $this->comment->id,
+                'photo_id' => $this->comment->photo_id,
+                'status' => $this->status,
+                'content' => $this->comment->content,
+            ]
         ]);
     }
 

@@ -1,7 +1,7 @@
 <?php
 
-use App\Actions\Admin\Photos\ModeratePhotoAction;
-use App\Actions\Admin\Users\ToggleUserBanAction;
+use App\Actions\Admin\ModeratePhotoAction;
+use App\Actions\Admin\ToggleUserBanAction;
 use App\Models\Photo;
 use App\Models\Report;
 use App\Models\User;
@@ -252,8 +252,7 @@ new #[Layout('layouts.admin')] class extends Component
         $isUnbanned = !$result['is_banned'];
         $this->dispatch('show-toast', type: 'success', message: $isUnbanned ? "Пользователь {$user->name} разбанен" : "Пользователь {$user->name} забанен");
     }
-
-    /**
+        /**
      * Удаление фото из карточки жалобы.
      * Автоматически закрывает все жалобы на это фото и удаляет файлы.
      * 
@@ -277,23 +276,23 @@ new #[Layout('layouts.admin')] class extends Component
                     'resolved_at' => now(),
                     'moderator_id' => auth()->id(),
                 ]);
-
-                if ($report->user) {
-                    $report->user->notify(new ReportModerated($report, 'photo_deleted'));
-                }
             }
 
-            // 2. Уведомляем владельца фото
-            if ($photo->user) {
-                $photo->user->notify(new ReportModerated(
-                    report: null,
-                    action: 'photo_deleted',
-                    additionalInfo: "Ваше фото #{$photo->id} было удалено по жалобе пользователей."
-                ));
-            }
-
-            // 3. Удаляем само фото через глобальный экшен
+            // 2. Удаляем само фото (экшен сам отправит уведомление PhotoModerated владельцу)
             $this->moderatePhotoAction->destroy($photo);
+
+            // 3. Уведомляем жалобщиков ТОЛЬКО после успешного коммита транзакции
+            DB::afterCommit(function () use ($reports) {
+                foreach ($reports as $report) {
+                    if ($report->user) {
+                        $report->user->notify(new ReportModerated(
+                            report: null,
+                            action: 'photo_deleted',
+                            additionalInfo: "Ваша жалоба на фото #{$report->photo_id} решена. Фото удалено модератором."
+                        ));
+                    }
+                }
+            });
         });
         
         $this->dispatch('show-toast', type: 'success', message: 'Фото удалено. Все жалобы на него решены.');

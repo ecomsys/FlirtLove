@@ -15,7 +15,7 @@ use Illuminate\Support\Facades\Cache;
 
 #[Fillable([
     'name', 'email', 'password',
-    'is_admin', 'is_banned', 'is_premium', 'is_verified', 
+    'is_admin', 'is_banned', 'is_shadowbanned', 'is_premium', 'is_verified', 
     'has_completed_onboarding', 'is_deactivated',
     'superlikes_remaining', 'last_login_at', 'last_login_ip', 
     'last_seen', 'premium_expires_at'
@@ -38,6 +38,7 @@ class User extends Authenticatable implements MustVerifyEmail
             // Булевы флаги
             'is_admin' => 'boolean',
             'is_banned' => 'boolean',
+            'is_shadowbanned' => 'boolean',
             'is_premium' => 'boolean',
             'is_verified' => 'boolean',
             'has_completed_onboarding' => 'boolean',
@@ -187,6 +188,44 @@ class User extends Authenticatable implements MustVerifyEmail
         
         // Возвращаем пустоту, чтобы <x-avatar> сделал заглушку из имени
         return '';
+    }
+
+        // ============================================
+    // ПРОКСИ-АКСЕССОРЫ ДЛЯ УВЕДОМЛЕНИЙ
+    // ============================================
+
+    /**
+     * Прокси для глобального тумблера Push-уведомлений.
+     * Позволяет обращаться $user->push_enabled в классах уведомлений.
+     */
+    public function getPushEnabledAttribute(): bool
+    {
+        // Если связи нет (юзер удалился) или настройка не указана — по умолчанию true
+        return $this->preferences?->push_enabled ?? true;
+    }
+
+    /**
+     * Прокси для настроек Email-уведомлений.
+     * Позволяет обращаться $user->email_settings['on_report'] в классах уведомлений.
+     */
+    public function getEmailSettingsAttribute(): array
+    {
+        // Если связи нет — возвращаем дефолтный массив, 
+        // чтобы избежать ошибок при обращении $user->email_settings['on_...']
+        if (!$this->preferences) {
+            return [
+                'on_message' => true, 
+                'on_like' => true, 
+                'on_view' => false,
+                'on_photo_moderated' => true, 
+                'on_report' => true,
+                'on_ban' => true, 
+                'on_broadcast' => true
+            ];
+        }
+
+        // Берем готовый массив из UserPreference (там уже сработает array_merge с дефолтами)
+        return $this->preferences->email_settings;
     }
 
     // ============================================

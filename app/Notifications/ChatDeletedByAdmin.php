@@ -57,19 +57,33 @@ class ChatDeletedByAdmin extends Notification implements ShouldQueue
     public function toDatabase($notifiable): array
     {
         return [
+            // === УНИФИЦИРОВАННАЯ СТРУКТУРА ===
             'type' => 'chat_deleted',
             'title' => '🗑️ Чат удален',
             'message' => "Ваша переписка была удалена модератором. Причина: {$this->reason}.",
+            'action_url' => url('/'),
+            
+            // === СПЕЦИФИЧНЫЕ ДАННЫЕ ===
+            'data' => [
+                'reason' => $this->reason,
+            ]
         ];
     }
 
     public function toBroadcast($notifiable): BroadcastMessage
     {
         return new BroadcastMessage([
+            // === УНИФИЦИРОВАННАЯ СТРУКТУРА ===
             'type' => 'chat_deleted',
             'title' => '🗑️ Чат удален',
             'message' => "Ваша переписка была удалена модератором. Причина: {$this->reason}.",
+            'action_url' => url('/'),
             'timestamp' => now()->toDateTimeString(),
+            
+            // === СПЕЦИФИЧНЫЕ ДАННЫЕ ===
+            'data' => [
+                'reason' => $this->reason,
+            ]
         ]);
     }
 }

@@ -1,14 +1,12 @@
 <?php
 
 use App\Actions\Admin\ToggleUserBanAction;
-use App\Models\Photo;
+use App\Actions\Admin\UpdateUserLocationAction;
 use App\Models\User;
-use App\Notifications\PhotoModerated;
-use Illuminate\Support\Facades\Cache;
+use App\Models\BlockedIp;
+use App\Models\ModerationLog;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Storage;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Layout;
 use Livewire\Volt\Component;
@@ -21,81 +19,132 @@ new #[Layout('layouts.admin')] class extends Component
     public ?float $editLng = null;
 
     private ToggleUserBanAction $toggleUserBanAction;
+    private UpdateUserLocationAction $updateLocationAction;
 
-    /**
-     * Внедряем переиспользуемый экшен бана.
-     */
-    public function boot(ToggleUserBanAction $toggleUserBanAction): void
+    public function boot(ToggleUserBanAction $toggleUserBanAction, UpdateUserLocationAction $updateLocationAction): void
     {
         $this->toggleUserBanAction = $toggleUserBanAction;
+        $this->updateLocationAction = $updateLocationAction;
     }
 
-     /**
-     * Загрузка профиля юзера и координат.
-     */
-        /**
-     * Загрузка профиля юзера и координат.
-     */
     public function mount(User $user): void
     {
-        $this->user = $this->getProfile($user->id);
-
+        $this->user = $this->loadUserWithRelations($user);
+        
         $profile = $this->user->profile;
         
-        // ✅ Если профиль есть, берем адрес и координаты (которые мы достали через ST_Y/ST_X)
         if ($profile) {
             if ($profile->map_lat && $profile->map_lng) {
                 $this->editLat = (float) $profile->map_lat;
                 $this->editLng = (float) $profile->map_lng;
             }
-            
-            // ✅ Берем адрес из БД. Если его нет — оставляем null
             $this->address = !empty($profile->address) ? $profile->address : null;
         }
     }
 
-    // ============================================
-    // ВЫВОД ДАННЫХ (Computed)
-    // ============================================
+    //  Восстанавливаем связи после каждого запроса
+    public function hydrate(): void
+    {
+        // После гидратации модели User (когда Livewire восстанавливает её из запроса),
+        // связи и счетчики теряются. Мы принудительно их перезагружаем.
+        $this->user = $this->loadUserWithRelations($this->user, force: true);
+    }
 
-    /**
-     * Статистика пользователя.
-     */
+    protected function loadUserWithRelations(User $user, bool $force = false): User
+    {
+        if ($force) {
+            $user->refresh(); // Сбрасываем кэш модели, чтобы получить свежие данные из БД
+        }
+        
+        return $user->load([
+            'profile' => fn($q) => $q->select('*')->selectRaw('ST_Y(location::geometry) as map_lat, ST_X(location::geometry) as map_lng'),
+            'preferences',
+            'albums' => function ($query) {
+                $query->with(['photos' => function ($q) {
+                    $q->reorder('is_primary', 'desc')
+                      ->orderBy('position', 'asc')
+                      ->orderBy('created_at', 'desc');
+                }])->orderBy('is_default', 'desc')->orderBy('name');
+            },
+            'photos' => fn($q) => $q->where('status', 'approved')->orderBy('is_primary', 'desc')->limit(1),
+            'receivedReports' => fn($q) => $q->where('status', 'pending')->latest()->with('user'),
+            'sentReports' => fn($q) => $q->where('status', 'pending')->latest()->with('reportedUser'),
+            'photoComments' => fn($q) => $q->where('status', 'pending')->with('photo'),
+        ])
+        ->loadCount([
+            'photos',
+            'photos as pending_photos_count' => fn($q) => $q->where('status', 'pending'),
+            'photoComments as comments_count',
+            'photoComments as pending_comments_count' => fn($q) => $q->where('status', 'pending'),
+            'receivedReports as received_reports_count',
+            'receivedReports as pending_received_reports_count' => fn($q) => $q->where('status', 'pending'),
+            'sentReports as pending_sent_reports_count' => fn($q) => $q->where('status', 'pending'),
+            'swipesGiven as swipes_given_count',
+            'swipesReceived as swipes_received_count',
+        ]);
+    }
+
+    protected function refreshUser(): void
+    {
+        $this->user = $this->loadUserWithRelations($this->user, force: true);
+        unset($this->stats);
+        unset($this->pendingPhotos);
+    }
+
     #[Computed]
     public function stats(): array
     {
         $user = $this->user;
         return [
-            'photos_count' => $user->photos()->count(),
-            'pending_photos' => $user->photos()->where('status', 'pending')->count(),
-            'comments_count' => $user->photoComments()->count(),
-            'pending_comments' => $user->photoComments()->where('status', 'pending')->count(),
-            'received_reports' => $user->receivedReports()->count(),
-            'pending_received_reports' => $user->receivedReports()->where('status', 'pending')->count(),
-            'sent_reports' => $user->sentReports()->where('status', 'pending')->count(),
+            'photos_count' => $user->photos_count ?? $user->photos()->count(),
+            'pending_photos' => $user->pending_photos_count ?? $user->photos()->where('status', 'pending')->count(),
+            'comments_count' => $user->comments_count ?? $user->photoComments()->count(),
+            'pending_comments' => $user->pending_comments_count ?? $user->photoComments()->where('status', 'pending')->count(),
+            'received_reports' => $user->received_reports_count ?? $user->receivedReports()->count(),
+            'pending_received_reports' => $user->pending_received_reports_count ?? $user->receivedReports()->where('status', 'pending')->count(),
+            'sent_reports' => $user->pending_sent_reports_count ?? $user->sentReports()->where('status', 'pending')->count(),
             'matches_count' => $user->matches()->count(),
-            'swipes_given' => $user->swipesGiven()->count(),
-            'swipes_received' => $user->swipesReceived()->count(),
+            'swipes_given' => $user->swipes_given_count ?? $user->swipesGiven()->count(),
+            'swipes_received' => $user->swipes_received_count ?? $user->swipesReceived()->count(),
         ];
     }
 
-    /**
-     * Фотографии, ожидающие модерации.
-     */
+   public function toggleShadowban(): void
+    {
+        if ($this->user->id === auth()->id()) {
+            $this->dispatch('show-toast', type: 'error', message: 'Нельзя дать теневой бан самому себе!');
+            return;
+        }
+
+        $this->user->update([
+            'is_shadowbanned' => !$this->user->is_shadowbanned,
+        ]);
+
+        $status = $this->user->is_shadowbanned ? 'включен' : 'отключен';
+      
+        ModerationLog::create([
+            'admin_id' => auth()->id(),
+            'user_id' => $this->user->id,
+            'action' => $this->user->is_shadowbanned ? 'shadowban_enabled' : 'shadowban_disabled',
+        ]);
+        
+        $this->dispatch('show-toast', type: 'success', message: "Теневой бан {$status}");
+        $this->refreshUser();
+    }
     #[Computed]
     public function pendingPhotos()
     {
         return $this->user->photos()->where('status', 'pending')->get();
     }
 
-    // ============================================
-    // ДЕЙСТВИЯ
-    // ============================================
-
     public function updateAddressFromCoords(float $lat, float $lng): ?string
     {
-        $this->address = $this->getAddressFromCoords($lat, $lng);
-        return $this->address;
+        $result = $this->updateLocationAction->execute($this->user, $lat, $lng, $this->address);
+        $this->address = $result['address'] ?? null;
+        
+        $this->dispatch('address-updated', address: $this->address);
+         
+        return $this->address;         
     }
 
     public function updateLocation(): void
@@ -105,20 +154,21 @@ new #[Layout('layouts.admin')] class extends Component
             'editLng' => 'required|numeric|between:-180,180',
         ]);
 
-        $result = $this->updateLocationData(
+        $result = $this->updateLocationAction->execute(
             $this->user,
             (float) $this->editLat,
-            (float) $this->editLng
+            (float) $this->editLng,
+            $this->address
         );
 
         if ($result['success']) {
             $this->address = $result['address'];
-            $this->user->refresh();
+            $this->refreshUser(); 
             $this->dispatch('show-toast', type: 'success', message: $result['message']);
         }
     }
 
-    public function toggleBan(): void
+   public function toggleBan(): void
     {
         if ($this->user->id === auth()->id()) {
             $this->dispatch('show-toast', type: 'error', message: 'Нельзя забанить самого себя!');
@@ -127,13 +177,17 @@ new #[Layout('layouts.admin')] class extends Component
 
         $result = $this->toggleUserBanAction->execute($this->user, 'Нарушение правил через админ-панель');
         
-        $this->dispatch('show-toast', 
-            type: $result['success'] ? 'success' : 'error',
-            message: $result['message']
-        );
+        $this->dispatch('show-toast', type: $result['success'] ? 'success' : 'error', message: $result['message']);
         
-        if ($result['success']) {
-            $this->user->refresh();
+        if ($result['success']) {         
+            ModerationLog::create([
+                'admin_id' => auth()->id(),
+                'user_id' => $this->user->id,
+                'action' => $this->user->is_banned ? 'user_unbanned' : 'user_banned',
+                'reason' => 'Нарушение правил через админ-панель',
+            ]);
+
+            $this->refreshUser();
         }
     }
 
@@ -147,9 +201,22 @@ new #[Layout('layouts.admin')] class extends Component
         }
 
         DB::transaction(function () use ($photo) {
-            $this->deletePhotoFiles($photo);
+           
+            ModerationLog::create([
+                'admin_id' => auth()->id(),
+                'user_id' => $this->user->id,
+                'action' => 'photo_deleted',
+                'subject_type' => 'Photo',
+                'subject_id' => $photo->id,
+                'metadata' => [
+                    'path_original' => $photo->path_original, // Сохраняем путь, хоть файл и удалится
+                    'status' => $photo->status,
+                    'is_intimate' => $photo->is_intimate,
+                ],
+            ]);
+
             $photo->delete();
-            $this->user->notify(new PhotoModerated($photo->id, $this->user->id, 'deleted', 1));
+            $this->user->notify(new \App\Notifications\PhotoModerated($photo->id, $this->user->id, 'deleted', 1));
             
             Log::info('Фото пользователя удалено администратором', [
                 'photo_id' => $photo->id,
@@ -158,8 +225,7 @@ new #[Layout('layouts.admin')] class extends Component
             ]);
         });
 
-        $this->user->refresh();
-        unset($this->pendingPhotos); // Сбрасываем кэш Computed
+        $this->refreshUser(); 
         $this->dispatch('show-toast', type: 'success', message: 'Фото удалено');
     }
 
@@ -188,142 +254,50 @@ new #[Layout('layouts.admin')] class extends Component
             ]);
         });
 
-        $this->user->refresh();
+        $this->refreshUser(); 
         $this->dispatch('show-toast', type: 'success', message: 'Фото установлено как основное');
     }
 
-       private function getProfile(int $userId): User
+    public function searchByIp(string $ip): void
     {
-        return User::with([
-            // ✅ Явно приводим location к geometry, чтобы ST_Y и ST_X сработали
-            'profile' => fn($q) => $q->select('*')->selectRaw('ST_Y(location::geometry) as map_lat, ST_X(location::geometry) as map_lng'),
-            'preferences',
-            'albums' => function ($query) {
-                $query->with(['photos' => function ($q) {
-                    $q->orderBy('is_primary', 'desc')
-                      ->orderBy('position', 'asc')
-                      ->orderBy('created_at', 'desc');
-                }])->orderBy('is_default', 'desc')->orderBy('name');
-            },
-            'photos' => fn($q) => $q->where('status', 'approved')->orderBy('is_primary', 'desc')->limit(1),
-            'receivedReports' => fn($q) => $q->where('status', 'pending')->latest()->with('user'),
-            'sentReports' => fn($q) => $q->where('status', 'pending')->latest()->with('reportedUser'),
-            'photoComments' => fn($q) => $q->where('status', 'pending')->with('photo'),
-        ])->findOrFail($userId);
+        if (!$ip) return;
+
+        // Ищем всех юзеров с этим IP, кроме текущего
+        $users = User::where('last_login_ip', $ip)
+            ->where('id', '!=', $this->user->id)
+            ->select('id', 'name', 'last_login_ip')
+            ->limit(20)
+            ->get();
+
+        // Передаем результаты во флеш-сессию, чтобы отобразить в UI
+        session()->flash('ip_search_results', $users);
+        session()->flash('ip_search_results_ip', $ip);
+
+        $this->dispatch('show-toast', type: 'info', message: "Найдено аккаунтов: " . $users->count());
     }
 
-    private function getAddressFromCoords(float $lat, float $lng): ?string
+    public function blockIp(string $ip): void
     {
-        $cacheKey = "address_{$lat}_{$lng}";
-        
-        return Cache::remember($cacheKey, 86400, function () use ($lat, $lng) {
-            try {
-                $response = Http::withHeaders([
-                    'User-Agent' => 'LoveClone/1.0',
-                    'Accept-Language' => 'ru-RU,ru;q=0.9',
-                ])->get('https://nominatim.openstreetmap.org/reverse', [
-                    'lat' => $lat,
-                    'lon' => $lng,
-                    'format' => 'json',
-                    'zoom' => 18,
-                ]);
+        if (!$ip) return;
 
-                if ($response->successful()) {
-                    return $response->json()['display_name'] ?? null;
-                }
-                return null;
-            } catch (\Exception $e) {
-                return null;
-            }
-        });
+        BlockedIp::create([
+            'ip_address' => $ip,
+            'reason' => 'Блокировка из админки (пользователь: ' . $this->user->id . ')',
+            'blocked_by' => auth()->id(),
+        ]);
+
+        $this->dispatch('show-toast', type: 'success', message: "IP {$ip} заблокирован");
     }
 
-     private function updateLocationData(User $user, float $lat, float $lng): array
+    public function unblockIp(string $ip): void
     {
-        // ✅ Если адрес уже определен кнопкой (находится в $this->address), берем его.
-        // Иначе запрашиваем у API.
-        $address = $this->address;
-        if (empty($address) || $address === 'Не определён' || $address === 'Определение адреса...') {
-            $address = $this->getAddressFromCoords($lat, $lng);
-        }
-        
-        // Если API так и не смог определить адрес, оставляем старый из базы
-        if (!$address) {
-            $address = $user->profile?->address;
-        }
-        
-        $city = $this->extractCity($address);
-        $country = $this->extractCountry($address);
-
-        DB::transaction(function () use ($user, $lat, $lng, $address, $city, $country) {
-            if ($user->profile) {
-                //  Сохраняем всё только в user_profiles
-                $user->profile->update([
-                    'address' => $address,
-                    'city' => $city,
-                    'country' => $country,
-                    'location' => DB::raw("ST_SetSRID(ST_MakePoint({$lng}, {$lat}), 4326)"),
-                ]);
-            } else {
-                $user->profile()->create([
-                    'address' => $address,
-                    'city' => $city,
-                    'country' => $country,
-                    'location' => DB::raw("ST_SetSRID(ST_MakePoint({$lng}, {$lat}), 4326)"),
-                ]);
-            }
-
-            Log::info('Локация пользователя обновлена', [
-                'user_id' => $user->id,
-                'lat' => $lat,
-                'lng' => $lng,
-                'address' => $address,
-                'admin_id' => auth()->id(),
-            ]);
-        });
-
-        return [
-            'success' => true,
-            'lat' => $lat,
-            'lng' => $lng,
-            'address' => $address,
-            'message' => 'Координаты и адрес обновлены',
-        ];
-    }
-
-    private function extractCity(?string $address): ?string
-    {
-        if (empty($address)) return null;
-        $parts = explode(',', $address);
-        return trim($parts[1] ?? $parts[0] ?? '');
-    }
-
-    private function extractCountry(?string $address): ?string
-    {
-        if (empty($address)) return null;
-        $parts = explode(',', $address);
-        return trim(end($parts));
-    }
-
-    private function deletePhotoFiles(Photo $photo): void
-    {
-        $paths = [
-            $photo->path_original,
-            $photo->path_large,
-            $photo->path_medium,
-            $photo->path_thumb,
-        ];
-
-        foreach (array_filter($paths) as $path) {
-            if (!filter_var($path, FILTER_VALIDATE_URL) && Storage::disk('public')->exists($path)) {
-                Storage::disk('public')->delete($path);
-            }
-        }
+        BlockedIp::where('ip_address', $ip)->delete();
+        $this->dispatch('show-toast', type: 'success', message: "IP {$ip} разблокирован");
     }
 }; 
 ?>
 
-<!-- Инициализируем Alpine с памятью вкладок (localStorage) -->
+<!-- Инициализируем Alpine (Твоя оригинальная структура) -->
 <div 
     x-data="{
         tab: localStorage.getItem('admin_user_tab') || 'profile',
@@ -352,7 +326,6 @@ new #[Layout('layouts.admin')] class extends Component
             });
             this.initMapTab();
 
-            // Слушаем сохранение
             this.$wire.on('address-updated', (address) => {
                 const addressElement = document.getElementById('user-address');
                 if (addressElement) addressElement.innerText = address || 'Не определён';
@@ -370,15 +343,12 @@ new #[Layout('layouts.admin')] class extends Component
 @php
     $profile = $user->profile;
     $preferences = $user->preferences;
-    $stats = $this->stats;
 
-    //  Хелпер для вывода одиночных значений из конфига
     $getOption = function($type, $value) {
         if ($value === null || $value === 0 || $value === '0') return null;
         return config("profile_options.{$type}.{$value}");
     };
 
-    //  Хелпер для вывода массивов (языки, спорт) из конфига
     $getOptions = function($type, $values) {
         if (empty($values) || !is_array($values)) return [];
         $result = [];
@@ -407,11 +377,17 @@ new #[Layout('layouts.admin')] class extends Component
             </div>
         </div>
 
-        <div class="flex items-center gap-2">
+       <div class="flex items-center gap-2">
             @if (!$user->is_admin)
                 <x-ui.button wire:click="toggleBan" wire:loading.attr="disabled" wire:confirm="Изменить статус блокировки пользователя?" variant="{{ $user->is_banned ? 'success' : 'destructive' }}">
                     <span wire:loading.remove wire:target="toggleBan">{{ $user->is_banned ? 'Разбанить' : 'Забанить' }}</span>
                     <span wire:loading wire:target="toggleBan">Обработка...</span>
+                </x-ui.button>
+
+                <!--  КНОПКА ТЕНЕВОГО БАНА -->
+                <x-ui.button wire:click="toggleShadowban" wire:loading.attr="disabled" wire:confirm="Включить/выключить теневой бан?" variant="{{ $user->is_shadowbanned ? 'success' : 'warning' }}">
+                    <span wire:loading.remove wire:target="toggleShadowban">{{ $user->is_shadowbanned ? 'Снять теневой бан' : 'Теневой бан' }}</span>
+                    <span wire:loading wire:target="toggleShadowban">Обработка...</span>
                 </x-ui.button>
             @endif
 
@@ -434,14 +410,14 @@ new #[Layout('layouts.admin')] class extends Component
                 <x-lucide-user class="w-4 h-4 inline mr-1" /> Профиль
             </button>
             <button @click="tab = 'photos'" :class="tab === 'photos' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors">
-                <x-lucide-image class="w-4 h-4 inline mr-1" /> Фотографии ({{ $user->photos_count ?? $stats['photos_count'] }})
+                <x-lucide-image class="w-4 h-4 inline mr-1" /> Фотографии ({{ $user->photos_count }})
             </button>
             <button @click="tab = 'sessions'" :class="tab === 'sessions' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors">
                 <x-lucide-clock class="w-4 h-4 inline mr-1" /> Активность
             </button>
             <button @click="tab = 'moderation'" :class="tab === 'moderation' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors">
                 <x-lucide-shield class="w-4 h-4 inline mr-1" /> Модерация
-                @if($this->pendingPhotos->count() > 0 || $stats['pending_comments'] > 0 || $stats['pending_received_reports'] > 0)
+                @if($user->pending_photos_count > 0 || $user->pending_comments_count > 0 || $user->pending_received_reports_count > 0)
                     <span class="ml-1 w-2 h-2 rounded-full bg-destructive inline-block"></span>
                 @endif
             </button>
@@ -454,13 +430,11 @@ new #[Layout('layouts.admin')] class extends Component
     <!-- Контент вкладок -->
     <div class="bg-card border border-border rounded-lg p-6">
 
-        <!-- ============================================ -->
-        <!-- Вкладка 1: ПРОФИЛЬ -->
-        <!-- ============================================ -->
+               <!-- Вкладка 1: ПРОФИЛЬ -->
         <div x-show="tab === 'profile'">
             <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                 
-                <!-- ЛЕВАЯ КОЛОНКА (Анкета) -->
+                <!-- ЛЕВАЯ КОЛОНКА -->
                 <div class="space-y-4">
                     <!-- Карточка юзера -->
                     <div class="flex items-center gap-4 p-4 bg-muted/30 rounded-lg border border-border">
@@ -476,65 +450,62 @@ new #[Layout('layouts.admin')] class extends Component
                         </div>
                     </div>
 
-                    <!-- Пол и Возраст -->
-                    <div class="grid grid-cols-2 gap-4">
-                        <div class="p-4 bg-muted/20 rounded-lg border border-border">
-                            <p class="text-xs text-muted-foreground uppercase">Пол</p>
-                            <p class="text-sm font-medium mt-1 flex items-center gap-1">
-                                @if ($profile?->gender === 'male') <x-lucide-mars class="w-4 h-4 text-blue-500" /> Мужской
-                                @elseif($profile?->gender === 'female') <x-lucide-venus class="w-4 h-4 text-pink-500" /> Женский
-                                @else <span class="text-muted-foreground">Не указан</span> @endif
-                            </p>
-                        </div>
-                        <div class="p-4 bg-muted/20 rounded-lg border border-border">
-                            <p class="text-xs text-muted-foreground uppercase">Дата рождения</p>
-                            <p class="text-sm font-medium mt-1">
-                                {{ $profile?->birth_date ? $profile->birth_date->format('d.m.Y') : 'Не указана' }}
-                                @if ($profile?->birth_date) <span class="text-xs text-muted-foreground">({{ $profile->birth_date->age }} лет)</span> @endif
-                            </p>
+                    <!-- Основная информация (Объединили) -->
+                    <div class="p-4 bg-muted/20 rounded-lg border border-border">
+                        <p class="text-xs text-muted-foreground uppercase mb-2 font-semibold">Основная информация</p>
+                        <div class="divide-y divide-border/50">
+                            <div class="flex justify-between items-center py-1.5">
+                                <span class="text-xs text-muted-foreground">Пол</span>
+                                <span class="text-sm font-medium">
+                                    @if ($profile?->gender === 'male') Мужской
+                                    @elseif($profile?->gender === 'female') Женский
+                                    @else Не указан @endif
+                                </span>
+                            </div>
+                            <div class="flex justify-between items-center py-1.5">
+                                <span class="text-xs text-muted-foreground">Дата рождения</span>
+                                <span class="text-sm font-medium">
+                                    {{ $profile?->birth_date ? $profile->birth_date->format('d.m.Y') : 'Не указана' }}
+                                    @if ($profile?->birth_date) <span class="text-xs text-muted-foreground">({{ $profile->birth_date->age }} лет)</span> @endif
+                                </span>
+                            </div>
+                            <div class="flex justify-between items-center py-1.5">
+                                <span class="text-xs text-muted-foreground">Город / Страна</span>
+                                <span class="text-sm font-medium text-right">
+                                    {{ $profile?->city ?? 'Не указан' }} {{ $profile?->country ? ', ' . $profile->country : '' }}
+                                </span>
+                            </div>
+                            <div class="flex justify-between items-center py-1.5">
+                                <span class="text-xs text-muted-foreground">Цель знакомства</span>
+                                <span class="text-sm font-medium">
+                                    @switch($profile?->dating_goal)
+                                        @case('friends') Поиск друзей @break
+                                        @case('romantic') Романтика @break
+                                        @case('family') Создание семьи @break
+                                        @case('casual') Свободные отношения @break
+                                        @default Не указана
+                                    @endswitch
+                                </span>
+                            </div>
                         </div>
                     </div>
 
-                    <!-- Локация и Цель -->
-                    <div class="grid grid-cols-2 gap-4">
-                        <div class="p-4 bg-muted/20 rounded-lg border border-border">
-                            <p class="text-xs text-muted-foreground uppercase">Город / Страна</p>
-                            <p class="text-sm font-medium mt-1 flex items-center gap-1">
-                                <x-lucide-map-pin class="w-4 h-4 text-muted-foreground" />
-                                {{ $profile?->city ?? 'Не указан' }} {{ $profile?->country ? ', ' . $profile->country : '' }}
-                            </p>
-                        </div>
-                        <div class="p-4 bg-muted/20 rounded-lg border border-border">
-                            <p class="text-xs text-muted-foreground uppercase">Цель знакомства</p>
-                            <p class="text-sm font-medium mt-1">
-                                @switch($profile?->dating_goal)
-                                    @case('friends') 🤝 Поиск друзей @break
-                                    @case('romantic') ❤️ Романтические отношения @break
-                                    @case('family') 👨‍👩‍👦 Создание семьи @break
-                                    @case('casual') 🔥 Свободные отношения @break
-                                    @default <span class="text-muted-foreground">Не указана</span>
-                                @endswitch
-                            </p>
-                        </div>
-                    </div>
-
-                    <!-- О себе и Кого ищу -->
+                    <!-- О себе -->
                     <div class="p-4 bg-muted/20 rounded-lg border border-border">
-                        <p class="text-xs text-muted-foreground uppercase">О себе</p>
-                        <p class="text-sm mt-1 text-muted-foreground">{{ $profile?->bio ?? 'Пользователь не заполнил информацию о себе' }}</p>
+                        <p class="text-xs text-muted-foreground uppercase mb-1">О себе</p>
+                        <p class="text-sm text-muted-foreground">{{ $profile?->bio ?? 'Пользователь не заполнил информацию о себе' }}</p>
+                        @if($profile?->looking_for)
+                            <div class="mt-2 pt-2 border-t border-border/50">
+                                <p class="text-xs text-muted-foreground uppercase mb-1">Кого ищет</p>
+                                <p class="text-sm text-muted-foreground">{{ $profile->looking_for }}</p>
+                            </div>
+                        @endif
                     </div>
-                    
-                    @if($profile?->looking_for)
-                    <div class="p-4 bg-muted/20 rounded-lg border border-border">
-                        <p class="text-xs text-muted-foreground uppercase">Кого я хочу найти</p>
-                        <p class="text-sm mt-1 text-muted-foreground">{{ $profile->looking_for }}</p>
-                    </div>
-                    @endif
 
                     <!-- Интересы -->
                     <div class="p-4 bg-muted/20 rounded-lg border border-border">
-                        <p class="text-xs text-muted-foreground uppercase">Интересы</p>
-                        <div class="flex flex-wrap gap-1 mt-1">
+                        <p class="text-xs text-muted-foreground uppercase mb-2">Интересы</p>
+                        <div class="flex flex-wrap gap-1">
                             @if ($profile?->interests && is_array($profile->interests) && count($profile->interests) > 0)
                                 @foreach ($profile->interests as $interest)
                                     <x-ui.badge variant="secondary" size="xs" wire:key="interest-{{ $loop->index }}">{{ $interest }}</x-ui.badge>
@@ -547,282 +518,246 @@ new #[Layout('layouts.admin')] class extends Component
 
                     <!-- Внешность -->
                     <div class="p-4 bg-muted/20 rounded-lg border border-border">
-                        <p class="text-xs text-muted-foreground uppercase mb-2">Внешность</p>
-                        <div class="grid grid-cols-2 gap-2 text-sm">
-                            @if($profile?->height) <div><span class="text-muted-foreground">Рост:</span> <span class="font-medium">{{ $profile->height }} см</span></div> @endif
-                            @if($profile?->weight) <div><span class="text-muted-foreground">Вес:</span> <span class="font-medium">{{ $profile->weight }} кг</span></div> @endif
-                            @if($getOption('body_type', $profile?->body_type)) <div><span class="text-muted-foreground">Телосложение:</span> <span class="font-medium">{{ $getOption('body_type', $profile->body_type) }}</span></div> @endif
-                            @if($getOption('eye_color', $profile?->eye_color)) <div><span class="text-muted-foreground">Цвет глаз:</span> <span class="font-medium">{{ $getOption('eye_color', $profile->eye_color) }}</span></div> @endif
-                            @if($getOption('hair_color', $profile?->hair_color)) <div><span class="text-muted-foreground">Цвет волос:</span> <span class="font-medium">{{ $getOption('hair_color', $profile->hair_color) }}</span></div> @endif
-                            @if($profile?->zodiac_sign) <div><span class="text-muted-foreground">Знак зодиака:</span> <span class="font-medium">{{ $profile->zodiac_sign }}</span></div> @endif
+                        <p class="text-xs text-muted-foreground uppercase mb-2 font-semibold">Внешность</p>
+                        <div class="divide-y divide-border/50">
+                            @if($profile?->height) <div class="flex justify-between items-center py-1.5"><span class="text-xs text-muted-foreground">Рост</span><span class="text-sm font-medium">{{ $profile->height }} см</span></div> @endif
+                            @if($profile?->weight) <div class="flex justify-between items-center py-1.5"><span class="text-xs text-muted-foreground">Вес</span><span class="text-sm font-medium">{{ $profile->weight }} кг</span></div> @endif
+                            @if($getOption('body_type', $profile?->body_type)) <div class="flex justify-between items-center py-1.5"><span class="text-xs text-muted-foreground">Телосложение</span><span class="text-sm font-medium">{{ $getOption('body_type', $profile->body_type) }}</span></div> @endif
+                            @if($getOption('eye_color', $profile?->eye_color)) <div class="flex justify-between items-center py-1.5"><span class="text-xs text-muted-foreground">Цвет глаз</span><span class="text-sm font-medium">{{ $getOption('eye_color', $profile->eye_color) }}</span></div> @endif
+                            @if($getOption('hair_color', $profile?->hair_color)) <div class="flex justify-between items-center py-1.5"><span class="text-xs text-muted-foreground">Цвет волос</span><span class="text-sm font-medium">{{ $getOption('hair_color', $profile->hair_color) }}</span></div> @endif
+                            @if($profile?->zodiac_sign) <div class="flex justify-between items-center py-1.5"><span class="text-xs text-muted-foreground">Знак зодиака</span><span class="text-sm font-medium">{{ $profile->zodiac_sign }}</span></div> @endif
                         </div>
                     </div>
 
                     <!-- Личная жизнь и Быт -->
                     <div class="p-4 bg-muted/20 rounded-lg border border-border">
-                        <p class="text-xs text-muted-foreground uppercase mb-2">Личная жизнь и Быт</p>
-                        <div class="grid grid-cols-2 gap-2 text-sm">
-                            @if($getOption('relationship_status', $profile?->relationship_status)) <div><span class="text-muted-foreground">Отношения:</span> <span class="font-medium">{{ $getOption('relationship_status', $profile->relationship_status) }}</span></div> @endif
-                            @if($getOption('children_status', $profile?->children_status)) <div><span class="text-muted-foreground">Дети:</span> <span class="font-medium">{{ $getOption('children_status', $profile->children_status) }}</span></div> @endif
-                            @if($getOption('pets', $profile?->pets)) <div><span class="text-muted-foreground">Животные:</span> <span class="font-medium">{{ $getOption('pets', $profile->pets) }}</span></div> @endif
-                            @if($getOption('housing', $profile?->housing)) <div><span class="text-muted-foreground">Жилье:</span> <span class="font-medium">{{ $getOption('housing', $profile->housing) }}</span></div> @endif
-                            @if($getOption('has_car', $profile?->has_car)) <div><span class="text-muted-foreground">Автомобиль:</span> <span class="font-medium">{{ $getOption('has_car', $profile->has_car) }}</span></div> @endif
+                        <p class="text-xs text-muted-foreground uppercase mb-2 font-semibold">Личная жизнь и Быт</p>
+                        <div class="divide-y divide-border/50">
+                            @if($getOption('relationship_status', $profile?->relationship_status)) <div class="flex justify-between items-center py-1.5"><span class="text-xs text-muted-foreground">Отношения</span><span class="text-sm font-medium">{{ $getOption('relationship_status', $profile->relationship_status) }}</span></div> @endif
+                            @if($getOption('children_status', $profile?->children_status)) <div class="flex justify-between items-center py-1.5"><span class="text-xs text-muted-foreground">Дети</span><span class="text-sm font-medium">{{ $getOption('children_status', $profile->children_status) }}</span></div> @endif
+                            @if($getOption('pets', $profile?->pets)) <div class="flex justify-between items-center py-1.5"><span class="text-xs text-muted-foreground">Животные</span><span class="text-sm font-medium">{{ $getOption('pets', $profile->pets) }}</span></div> @endif
+                            @if($getOption('housing', $profile?->housing)) <div class="flex justify-between items-center py-1.5"><span class="text-xs text-muted-foreground">Жилье</span><span class="text-sm font-medium">{{ $getOption('housing', $profile->housing) }}</span></div> @endif
+                            @if($getOption('has_car', $profile?->has_car)) <div class="flex justify-between items-center py-1.5"><span class="text-xs text-muted-foreground">Автомобиль</span><span class="text-sm font-medium">{{ $getOption('has_car', $profile->has_car) }}</span></div> @endif
                         </div>
                     </div>
 
                     <!-- Работа и Образование -->
                     <div class="p-4 bg-muted/20 rounded-lg border border-border">
-                        <p class="text-xs text-muted-foreground uppercase mb-2">Работа и Образование</p>
-                        <div class="grid grid-cols-2 gap-2 text-sm">
-                            @if($getOption('education_level', $profile?->education)) <div><span class="text-muted-foreground">Образование:</span> <span class="font-medium">{{ $getOption('education_level', $profile->education) }}</span></div> @endif
-                            @if($profile?->institution) <div class="col-span-2"><span class="text-muted-foreground">Учебное заведение:</span> <span class="font-medium">{{ $profile->institution }}</span></div> @endif
-                            @if($profile?->institution_year) <div><span class="text-muted-foreground">Год выпуска:</span> <span class="font-medium">{{ $profile->institution_year }}</span></div> @endif
-                            @if($profile?->activity) <div><span class="text-muted-foreground">Сфера:</span> <span class="font-medium">{{ $profile->activity }}</span></div> @endif
-                            @if($profile?->position) <div><span class="text-muted-foreground">Должность:</span> <span class="font-medium">{{ $profile->position }}</span></div> @endif
+                        <p class="text-xs text-muted-foreground uppercase mb-2 font-semibold">Работа и Образование</p>
+                        <div class="divide-y divide-border/50">
+                            @if($getOption('education_level', $profile?->education)) <div class="flex justify-between items-center py-1.5"><span class="text-xs text-muted-foreground">Образование</span><span class="text-sm font-medium">{{ $getOption('education_level', $profile->education) }}</span></div> @endif
+                            @if($profile?->institution) <div class="flex justify-between items-center py-1.5"><span class="text-xs text-muted-foreground">Учебное заведение</span><span class="text-sm font-medium text-right">{{ $profile->institution }}</span></div> @endif
+                            @if($profile?->institution_year) <div class="flex justify-between items-center py-1.5"><span class="text-xs text-muted-foreground">Год выпуска</span><span class="text-sm font-medium">{{ $profile->institution_year }}</span></div> @endif
+                            @if($profile?->activity) <div class="flex justify-between items-center py-1.5"><span class="text-xs text-muted-foreground">Сфера</span><span class="text-sm font-medium">{{ $profile->activity }}</span></div> @endif
+                            @if($profile?->position) <div class="flex justify-between items-center py-1.5"><span class="text-xs text-muted-foreground">Должность</span><span class="text-sm font-medium">{{ $profile->position }}</span></div> @endif
                         </div>
                     </div>
 
                     <!-- Привычки и Увлечения -->
                     <div class="p-4 bg-muted/20 rounded-lg border border-border">
-                        <p class="text-xs text-muted-foreground uppercase mb-2">Привычки и Увлечения</p>
-                        <div class="grid grid-cols-2 gap-2 text-sm">
-                            @if($getOption('smoking', $profile?->smoking)) <div><span class="text-muted-foreground">Курение:</span> <span class="font-medium">{{ $getOption('smoking', $profile->smoking) }}</span></div> @endif
-                            @if($getOption('alcohol', $profile?->alcohol)) <div><span class="text-muted-foreground">Алкоголь:</span> <span class="font-medium">{{ $getOption('alcohol', $profile->alcohol) }}</span></div> @endif
+                        <p class="text-xs text-muted-foreground uppercase mb-2 font-semibold">Привычки и Увлечения</p>
+                        <div class="divide-y divide-border/50">
+                            @if($getOption('smoking', $profile?->smoking)) <div class="flex justify-between items-center py-1.5"><span class="text-xs text-muted-foreground">Курение</span><span class="text-sm font-medium">{{ $getOption('smoking', $profile->smoking) }}</span></div> @endif
+                            @if($getOption('alcohol', $profile?->alcohol)) <div class="flex justify-between items-center py-1.5"><span class="text-xs text-muted-foreground">Алкоголь</span><span class="text-sm font-medium">{{ $getOption('alcohol', $profile->alcohol) }}</span></div> @endif
                             @php $langs = $getOptions('languages', $profile?->languages ?? []); @endphp
                             @if(!empty($langs))
-                                <div class="col-span-2"><span class="text-muted-foreground">Языки:</span> <span class="font-medium">{{ implode(', ', $langs) }}</span></div>
+                                <div class="flex justify-between items-center py-1.5"><span class="text-xs text-muted-foreground">Языки</span><span class="text-sm font-medium text-right">{{ implode(', ', $langs) }}</span></div>
                             @endif
                             @php $spts = $getOptions('sports', $profile?->sports ?? []); @endphp
                             @if(!empty($spts))
-                                <div class="col-span-2"><span class="text-muted-foreground">Спорт:</span> <span class="font-medium">{{ implode(', ', $spts) }}</span></div>
+                                <div class="flex justify-between items-center py-1.5"><span class="text-xs text-muted-foreground">Спорт</span><span class="text-sm font-medium text-right">{{ implode(', ', $spts) }}</span></div>
                             @endif
                         </div>
                     </div>
 
-                    <!-- Предпочтения в поиске -->
+                    <!-- Предпочтения в поиске (С РАСШИРЕННЫМИ ФИЛЬТРАМИ) -->
                     <div class="p-4 bg-muted/20 rounded-lg border border-border">
-                        <p class="text-xs text-muted-foreground uppercase mb-2">Предпочтения в поиске</p>
-                        <div class="text-xs space-y-2">
-                            <div class="flex justify-between">
-                                <span class="text-muted-foreground">Ищет:</span> 
-                                <span class="font-medium">
+                        <p class="text-xs text-muted-foreground uppercase mb-2 font-semibold">Предпочтения в поиске</p>
+                        @php $sf = $preferences?->search_filters; @endphp
+                        <div class="divide-y divide-border/50">
+                            <div class="flex justify-between items-center py-1.5">
+                                <span class="text-xs text-muted-foreground">Ищет</span>
+                                <span class="text-sm font-medium">
                                     @if($preferences?->preferred_gender == 'any') Всех
                                     @elseif($preferences?->preferred_gender == 'male') Мужчин
                                     @elseif($preferences?->preferred_gender == 'female') Женщин
-                                    @else {{ $preferences?->preferred_gender ?? 'Не указано' }} @endif
+                                    @else Не указано @endif
                                 </span>
                             </div>
-                            <div class="flex justify-between">
-                                <span class="text-muted-foreground">Возраст:</span> 
-                                <span class="font-medium">{{ $preferences?->preferred_age_min ?? 18 }} - {{ $preferences?->preferred_age_max ?? 99 }} лет</span>
+                            <div class="flex justify-between items-center py-1.5">
+                                <span class="text-xs text-muted-foreground">Возраст</span>
+                                <span class="text-sm font-medium">{{ $preferences?->preferred_age_min ?? 18 }} - {{ $preferences?->preferred_age_max ?? 99 }}</span>
                             </div>
-                            <div class="flex justify-between">
-                                <span class="text-muted-foreground">Радиус:</span> 
-                                <span class="font-medium">{{ $preferences?->preferred_distance_km ?? 50 }} км</span>
+                            <div class="flex justify-between items-center py-1.5">
+                                <span class="text-xs text-muted-foreground">Радиус</span>
+                                <span class="text-sm font-medium">{{ $preferences?->preferred_distance_km ?? 50 }} км</span>
                             </div>
+                            
+                            <!-- Расширенные фильтры (из search_filters) -->
+                            @if($getOption('body_type', $sf['body_type'] ?? null)) <div class="flex justify-between items-center py-1.5"><span class="text-xs text-muted-foreground">Телосложение</span><span class="text-sm font-medium">{{ $getOption('body_type', $sf['body_type']) }}</span></div> @endif
+                            @if($getOption('eye_color', $sf['eye_color'] ?? null)) <div class="flex justify-between items-center py-1.5"><span class="text-xs text-muted-foreground">Цвет глаз</span><span class="text-sm font-medium">{{ $getOption('eye_color', $sf['eye_color']) }}</span></div> @endif
+                            @if($getOption('hair_color', $sf['hair_color'] ?? null)) <div class="flex justify-between items-center py-1.5"><span class="text-xs text-muted-foreground">Цвет волос</span><span class="text-sm font-medium">{{ $getOption('hair_color', $sf['hair_color']) }}</span></div> @endif
+                            @if(!empty($sf['height_from']) || !empty($sf['height_to'])) 
+                                <div class="flex justify-between items-center py-1.5">
+                                    <span class="text-xs text-muted-foreground">Рост</span>
+                                    <span class="text-sm font-medium">{{ $sf['height_from'] ?? '∞' }} - {{ $sf['height_to'] ?? '∞' }} см</span>
+                                </div> 
+                            @endif
+                            @if($getOption('education_level', $sf['education'] ?? null)) <div class="flex justify-between items-center py-1.5"><span class="text-xs text-muted-foreground">Образование</span><span class="text-sm font-medium">{{ $getOption('education_level', $sf['education']) }}</span></div> @endif
+                            @if(!empty($sf['zodiac_sign'])) <div class="flex justify-between items-center py-1.5"><span class="text-xs text-muted-foreground">Знак зодиака</span><span class="text-sm font-medium">{{ $sf['zodiac_sign'] }}</span></div> @endif
+                            @if(!empty($sf['is_verified_only'])) <div class="flex justify-between items-center py-1.5"><span class="text-xs text-muted-foreground">Верификация</span><span class="text-sm font-medium text-primary">Только верифицированные</span></div> @endif
+                            @if(!empty($sf['is_premium_only'])) <div class="flex justify-between items-center py-1.5"><span class="text-xs text-muted-foreground">Подписка</span><span class="text-sm font-medium text-yellow-500">Только Premium</span></div> @endif
                         </div>
                     </div>
                 </div>
 
-                <!-- ПРАВАЯ КОЛОНКА (Статусы и метрики) -->
+                <!-- ПРАВАЯ КОЛОНКА -->
                 <div class="space-y-4">
-                    <!-- Просмотры и Лайки -->
-                    <div class="grid grid-cols-2 gap-4">
-                        <div class="p-4 bg-muted/20 rounded-lg border border-border">
-                            <p class="text-xs text-muted-foreground uppercase">Просмотры</p>
-                            <p class="text-sm font-medium mt-1">{{ $profile?->profile_views ?? 0 }} шт.</p>
+                    <!-- Метрики (Объединили) -->
+                    <div class="p-4 bg-muted/20 rounded-lg border border-border">
+                        <p class="text-xs text-muted-foreground uppercase mb-2 font-semibold">Активность и Метрики</p>
+                        <div class="grid grid-cols-2 gap-x-8 divide-y divide-border/50">
+                            <div class="flex justify-between items-center py-1.5"><span class="text-xs text-muted-foreground">Просмотры</span><span class="text-sm font-medium">{{ $profile?->profile_views ?? 0 }}</span></div>
+                            <div class="flex justify-between items-center py-1.5"><span class="text-xs text-muted-foreground">Лайки</span><span class="text-sm font-medium">{{ $profile?->likes_count ?? 0 }}</span></div>
+                            <div class="flex justify-between items-center py-1.5"><span class="text-xs text-muted-foreground">Фото</span><span class="text-sm font-medium">{{ $user->photos_count }}</span></div>
+                            <div class="flex justify-between items-center py-1.5"><span class="text-xs text-muted-foreground">Суперлайки</span><span class="text-sm font-medium">{{ $user->superlikes_remaining }}</span></div>
+                            <div class="flex justify-between items-center py-1.5 col-span-2"><span class="text-xs text-muted-foreground">Регистрация</span><span class="text-sm font-medium">{{ $user->created_at->format('d.m.Y') }}</span></div>
+                            <div class="flex justify-between items-center py-1.5 col-span-2">
+                                <span class="text-xs text-muted-foreground">Последний визит</span>
+                                <span class="text-sm font-medium">
+                                    {{ $user->last_seen ? $user->last_seen->diffForHumans() : 'Никогда' }}
+                                    @if($user->is_online) <span class="text-xs text-green-500 ml-1">● Онлайн</span> @endif
+                                </span>
+                            </div>
                         </div>
-                        <div class="p-4 bg-muted/20 rounded-lg border border-border">
-                            <p class="text-xs text-muted-foreground uppercase">Лайки</p>
-                            <p class="text-sm font-medium mt-1">{{ $profile?->likes_count ?? 0 }} шт.</p>
-                        </div>
-                    </div>                                      
+                    </div>
 
-                    <!-- Подписка и Email -->
-                    <div class="grid grid-cols-2 gap-4">                       
-                        <div class="p-4 bg-muted/20 rounded-lg border border-border">
-                            <p class="text-xs text-muted-foreground uppercase">Подписка</p>
-                            <div class="mt-1 flex items-center gap-2 flex-wrap">
+                    <!-- Статусы аккаунта (Объединили) -->
+                    <div class="p-4 bg-muted/20 rounded-lg border border-border">
+                        <p class="text-xs text-muted-foreground uppercase mb-2 font-semibold">Статусы</p>
+                        <div class="grid grid-cols-2 gap-8">
+                            
+                            <div>
+                                <p class="text-xs text-muted-foreground mb-1">Подписка</p>
                                 @if ($user->has_active_premium)
-                                    <x-ui.badge variant="warning"><x-lucide-crown class="w-3 h-3 inline mr-1" />Premium</x-ui.badge>
-                                    @if($user->premium_expires_at)
-                                        <span class="text-xs text-muted-foreground">до {{ $user->premium_expires_at->format('d.m.Y') }}</span>
-                                    @else
-                                        <span class="text-xs text-muted-foreground">Бессрочно</span>
-                                    @endif
+                                    <x-ui.badge variant="warning" size="xs"><x-lucide-crown class="w-3 h-3 inline mr-1" />Premium</x-ui.badge>
+                                    <span class="text-[10px] text-muted-foreground block mt-0.5">{{ $user->premium_expires_at ? 'до ' . $user->premium_expires_at->format('d.m.Y') : 'Бессрочно' }}</span>
                                 @else
-                                    <x-ui.badge variant="secondary">Бесплатный</x-ui.badge>
+                                    <x-ui.badge variant="secondary" size="xs">Бесплатный</x-ui.badge>
                                 @endif
                             </div>
-                        </div>
-                        <div class="p-4 bg-muted/20 rounded-lg border border-border">
-                            <p class="text-xs text-muted-foreground uppercase">Email</p>
-                            <div class="mt-1">
-                                @if ($user->email_verified_at) <x-ui.badge variant="success">Подтвержден</x-ui.badge>
-                                @else <x-ui.badge variant="destructive">Не подтвержден</x-ui.badge> @endif
+                            <div>
+                                <p class="text-xs text-muted-foreground mb-1">Email</p>
+                                @if ($user->email_verified_at) <x-ui.badge variant="success" size="xs">Подтвержден</x-ui.badge>
+                                @else <x-ui.badge variant="destructive" size="xs">Не подтвержден</x-ui.badge> @endif
+                            </div>
+                            <div>
+                                <p class="text-xs text-muted-foreground mb-1">Онбординг</p>
+                                @if ($user->has_completed_onboarding) <x-ui.badge variant="success" size="xs">Завершен</x-ui.badge>
+                                @else <x-ui.badge variant="warning" size="xs">Не завершен</x-ui.badge> @endif
+                            </div>
+                            <div>
+                                <p class="text-xs text-muted-foreground mb-1">Аккаунт</p>
+                                @if ($user->is_banned) <x-ui.badge variant="destructive" size="xs">Забанен</x-ui.badge>
+                                @elseif ($user->is_shadowbanned) <x-ui.badge variant="warning" size="xs">Теневой бан</x-ui.badge> <!-- ДОБАВИЛСЯ -->
+                                @elseif ($user->is_deactivated) <x-ui.badge variant="warning" size="xs">Заморожен</x-ui.badge>
+                                @else <x-ui.badge variant="success" size="xs">Активен</x-ui.badge> @endif
                             </div>
                         </div>
                     </div>
-
-                    <!-- Онбординг и Статус -->
-                    <div class="grid grid-cols-2 gap-4">
-                        <div class="p-4 bg-muted/20 rounded-lg border border-border">
-                            <p class="text-xs text-muted-foreground uppercase">Онбординг</p>
-                            <div class="mt-1">
-                                @if ($user->has_completed_onboarding) <x-ui.badge variant="success">Завершен</x-ui.badge>
-                                @else <x-ui.badge variant="warning">Не завершен</x-ui.badge> @endif
-                            </div>
-                        </div>
-                        <div class="p-4 bg-muted/20 rounded-lg border border-border">
-                            <p class="text-xs text-muted-foreground uppercase">Статус аккаунта</p>
-                            <div class="mt-1 flex flex-wrap gap-1">
-                                @if ($user->is_banned) <x-ui.badge variant="destructive">Забанен</x-ui.badge> @endif
-                                @if ($user->is_deactivated) <x-ui.badge variant="warning">Заморожен</x-ui.badge> @endif
-                                @if (!$user->is_banned && !$user->is_deactivated) <x-ui.badge variant="success">Активен</x-ui.badge> @endif
-                            </div>
-                        </div>                            
-                    </div>
-
-                    <!-- Активность -->
-                    <div class="grid grid-cols-2 gap-4">
-                        <div class="p-4 bg-muted/20 rounded-lg border border-border">
-                            <p class="text-xs text-muted-foreground uppercase">Дата регистрации</p>
-                            <p class="text-sm font-medium mt-1">{{ $user->created_at->format('d.m.Y H:i') }}</p>
-                            <p class="text-xs text-muted-foreground">{{ $user->created_at->diffForHumans() }}</p>
-                        </div>   
-                        <div class="p-4 bg-muted/20 rounded-lg border border-border">
-                            <p class="text-xs text-muted-foreground uppercase">Последний визит</p>
-                            <p class="text-sm font-medium mt-1">
-                                {{ $user->last_seen ? $user->last_seen->diffForHumans() : 'Никогда' }}
-                            </p>
-                            @if($user->is_online) <span class="text-xs text-green-500">● Онлайн</span> @endif
-                        </div>                                    
-                    </div>
-
-                    <!-- Суперлайки и Фото -->
-                    <div class="grid grid-cols-2 gap-4">
-                        <div class="p-4 bg-muted/20 rounded-lg border border-border">
-                            <p class="text-xs text-muted-foreground uppercase">Суперлайки</p>
-                            <p class="text-sm font-medium mt-1">{{ $user->superlikes_remaining }} шт.</p>
-                        </div>  
-                        <div class="p-4 bg-muted/20 rounded-lg border border-border">
-                            <p class="text-xs text-muted-foreground uppercase">Фото</p>
-                            <p class="text-sm font-medium mt-1">{{ $stats['photos_count'] }} шт.</p>
-                        </div>
-                    </div>                
 
                     <!-- Настройки чата -->
                     <div class="p-4 bg-muted/20 rounded-lg border border-border">
-                        <p class="text-xs text-muted-foreground uppercase mb-2">Настройки чата</p>
-                        <div class="flex justify-between text-sm">
-                            <span class="text-muted-foreground">Фильтр сообщений:</span>
-                            @if ($preferences?->chat_filter_enabled) 
-                                <x-ui.badge variant="info" size="xs">Включен</x-ui.badge>
-                            @else 
-                                <span class="font-medium text-muted-foreground">Доступен всем</span> 
+                        <p class="text-xs text-muted-foreground uppercase mb-2 font-semibold">Настройки чата</p>
+                        <div class="divide-y divide-border/50">
+                            <div class="flex justify-between items-center py-1.5">
+                                <span class="text-xs text-muted-foreground">Фильтр сообщений</span>
+                                @if ($preferences?->chat_filter_enabled) <x-ui.badge variant="info" size="xs">Включен</x-ui.badge>
+                                @else <span class="text-sm font-medium text-muted-foreground">Доступен всем</span> @endif
+                            </div>
+                            @if ($preferences?->chat_filter_enabled && $preferences?->chat_filter_settings)
+                                @php $cf = $preferences->chat_filter_settings; @endphp
+                                <div class="flex justify-between items-center py-1.5"><span class="text-xs text-muted-foreground">Принимает от</span><span class="text-sm font-medium">{{ $cf['gender'] ?? 'any' }}</span></div>
+                                <div class="flex justify-between items-center py-1.5"><span class="text-xs text-muted-foreground">Возраст</span><span class="text-sm font-medium">{{ $cf['age_from'] ?? 18 }} - {{ $cf['age_to'] ?? 99 }}</span></div>
+                                @if(!empty($cf['is_verified_only'])) <div class="py-1.5 text-xs text-primary font-medium">Только верифицированные</div> @endif
+                                @if(!empty($cf['is_premium_only'])) <div class="py-1.5 text-xs text-yellow-500 font-medium">Только Premium</div> @endif
                             @endif
                         </div>
-                        @if ($preferences?->chat_filter_enabled && $preferences?->chat_filter_settings)
-                            @php $cf = $preferences->chat_filter_settings; @endphp
-                            <div class="mt-2 text-xs space-y-1 border-t border-border pt-2">
-                                <div class="flex justify-between">
-                                    <span class="text-muted-foreground">Принимает от:</span> 
-                                    <span>{{ $cf['gender'] ?? 'any' }}</span>
-                                </div>
-                                <div class="flex justify-between">
-                                    <span class="text-muted-foreground">Возраст:</span> 
-                                    <span>{{ $cf['age_from'] ?? 18 }} - {{ $cf['age_to'] ?? 99 }}</span>
-                                </div>
-                                @if(!empty($cf['is_verified_only'])) <div class="text-primary">Только верифицированные</div> @endif
-                                @if(!empty($cf['is_premium_only'])) <div class="text-yellow-500">Только Premium</div> @endif
-                            </div>
-                        @endif
                     </div>
 
                     <!-- Приватность -->
                     <div class="p-4 bg-muted/20 rounded-lg border border-border">
-                        <p class="text-xs text-muted-foreground uppercase mb-2">Приватность</p>
-                        <div class="text-sm space-y-1">
-                            <div class="flex justify-between">
-                                <span class="text-muted-foreground">Режим "Невидимка":</span> 
-                                @if($preferences?->is_invisible) <span class="text-green-500">Вкл</span> @else <span class="text-muted-foreground">Выкл</span> @endif
+                        <p class="text-xs text-muted-foreground uppercase mb-2 font-semibold">Приватность</p>
+                        <div class="divide-y divide-border/50">
+                            <div class="flex justify-between items-center py-1.5">
+                                <span class="text-xs text-muted-foreground">Режим "Невидимка"</span>
+                                @if($preferences?->is_invisible) <span class="text-sm font-medium text-green-500">Вкл</span> @else <span class="text-sm font-medium text-muted-foreground">Выкл</span> @endif
                             </div>
-                            <div class="flex justify-between">
-                                <span class="text-muted-foreground">Скрывать 18+ фото:</span> 
-                                @if($preferences?->hide_intimate) <span class="text-green-500">Да</span> @else <span class="text-muted-foreground">Нет</span> @endif
+                            <div class="flex justify-between items-center py-1.5">
+                                <span class="text-xs text-muted-foreground">Скрывать 18+ фото</span>
+                                @if($preferences?->hide_intimate) <span class="text-sm font-medium text-green-500">Да</span> @else <span class="text-sm font-medium text-muted-foreground">Нет</span> @endif
                             </div>
-                            <div class="flex justify-between">
-                                <span class="text-muted-foreground">Комментарии к фото:</span> 
-                                @if($preferences?->disable_photo_comments) <span class="text-destructive">Запрещены</span> @else <span class="text-muted-foreground">Разрешены</span> @endif
+                            <div class="flex justify-between items-center py-1.5">
+                                <span class="text-xs text-muted-foreground">Комментарии к фото</span>
+                                @if($preferences?->disable_photo_comments) <span class="text-sm font-medium text-destructive">Запрещены</span> @else <span class="text-sm font-medium text-muted-foreground">Разрешены</span> @endif
                             </div>
-                            <div class="flex justify-between">
-                                <span class="text-muted-foreground">Скрыт из поиска:</span> 
-                                @if($preferences?->hide_from_search) <span class="text-yellow-500">Да</span> @else <span class="text-muted-foreground">Нет</span> @endif
+                            <div class="flex justify-between items-center py-1.5">
+                                <span class="text-xs text-muted-foreground">Скрыт из поиска</span>
+                                @if($preferences?->hide_from_search) <span class="text-sm font-medium text-yellow-500">Да</span> @else <span class="text-sm font-medium text-muted-foreground">Нет</span> @endif
                             </div>
                         </div>
                     </div>
 
-                    <!-- Уведомления -->
+                                       <!-- Уведомления -->
                     <div class="p-4 bg-muted/20 rounded-lg border border-border">
-                        <p class="text-xs text-muted-foreground uppercase mb-2">Уведомления</p>
+                        <p class="text-xs text-muted-foreground uppercase mb-2 font-semibold">Уведомления</p>
                         @php 
                             $emailSettings = $preferences?->email_settings ?? [];
                             $pushEnabled = $preferences?->push_enabled ?? true;
                         @endphp
-                        <div class="text-sm space-y-1">
-                            <div class="flex justify-between">
-                                <span class="text-muted-foreground">Push (браузер):</span> 
-                                @if($pushEnabled) 
-                                    <span class="text-green-500">Вкл</span> 
-                                @else 
-                                    <span class="text-muted-foreground">Выкл</span> 
-                                @endif
+                        <div class="divide-y divide-border/50">
+                            <div class="flex justify-between items-center py-1.5">
+                                <span class="text-xs text-muted-foreground">Push (браузер)</span>
+                                @if($pushEnabled) <span class="text-sm font-medium text-green-500">Вкл</span> @else <span class="text-sm font-medium text-muted-foreground">Выкл</span> @endif
                             </div>
-                            <div class="text-xs mt-2 border-t border-border pt-2 text-muted-foreground">Уведомления на Email:</div>
-                            <div class="flex justify-between">
-                                <span>Сообщения:</span> 
-                                @if($emailSettings['on_message'] ?? true) <span>✅</span> @else <span>❌</span> @endif
+                            <hr>
+                            <div class="py-1.5 text-xs text-muted-foreground uppercase mt-1">Уведомления на Email:</div>
+                            <div class="flex justify-between items-center py-1.5">
+                                <span class="text-xs text-muted-foreground">Сообщения</span> 
+                                @if($emailSettings['on_message'] ?? true) <x-lucide-check class="w-4 h-4 text-green-500" /> @else <x-lucide-x class="w-4 h-4 text-muted-foreground" /> @endif
                             </div>
-                            <div class="flex justify-between">
-                                <span>Лайки:</span> 
-                                @if($emailSettings['on_like'] ?? true) <span>✅</span> @else <span>❌</span> @endif
+                            <div class="flex justify-between items-center py-1.5">
+                                <span class="text-xs text-muted-foreground">Лайки</span> 
+                                @if($emailSettings['on_like'] ?? true) <x-lucide-check class="w-4 h-4 text-green-500" /> @else <x-lucide-x class="w-4 h-4 text-muted-foreground" /> @endif
                             </div>
-                            <div class="flex justify-between">
-                                <span>Просмотры:</span> 
-                                @if($emailSettings['on_view'] ?? false) <span>✅</span> @else <span>❌</span> @endif
+                            <div class="flex justify-between items-center py-1.5">
+                                <span class="text-xs text-muted-foreground">Просмотры</span> 
+                                @if($emailSettings['on_view'] ?? false) <x-lucide-check class="w-4 h-4 text-green-500" /> @else <x-lucide-x class="w-4 h-4 text-muted-foreground" /> @endif
                             </div>
-                            <div class="flex justify-between">
-                                <span>Модерация:</span> 
-                                @if($emailSettings['on_photo_moderated'] ?? true) <span>✅</span> @else <span>❌</span> @endif
+                            <div class="flex justify-between items-center py-1.5">
+                                <span class="text-xs text-muted-foreground">Модерация</span> 
+                                @if($emailSettings['on_photo_moderated'] ?? true) <x-lucide-check class="w-4 h-4 text-green-500" /> @else <x-lucide-x class="w-4 h-4 text-muted-foreground" /> @endif
                             </div>
-                            <div class="flex justify-between">
-                                <span>Рассылки:</span> 
-                                @if($emailSettings['on_broadcast'] ?? true) <span>✅</span> @else <span>❌</span> @endif
+                            <div class="flex justify-between items-center py-1.5">
+                                <span class="text-xs text-muted-foreground">Рассылки</span> 
+                                @if($emailSettings['on_broadcast'] ?? true) <x-lucide-check class="w-4 h-4 text-green-500" /> @else <x-lucide-x class="w-4 h-4 text-muted-foreground" /> @endif
                             </div>
                         </div>
                     </div>
 
                     <!-- Системные данные -->
                     <div class="p-4 bg-muted/20 rounded-lg border border-border">
-                        <p class="text-xs text-muted-foreground uppercase mb-2">Системные данные</p>
-                        <div class="grid grid-cols-2 gap-2 text-sm">
-                            <div>
-                                <span class="text-muted-foreground">Локаль:</span> 
-                                <span class="font-mono">{{ $preferences?->locale ?? 'ru' }}</span>
-                            </div>
-                            <div>
-                                <span class="text-muted-foreground">Тема:</span> 
-                                <span class="font-mono">{{ $preferences?->theme ?? 'light' }}</span>
-                            </div>
+                        <p class="text-xs text-muted-foreground uppercase mb-2 font-semibold">Системные данные</p>
+                        <div class="divide-y divide-border/50">
+                            <div class="flex justify-between items-center py-1.5"><span class="text-xs text-muted-foreground">Локаль</span><span class="text-sm font-mono font-medium">{{ $preferences?->locale ?? 'ru' }}</span></div>
+                            <div class="flex justify-between items-center py-1.5"><span class="text-xs text-muted-foreground">Тема</span><span class="text-sm font-mono font-medium">{{ $preferences?->theme ?? 'light' }}</span></div>
                         </div>
                     </div>
                 </div>
             </div>
         </div>
 
-        <!-- ============================================ -->
         <!-- Вкладка 2: ФОТОГРАФИИ -->
-        <!-- ============================================ -->
         <div x-show="tab === 'photos'" style="display: none;">
             <div>
                 @if ($user->albums->isNotEmpty())
@@ -882,9 +817,7 @@ new #[Layout('layouts.admin')] class extends Component
             </div>
         </div>
 
-        <!-- ============================================ -->
         <!-- Вкладка 3: АКТИВНОСТЬ -->
-        <!-- ============================================ -->
         <div x-show="tab === 'sessions'" style="display: none;" class="space-y-4">
             <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div class="flex items-center gap-4 p-4 bg-muted/30 rounded-lg border border-border">
@@ -897,11 +830,47 @@ new #[Layout('layouts.admin')] class extends Component
                 </div>
                 <div class="flex items-center gap-4 p-4 bg-muted/30 rounded-lg border border-border">
                     <div class="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center text-primary"><x-lucide-wifi class="w-5 h-5" /></div>
-                    <div>
+                    <div class="flex-1">
                         <p class="text-xs text-muted-foreground">IP-адрес</p>
                         <p class="text-sm font-medium mt-1 font-mono">{{ $user->last_login_ip ?? 'Нет данных' }}</p>
                     </div>
+                    @if($user->last_login_ip)
+                        <div class="flex gap-2">
+                            <x-ui.button wire:click="searchByIp('{{ $user->last_login_ip }}')" variant="outline" size="sm">
+                                <x-lucide-search class="w-4 h-4" /> Найти еще аккаунты 
+                            </x-ui.button>
+                            
+                            @php $isBlockedIp = \App\Models\BlockedIp::where('ip_address', $user->last_login_ip)->exists(); @endphp
+                            @if($isBlockedIp)
+                                <x-ui.button wire:click="unblockIp('{{ $user->last_login_ip }}')" variant="success" size="sm">
+                                    <x-lucide-unlock class="w-4 h-4" /> Разблокировать IP
+                                </x-ui.button>
+                            @else
+                                <x-ui.button wire:click="blockIp('{{ $user->last_login_ip }}')" variant="destructive" size="sm" wire:confirm="Заблокировать этот IP для всех?">
+                                    <x-lucide-ban class="w-4 h-4" /> Заблокировать IP
+                                </x-ui.button>
+                            @endif
+                        </div>
+                    @endif
                 </div>
+
+                <!-- Блок с результатами поиска мультиакков -->
+                @if(session('ip_search_results'))
+                    <div class="p-4 bg-muted/20 rounded-lg border border-border col-span-2">
+                        <p class="text-xs text-muted-foreground uppercase mb-2 font-semibold">Найдены аккаунты с IP: {{ session('ip_search_results_ip') }}</p>
+                        <div class="space-y-2">
+                            @foreach(session('ip_search_results') as $foundUser)
+                                <div class="flex items-center justify-between bg-card p-2 rounded border border-border">
+                                    <div>
+                                        <span class="text-sm font-medium">{{ $foundUser->name }}</span>
+                                        <span class="text-xs text-muted-foreground ml-2">(ID: {{ $foundUser->id }})</span>
+                                    </div>
+                                    <a href="{{ route('admin.users.show', $foundUser->id) }}" class="text-xs text-primary hover:underline">Открыть</a>
+                                </div>
+                            @endforeach
+                        </div>
+                    </div>
+                @endif
             </div>
             <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div class="flex items-center gap-4 p-4 bg-muted/30 rounded-lg border border-border">
@@ -923,17 +892,14 @@ new #[Layout('layouts.admin')] class extends Component
             </div>
         </div>
 
-        <!-- ============================================ -->
         <!-- Вкладка 4: МОДЕРАЦИЯ -->
-        <!-- ============================================ -->
         <div x-show="tab === 'moderation'" style="display: none;" class="space-y-6">
             
-            <!-- 1. Фото на модерации -->
             <div>
                 <h3 class="text-lg font-medium mb-3 flex items-center gap-2">
                     <x-lucide-image class="w-5 h-5 text-muted-foreground" />
                     Фото ожидают модерации 
-                    <x-ui.badge variant="warning" size="xs">{{ $stats['pending_photos'] }}</x-ui.badge>
+                    <x-ui.badge variant="warning" size="xs">{{ $user->pending_photos_count }}</x-ui.badge>
                 </h3>
                 @if ($this->pendingPhotos->isNotEmpty())
                     <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
@@ -951,12 +917,11 @@ new #[Layout('layouts.admin')] class extends Component
                 @endif
             </div>
 
-            <!-- 2. Комментарии на модерации -->
             <div>
                 <h3 class="text-lg font-medium mb-3 flex items-center gap-2">
                     <x-lucide-message-circle class="w-5 h-5 text-muted-foreground" />
                     Комментарии ожидают модерации 
-                    <x-ui.badge variant="warning" size="xs">{{ $stats['pending_comments'] }}</x-ui.badge>
+                    <x-ui.badge variant="warning" size="xs">{{ $user->pending_comments_count }}</x-ui.badge>
                 </h3>
                 @if ($user->photoComments->isNotEmpty())
                     <div class="space-y-2">
@@ -978,14 +943,12 @@ new #[Layout('layouts.admin')] class extends Component
                 @endif
             </div>
 
-            <!-- 3. Жалобы -->
             <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <!-- Входящие жалобы -->
                 <div class="p-4 bg-muted/30 rounded-lg border border-border">
                     <h4 class="text-sm font-medium mb-2 flex items-center gap-2">
                         <x-lucide-alert-triangle class="w-4 h-4 text-destructive" />
                         Жалобы на пользователя 
-                        <x-ui.badge variant="destructive" size="xs">{{ $stats['pending_received_reports'] }}</x-ui.badge>
+                        <x-ui.badge variant="destructive" size="xs">{{ $user->pending_received_reports_count }}</x-ui.badge>
                     </h4>
                     @if ($user->receivedReports->isNotEmpty())
                         <div class="space-y-2 mt-2">
@@ -1001,12 +964,11 @@ new #[Layout('layouts.admin')] class extends Component
                     @endif
                 </div>
 
-                <!-- Исходящие жалобы -->
                 <div class="p-4 bg-muted/30 rounded-lg border border-border">
                     <h4 class="text-sm font-medium mb-2 flex items-center gap-2">
                         <x-lucide-flag class="w-4 h-4 text-muted-foreground" />
                         Жалобы от пользователя 
-                        <x-ui.badge variant="secondary" size="xs">{{ $stats['sent_reports'] }}</x-ui.badge>
+                        <x-ui.badge variant="secondary" size="xs">{{ $user->pending_sent_reports_count }}</x-ui.badge>
                     </h4>
                     @if ($user->sentReports->isNotEmpty())
                         <div class="space-y-2 mt-2">
@@ -1023,7 +985,6 @@ new #[Layout('layouts.admin')] class extends Component
                 </div>
             </div>
             
-            <!-- Предупреждение -->
             <div class="p-4 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
                 <p class="text-sm text-yellow-700 dark:text-yellow-400 flex items-center gap-2">
                     <x-lucide-alert-triangle class="w-5 h-5" />
@@ -1032,9 +993,7 @@ new #[Layout('layouts.admin')] class extends Component
             </div>
         </div>
 
-                <!-- ============================================ -->
         <!-- Вкладка 5: КАРТА -->
-        <!-- ============================================ -->
         <div x-show="tab === 'map'" style="display: none;" class="space-y-4">   
             <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
                 <div class="lg:col-span-2" wire:ignore>
@@ -1051,7 +1010,6 @@ new #[Layout('layouts.admin')] class extends Component
                             <x-ui.input wire:model="editLat" id="map-lat-input" label="Широта" type="number" step="any" oninput="updateMarkerFromInputs()" />
                             <x-ui.input wire:model="editLng" id="map-lng-input" label="Долгота" type="number" step="any" oninput="updateMarkerFromInputs()" />
                             
-                            <!-- ✅ КНОПКА ОПРЕДЕЛЕНИЯ АДРЕСА (Без сохранения в БД) -->
                             <x-ui.button type="button" onclick="window.fetchAddress()" variant="outline" class="w-full">
                                 <x-lucide-search class="w-4 h-4 inline" />
                                 Определить адрес по координатам
@@ -1083,7 +1041,7 @@ new #[Layout('layouts.admin')] class extends Component
     window.leafletMap = null;
     window.leafletMarker = null;
     window.leafletUserData = null;
-    window.livewireWire = null; // Будем хранить тут объект Livewire
+    window.livewireWire = null;
 
     window.createPopupContent = function(u, addr) {
         const avatar = u.avatar_url || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(u.name) + '&background=random&size=50';
@@ -1108,7 +1066,6 @@ new #[Layout('layouts.admin')] class extends Component
         const container = document.getElementById('user-map');
         if (!container) return;
 
-        // Сохраняем wire для использования в других функциях
         window.livewireWire = wire;
 
         if (window.leafletMap) {
@@ -1124,7 +1081,6 @@ new #[Layout('layouts.admin')] class extends Component
         const lat = initialLat || 55.7558;
         const lng = initialLng || 37.6173;
 
-        // ✅ Сразу пушим координаты в инпуты, чтобы они не были пустыми
         const latInput = document.getElementById('map-lat-input');
         const lngInput = document.getElementById('map-lng-input');
         if (latInput) latInput.value = lat;
@@ -1144,25 +1100,20 @@ new #[Layout('layouts.admin')] class extends Component
             .bindPopup(popupContent)
             .openPopup();
 
-                // ✅ Синхронизация: Тащим маркер -> обновляем инпуты, сбрасываем адрес и попап
         window.leafletMarker.on('dragend', function(e) {
             const pos = window.leafletMarker.getLatLng();
             
-            // Обновляем координаты в Livewire
             window.livewireWire.set('editLat', pos.lat);
             window.livewireWire.set('editLng', pos.lng);
 
-            // Обновляем инпуты на экране мгновенно
             const latInput = document.getElementById('map-lat-input');
             const lngInput = document.getElementById('map-lng-input');
             if (latInput) latInput.value = pos.lat;
             if (lngInput) lngInput.value = pos.lng;
 
-            // ✅ Сбрасываем текст в карточке на "Не определён"
             const addressElement = document.getElementById('user-address');
             if (addressElement) addressElement.innerText = 'Не определён';
             
-            // ✅ МАГИЯ: Обновляем текст внутри тултипа (попапа) на маркере
             if (window.leafletMarker && window.leafletUserData) {
                 const popup = window.leafletMarker.getPopup();
                 if (popup) {
@@ -1170,10 +1121,9 @@ new #[Layout('layouts.admin')] class extends Component
                 }
             }
 
-            // Очищаем адрес в памяти Livewire. 
             window.livewireWire.set('address', null);
         });
-        // ✅ Синхронизация: Пишем в инпуты -> двигается маркер
+        
         window.updateMarkerFromInputs = function() {
             if (!window.leafletMarker) return;
             const newLat = parseFloat(latInput.value);
@@ -1185,7 +1135,6 @@ new #[Layout('layouts.admin')] class extends Component
             }
         };
 
-        // ✅ РУЧНОЕ ОПРЕДЕЛЕНИЕ АДРЕСА (без сохранения)
         window.fetchAddress = async function() {
             if (!window.leafletMarker || !window.livewireWire) return;
 
@@ -1199,7 +1148,6 @@ new #[Layout('layouts.admin')] class extends Component
                 if (addressElement) addressElement.innerText = newAddress;
                 const popup = window.leafletMarker.getPopup();
                 if (popup) popup.setContent(window.createPopupContent(window.leafletUserData, newAddress));
-                // Обновляем свойство в Livewire, чтобы при нажатии "Сохранить" оно уже было готово
                 window.livewireWire.set('address', newAddress);
             } else {
                 if (addressElement) addressElement.innerText = 'Адрес не определён';

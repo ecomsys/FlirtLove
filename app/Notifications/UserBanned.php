@@ -57,37 +57,44 @@ class UserBanned extends Notification implements ShouldQueue
 
     public function toDatabase($notifiable): array
     {
+        // Подготавливаем данные в зависимости от статуса
         if ($this->isBanned) {
-            return [
+            $payload = [
                 'type' => 'user_banned',
                 'title' => '🔒 Аккаунт заблокирован',
                 'message' => 'Ваш аккаунт был заблокирован администрацией. Обратитесь в поддержку.',
+                'action_url' => url('/support'),
+            ];
+        } else {
+            $payload = [
+                'type' => 'user_unbanned',
+                'title' => '✅ Аккаунт разблокирован',
+                'message' => 'Ваш аккаунт был успешно разблокирован. Добро пожаловать!',
+                'action_url' => url('/'),
             ];
         }
 
         return [
-            'type' => 'user_unbanned',
-            'title' => '✅ Аккаунт разблокирован',
-            'message' => 'Ваш аккаунт был успешно разблокирован. Добро пожаловать!',
+            // === УНИФИЦИРОВАННАЯ СТРУКТУРА ===
+            'type' => $payload['type'],
+            'title' => $payload['title'],
+            'message' => $payload['message'],
+            'action_url' => $payload['action_url'],
+            
+            // === СПЕЦИФИЧНЫЕ ДАННЫЕ ===
+            'data' => [
+                'is_banned' => $this->isBanned,
+            ]
         ];
     }
 
     public function toBroadcast($notifiable): BroadcastMessage
     {
-        if ($this->isBanned) {
-            return new BroadcastMessage([
-                'type' => 'user_banned',
-                'title' => '🔒 Аккаунт заблокирован',
-                'message' => 'Ваш аккаунт был заблокирован администрацией.',
-                'timestamp' => now()->toDateTimeString(),
-            ]);
-        }
+        // Используем те же данные, что и для БД
+        $dbData = $this->toDatabase($notifiable);
 
-        return new BroadcastMessage([
-            'type' => 'user_unbanned',
-            'title' => '✅ Аккаунт разблокирован',
-            'message' => 'Ваш аккаунт был успешно разблокирован.',
+        return new BroadcastMessage(array_merge($dbData, [
             'timestamp' => now()->toDateTimeString(),
-        ]);
+        ]));
     }
 }

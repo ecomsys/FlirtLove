@@ -1,26 +1,25 @@
 <?php
 
-use App\Actions\Admin\Photos\ModeratePhotoAction;
+use App\Actions\Admin\ModeratePhotoAction;
 use App\Models\Photo;
 use App\Models\User;
-use Livewire\Volt\Component;
 use Livewire\Attributes\Layout;
+use Livewire\Volt\Component;
 use Livewire\WithPagination;
 
 new #[Layout('layouts.admin')] class extends Component 
 {
     use WithPagination;
 
-    public $status = 'pending';
-    public $perPage = 5;
-    public $perPhotos = 12;
-    public $search = '';
+    public string $status = 'pending';
+    public int $perPage = 5;
+    public int $perPhotos = 12;
+    public string $search = '';
 
-    public function mount()
+    public function mount(): void
     {
-        $saved = session('moderate_photos', []);
-        if (isset($saved['status'])) $this->status = $saved['status'];
-        if (isset($saved['search'])) $this->search = $saved['search'];
+        $this->status = session('moderate_photos.status', 'pending');
+        $this->search = session('moderate_photos.search', '');
     }
 
     public function updatedStatus(): void
@@ -49,7 +48,7 @@ new #[Layout('layouts.admin')] class extends Component
         $this->resetPage();
     }
 
-    // === ДЕЙСТВИЯ (Вызывают Action класс!) ===
+    // === ДЕЙСТВИЯ ===
 
     public function approve(int $photoId): void
     {
@@ -125,28 +124,45 @@ new #[Layout('layouts.admin')] class extends Component
         $this->dispatch('$refresh');
     }
 
-    // === ВЫВОД ДАННЫХ (Остается как было, но чисто) ===
+    // === ВЫВОД ДАННЫХ (Оптимизированные запросы с учётом Accessors) ===
 
     public function with(): array
     {
-        if ($this->status == 'pending') {
-            // ИСПРАВЛЕНО: убрали тяжелый scopeExcludeAdmins, просто фильтруем по has_completed_onboarding
+        $users = null;
+        $photos = collect();
+
+        if ($this->status === 'pending') {
             $users = User::withWhereHas('photos', function ($query) {
                 $query->where('status', 'pending')->orderBy('is_primary', 'desc')->oldest();
             })
-            ->where('is_admin', false) // Простой where вместо whereHas
+            ->where('is_admin', false)
+            ->withCount(['photos as pending_photos_count' => fn($q) => $q->where('status', 'pending')])
             ->with([
                 'photos' => function ($query) {
-                    $query->where('status', 'pending')->orderBy('is_primary', 'desc')->oldest()->with('album');
+                    $query->where('status', 'pending')
+                          ->orderBy('is_primary', 'desc')
+                          ->oldest()
+                          ->with('album:id,name'); 
                 },
             ])
             ->paginate($this->perPage);
-
-            $photos = collect();
         } else {
-            $query = Photo::with(['user', 'album'])->whereHas('user', fn($q) => $q->where('is_admin', false));
+            $query = Photo::with([
+                'user' => function ($q) {
+                    $q->select('id', 'name', 'is_banned', 'is_verified', 'is_premium', 'premium_expires_at')
+                      ->with(['photos' => function ($sub) {
+                          $sub->where(function ($sq) {
+                              $sq->where('is_primary', true)->orWhere('status', 'approved');
+                          })
+                          ->orderBy('is_primary', 'desc')
+                          ->select('id', 'user_id', 'path_thumb', 'path_medium')
+                          ->take(1);
+                      }]);
+                },
+                'album:id,name'
+            ])->whereHas('user', fn($q) => $q->where('is_admin', false));
 
-            if ($this->status == 'approved') {
+            if ($this->status === 'approved') {
                 $query->where('status', 'approved')->latest();
             } else {
                 $query->latest();
@@ -154,8 +170,8 @@ new #[Layout('layouts.admin')] class extends Component
 
             if (!empty($this->search)) {
                 $search = trim($this->search);
-                $query->where(function ($q) use ($search) {
-                    $operator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
+                $operator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
+                $query->where(function ($q) use ($search, $operator) {
                     $q->whereHas('user', function ($subQuery) use ($search, $operator) {
                         $subQuery->where('name', $operator, '%' . $search . '%');
                     });
@@ -166,7 +182,6 @@ new #[Layout('layouts.admin')] class extends Component
             }
 
             $photos = $query->paginate($this->perPhotos);
-            $users = null;
         }
 
         $counts = Photo::whereHas('user', fn($q) => $q->where('is_admin', false))->selectRaw(
@@ -178,7 +193,7 @@ new #[Layout('layouts.admin')] class extends Component
 
         return [
             'users' => $users,
-            'photos' => $photos ?? collect(),
+            'photos' => $photos,
             'pendingCount' => (int) ($counts->pending ?? 0),
             'approvedCount' => (int) ($counts->approved ?? 0),
             'rejectedCount' => (int) ($counts->rejected ?? 0),
@@ -221,7 +236,6 @@ new #[Layout('layouts.admin')] class extends Component
             </x-ui.button>
         </div>
 
-        <!-- Поиск (только для approved/all) -->
         @if ($status != 'pending')
             <div class="flex items-center gap-5 ml-auto">
                 @if (!empty($search))
@@ -245,7 +259,6 @@ new #[Layout('layouts.admin')] class extends Component
         @endif
     </div>
 
-    <!-- Список пользователей с фото (pending) -->
     @if ($status == 'pending')
         @if ($users->isEmpty())
             <div class="bg-card border border-border rounded-lg p-16 text-center" wire:key="empty-state">
@@ -260,13 +273,11 @@ new #[Layout('layouts.admin')] class extends Component
                 @foreach ($users as $user)
                     <div wire:key="user-{{ $user->id }}"
                         class="bg-card border border-border rounded-lg overflow-hidden">
-                        <!-- Заголовок пользователя -->
                         <div class="p-4 border-b border-border flex items-center justify-between bg-muted/20">
                             <div class="flex items-center gap-3">
                                 <x-avatar src="{{ $user->avatar_url }}" name="{{ $user->name ?? 'User' }}"
-                                    size="lg" userId="{{ $user->id }}" showStatus="true" />
+                                    size="lg" userId="{{ $user->id }}" showStatus="true" wire:key="avatar-{{ $user->id }}" />
                                 <div>
-                                    <!--  Добавлены бейджи в шапку юзера -->
                                     <p class="font-semibold text-foreground flex items-center gap-2 flex-wrap">
                                         <a href="{{ route('admin.users.show', $user->id) }}" class="hover:text-primary">
                                             {{ $user->name ?? 'Без имени' }}
@@ -283,14 +294,13 @@ new #[Layout('layouts.admin')] class extends Component
                                     <div class="flex items-center gap-3 text-xs text-muted-foreground">
                                         <span>ID: {{ $user->id }}</span>
                                         <span>•</span>
-                                        <span>Фото: {{ $user->photos->count() }}</span>
+                                        <span>Фото: {{ $user->pending_photos_count }}</span>
                                         <span>•</span>
                                         <span>{{ $user->created_at->diffForHumans() }}</span>
                                     </div>
                                 </div>
                             </div>
 
-                            <!-- Массовые действия -->
                             <div class="flex gap-2">
                                 <x-ui.button wire:click="approveUser({{ $user->id }})" wire:loading.attr="disabled"
                                     wire:target="approveUser({{ $user->id }})" variant="success"
@@ -321,8 +331,7 @@ new #[Layout('layouts.admin')] class extends Component
                                             <x-ui.alert-dialog-description>
                                                 Вы уверены, что хотите отклонить все фото пользователя
                                                 <strong>{{ $user->name }}</strong>?
-                                                <br><strong class="text-destructive">Это действие нельзя
-                                                    отменить.</strong>
+                                                <br><strong class="text-destructive">Это действие нельзя отменить.</strong>
                                             </x-ui.alert-dialog-description>
                                         </x-ui.alert-dialog-header>
                                         <x-ui.alert-dialog-footer>
@@ -337,20 +346,19 @@ new #[Layout('layouts.admin')] class extends Component
                             </div>
                         </div>
 
-                        <!-- Сетка фото пользователя -->
                         <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 p-4">
                             @foreach ($user->photos as $photo)
                                 <div wire:key="photo-{{ $photo->id }}"
                                     class="relative aspect-square bg-muted group overflow-hidden rounded-lg">
-                                    <!-- ГАЛЕРЕЯ ПО ПОЛЬЗОВАТЕЛЮ -->
                                     <a href="{{ $photo->large_url ?? $photo->url }}"
                                         data-fancybox="gallery-{{ $user->id }}" data-caption="{{ $user->name }}"
                                         class="block w-full h-full">
                                         <img src="{{ $photo->medium_url ?? $photo->url }}" alt="Photo"
+                                            loading="lazy"
+                                            wire:key="img-{{ $photo->id }}"
                                             class="absolute inset-0 w-full h-full object-cover group-hover:scale-105 transition-transform duration-300">
                                     </a>
 
-                                    <!-- Бейджи -->
                                     <div class="absolute top-2 left-2 z-10 flex flex-col gap-1">
                                         @if ($photo->is_primary)
                                             <x-ui.badge>Аватар</x-ui.badge>
@@ -359,52 +367,34 @@ new #[Layout('layouts.admin')] class extends Component
                                             <x-ui.badge variant="destructive">18+</x-ui.badge>
                                         @endif
                                         @if ($photo->album)
-                                            <x-ui.badge variant="secondary"
-                                                size="xs">{{ $photo->album->name }}</x-ui.badge>
+                                            <x-ui.badge variant="secondary" size="xs">{{ $photo->album->name }}</x-ui.badge>
                                         @endif
                                     </div>
 
-                                    <!-- Иконка увеличения -->
-                                    <div
-                                        class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center pointer-events-none">
+                                    <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center pointer-events-none">
                                         <x-lucide-maximize-2 class="w-6 h-6 text-white drop-shadow-lg" />
                                     </div>
 
-                                    <!-- Кнопки действий над фото -->
-                                    <div
-                                        class="absolute bottom-2 left-2 right-2 z-10 flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                                        <x-ui.button wire:click="approve({{ $photo->id }})"
-                                            wire:loading.attr="disabled" wire:target="approve({{ $photo->id }})"
-                                            variant="success" class="flex-1" wire:key="approve-{{ $photo->id }}">
+                                    <div class="absolute bottom-2 left-2 right-2 z-10 flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                                        <x-ui.button wire:click="approve({{ $photo->id }})" wire:loading.attr="disabled" wire:target="approve({{ $photo->id }})" variant="success" class="flex-1" wire:key="approve-{{ $photo->id }}">
                                             <span wire:loading.remove wire:target="approve({{ $photo->id }})">
-                                                <x-lucide-check class="w-3.5 h-3.5 inline" />
-                                                Да
+                                                <x-lucide-check class="w-3.5 h-3.5 inline" /> Да
                                             </span>
-                                            <x-ui.spinner wire:loading wire:target="approve({{ $photo->id }})"
-                                                class="w-3.5 h-3.5" />
+                                            <x-ui.spinner wire:loading wire:target="approve({{ $photo->id }})" class="w-3.5 h-3.5" />
                                         </x-ui.button>
 
-                                        <x-ui.button wire:click="reject({{ $photo->id }})"
-                                            wire:confirm="Отклонить и удалить это фото?" wire:loading.attr="disabled"
-                                            wire:target="reject({{ $photo->id }})" variant="destructive"
-                                            class="flex-1" wire:key="reject-{{ $photo->id }}">
+                                        <x-ui.button wire:click="reject({{ $photo->id }})" wire:confirm="Отклонить и удалить это фото?" wire:loading.attr="disabled" wire:target="reject({{ $photo->id }})" variant="destructive" class="flex-1" wire:key="reject-{{ $photo->id }}">
                                             <span wire:loading.remove wire:target="reject({{ $photo->id }})">
-                                                <x-lucide-x class="w-3.5 h-3.5 inline" />
-                                                Нет
+                                                <x-lucide-x class="w-3.5 h-3.5 inline" /> Нет
                                             </span>
-                                            <x-ui.spinner wire:loading wire:target="reject({{ $photo->id }})"
-                                                class="w-3.5 h-3.5" />
+                                            <x-ui.spinner wire:loading wire:target="reject({{ $photo->id }})" class="w-3.5 h-3.5" />
                                         </x-ui.button>
 
-                                        <x-ui.button wire:click="setPrimary({{ $photo->id }})"
-                                            wire:loading.attr="disabled"
-                                            wire:target="setPrimary({{ $photo->id }})" variant="icon"
-                                            title="Сделать основным" wire:key="primary-{{ $photo->id }}">
+                                        <x-ui.button wire:click="setPrimary({{ $photo->id }})" wire:loading.attr="disabled" wire:target="setPrimary({{ $photo->id }})" variant="icon" title="Сделать основным" wire:key="primary-{{ $photo->id }}">
                                             <span wire:loading.remove wire:target="setPrimary({{ $photo->id }})">
                                                 <x-lucide-star class="w-3.5 h-3.5" />
                                             </span>
-                                            <x-ui.spinner wire:loading wire:target="setPrimary({{ $photo->id }})"
-                                                class="w-3.5 h-3.5" />
+                                            <x-ui.spinner wire:loading wire:target="setPrimary({{ $photo->id }})" class="w-3.5 h-3.5" />
                                         </x-ui.button>
                                     </div>
                                 </div>
@@ -414,35 +404,24 @@ new #[Layout('layouts.admin')] class extends Component
                 @endforeach
             </div>
 
-            <!-- Пагинация пользователей -->
             <div class="mt-6" wire:key="user-pagination">
                 {{ $users->links('partials.pagination') }}
             </div>
         @endif
     @else
-        <!-- Для approved/all — обычный список фото -->
         @if ($photos->isEmpty())
             <div class="bg-card border border-border rounded-lg p-16 text-center" wire:key="photos-empty">
                 <div class="w-16 h-16 mx-auto rounded-full bg-muted flex items-center justify-center mb-4">
                     <x-lucide-check-circle class="w-8 h-8 text-muted-foreground" />
                 </div>
                 <h3 class="text-lg font-medium text-foreground">
-                    @if (!empty($search))
-                        Ничего не найдено по запросу "{{ $search }}"
-                    @else
-                        Нет фотографий
-                    @endif
+                    @if (!empty($search)) Ничего не найдено по запросу "{{ $search }}" @else Нет фотографий @endif
                 </h3>
                 <p class="text-muted-foreground mt-1">
-                    @if (!empty($search))
-                        Попробуйте изменить поисковый запрос
-                    @else
-                        Фотографии с таким статусом отсутствуют.
-                    @endif
+                    @if (!empty($search)) Попробуйте изменить поисковый запрос @else Фотографии с таким статусом отсутствуют. @endif
                 </p>
                 @if (!empty($search))
-                    <x-ui.button wire:click="clearSearch" variant="outline" class="mt-4"
-                        wire:key="clear-search-btn">
+                    <x-ui.button wire:click="clearSearch" variant="outline" class="mt-4" wire:key="clear-search-btn">
                         Очистить поиск
                     </x-ui.button>
                 @endif
@@ -450,44 +429,26 @@ new #[Layout('layouts.admin')] class extends Component
         @else
             <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-6">
                 @foreach ($photos as $photo)
-                    <div wire:key="photo-{{ $photo->id }}"
-                        class="bg-card border border-border rounded-lg overflow-hidden flex flex-col">
-                        <!-- Фото -->
+                    <div wire:key="photo-{{ $photo->id }}" class="bg-card border border-border rounded-lg overflow-hidden flex flex-col">
                         <div class="relative aspect-square bg-muted group overflow-hidden">
-                            <!-- ГАЛЕРЕЯ ПО ПОЛЬЗОВАТЕЛЮ -->
-                            <a href="{{ $photo->large_url ?? $photo->url }}"
-                                data-fancybox="gallery-{{ $photo->user_id }}"
-                                data-caption="{{ $photo->user->name }}" class="block w-full h-full">
-                                <img src="{{ $photo->medium_url ?? $photo->url }}" alt="Photo"
-                                    class="absolute inset-0 w-full h-full object-cover group-hover:scale-105 transition-transform duration-300">
+                            <a href="{{ $photo->large_url ?? $photo->url }}" data-fancybox="gallery-{{ $photo->user_id }}" data-caption="{{ $photo->user->name }}" class="block w-full h-full">
+                                <img src="{{ $photo->medium_url ?? $photo->url }}" alt="Photo" loading="lazy" wire:key="img-{{ $photo->id }}" class="absolute inset-0 w-full h-full object-cover group-hover:scale-105 transition-transform duration-300">
                             </a>
 
-                            <div
-                                class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center pointer-events-none">
+                            <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center pointer-events-none">
                                 <x-lucide-maximize-2 class="w-8 h-8 text-white drop-shadow-lg" />
                             </div>
 
-                            <!-- Бейджи -->
                             <div class="absolute top-2 left-2 z-10 flex flex-col gap-1">
-                                @if ($photo->is_primary)
-                                    <x-ui.badge>Аватар</x-ui.badge>
-                                @endif
-                                @if ($photo->is_intimate)
-                                    <x-ui.badge variant="destructive">18+</x-ui.badge>
-                                @endif
-                                @if ($photo->album)
-                                    <x-ui.badge variant="secondary"
-                                        size="xs">{{ $photo->album->name }}</x-ui.badge>
-                                @endif
+                                @if ($photo->is_primary) <x-ui.badge>Аватар</x-ui.badge> @endif
+                                @if ($photo->is_intimate) <x-ui.badge variant="destructive">18+</x-ui.badge> @endif
+                                @if ($photo->album) <x-ui.badge variant="secondary" size="xs">{{ $photo->album->name }}</x-ui.badge> @endif
                             </div>
                         </div>
 
-                        <!-- Инфо -->
                         <div class="p-3 border-b border-border flex items-center gap-2">
-                            <x-avatar src="{{ $photo->user->avatar_url }}" name="{{ $photo->user->name ?? 'User' }}"
-                                size="sm" userId="{{ $photo->user->id }}" showStatus="true" />
+                            <x-avatar src="{{ $photo->user->avatar_url }}" name="{{ $photo->user->name ?? 'User' }}" size="sm" userId="{{ $photo->user->id }}" showStatus="true" wire:key="avatar-list-{{ $photo->id }}" />
                             <div class="text-sm overflow-hidden">
-                                <!--  Убрал дубль имени и исправил wire:key на $photo->id -->
                                 <p class="font-medium text-foreground truncate">
                                     <a href="{{ route('admin.users.show', $photo->user_id) }}" class="hover:text-primary flex gap-2 items-center">
                                         <span title="{{ $photo->user->name }}" class="text-sm font-medium">{{ $photo->user->name }}</span>
@@ -496,28 +457,19 @@ new #[Layout('layouts.admin')] class extends Component
                                                 <x-lucide-crown class="w-3 h-3" /> 
                                             </x-ui.badge>
                                         @endif  
-                                        @if($photo->user->is_banned)
-                                            <x-ui.badge variant="destructive" size="xs">Бан</x-ui.badge>
-                                        @endif                                                                          
+                                        @if($photo->user->is_banned) <x-ui.badge variant="destructive" size="xs">Бан</x-ui.badge> @endif                                                                          
                                     </a>
                                 </p>
                                 <p class="text-xs text-muted-foreground">ID: {{ $photo->user_id }}</p>
                             </div>
                         </div>
 
-                        <!-- Кнопки (строго в ряд через flex) -->
                         <div class="flex divide-x divide-border">
-                            <!-- Кнопка удаления на всю ширину -->
-                            <button wire:click="destroy({{ $photo->id }})"
-                                wire:confirm="Удалить это фото навсегда?" wire:loading.attr="disabled"
-                                wire:target="destroy({{ $photo->id }})" wire:key="destroy-{{ $photo->id }}"
-                                class="flex items-center justify-center gap-2 py-3 text-sm font-medium text-destructive hover:bg-destructive/10 transition-colors w-full border-t border-border">
+                            <button wire:click="destroy({{ $photo->id }})" wire:confirm="Удалить это фото навсегда?" wire:loading.attr="disabled" wire:target="destroy({{ $photo->id }})" wire:key="destroy-{{ $photo->id }}" class="flex items-center justify-center gap-2 py-3 text-sm font-medium text-destructive hover:bg-destructive/10 transition-colors w-full border-t border-border">
                                 <span wire:loading.remove wire:target="destroy({{ $photo->id }})">
-                                    <x-lucide-trash-2 class="w-4 h-4 inline" />
-                                    Удалить
+                                    <x-lucide-trash-2 class="w-4 h-4 inline" /> Удалить
                                 </span>
-                                <x-ui.spinner wire:loading wire:target="destroy({{ $photo->id }})"
-                                    class="w-4 h-4" />
+                                <x-ui.spinner wire:loading wire:target="destroy({{ $photo->id }})" class="w-4 h-4" />
                             </button>
                         </div>
                     </div>
@@ -531,11 +483,19 @@ new #[Layout('layouts.admin')] class extends Component
     @endif
 </div>
 
-
 @push('scripts')
     <script>
-        if (typeof Fancybox !== 'undefined') {
-            Fancybox.defaults.Hash = false;
-        }
+        document.addEventListener('livewire:init', () => {
+            if (typeof Fancybox !== 'undefined') {
+                Fancybox.defaults.Hash = false;
+            }
+
+            Livewire.hook('morph.updated', ({ el }) => {
+                if (typeof Fancybox !== 'undefined' && el.querySelector && el.querySelector('[data-fancybox]')) {
+                    Fancybox.unbind(el);
+                    Fancybox.bind(el);
+                }
+            });
+        });
     </script>
-@endpush>
+@endpush

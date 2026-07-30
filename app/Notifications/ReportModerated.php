@@ -91,32 +91,56 @@ class ReportModerated extends Notification implements ShouldQueue
     public function toDatabase($notifiable): array
     {
         $messages = $this->getMessages();
+        
+        // Склеиваем основной текст и доп. информацию, чтобы фронтенду было проще
+        $finalMessage = $messages['message'];
+        if ($this->additionalInfo) {
+            $finalMessage .= ' ' . $this->additionalInfo;
+        }
 
         return [
+            // === УНИФИЦИРОВАННАЯ СТРУКТУРА ===
             'type' => 'report_moderated',
-            'report_id' => $this->report ? $this->report->id : null,
-            'action' => $this->action,
-            'report_type' => $this->report ? $this->report->type : null,
             'title' => $messages['title'],
-            'message' => $messages['message'],
-            'reason' => $this->report ? $this->report->reason : null,
-            'additional_info' => $this->additionalInfo,
+            'message' => $finalMessage,
+            'action_url' => url('/'), // или url('/admin/reports') если это для админа
+            
+            // === СПЕЦИФИЧНЫЕ ДАННЫЕ ===
+            'data' => [
+                'report_id' => $this->report ? $this->report->id : null,
+                'action' => $this->action,
+                'report_type' => $this->report ? $this->report->type : null,
+                'reason' => $this->report ? $this->report->reason : null,
+                'additional_info' => $this->additionalInfo, // Оставляем на всякий случай
+            ]
         ];
     }
 
     public function toBroadcast($notifiable): BroadcastMessage
     {
         $messages = $this->getMessages();
+        
+        $finalMessage = $messages['message'];
+        if ($this->additionalInfo) {
+            $finalMessage .= ' ' . $this->additionalInfo;
+        }
 
         return new BroadcastMessage([
+            // === УНИФИЦИРОВАННАЯ СТРУКТУРА ===
             'type' => 'report_moderated',
-            'report_id' => $this->report ? $this->report->id : null,
-            'action' => $this->action,
-            'report_type' => $this->report ? $this->report->type : null,
             'title' => $messages['title'],
-            'message' => $messages['message'],
-            'reason' => $this->report ? $this->report->reason : null,
+            'message' => $finalMessage,
+            'action_url' => url('/'),
             'timestamp' => now()->toDateTimeString(),
+            
+            // === СПЕЦИФИЧНЫЕ ДАННЫЕ ===
+            'data' => [
+                'report_id' => $this->report ? $this->report->id : null,
+                'action' => $this->action,
+                'report_type' => $this->report ? $this->report->type : null,
+                'reason' => $this->report ? $this->report->reason : null,
+                'additional_info' => $this->additionalInfo,
+            ]
         ]);
     }
 

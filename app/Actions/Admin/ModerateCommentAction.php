@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Actions\Admin\Photos;
+namespace App\Actions\Admin;
 
 use App\Models\PhotoComment;
 use App\Notifications\CommentModerated;

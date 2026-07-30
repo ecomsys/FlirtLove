@@ -1,12 +1,14 @@
 <?php
 
-use App\Actions\Admin\Photos\ModerateCommentAction;
 use App\Models\Photo;
 use App\Models\PhotoComment;
+use App\Notifications\CommentModerated;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Livewire\Attributes\Computed;
+use Livewire\Attributes\Layout;
 use Livewire\Volt\Component;
 use Livewire\WithPagination;
-use Livewire\Attributes\Layout;
-use Livewire\Attributes\Computed;
 
 new #[Layout('layouts.admin')] class extends Component 
 {
@@ -19,7 +21,7 @@ new #[Layout('layouts.admin')] class extends Component
     public bool $showPreviewModal = false;
     public ?Photo $previewPhoto = null;
 
-    public function mount()
+    public function mount(): void
     {
         $saved = session('moderate_photo_comments', []);
         if (isset($saved['statusFilter'])) $this->statusFilter = $saved['statusFilter'];
@@ -55,18 +57,20 @@ new #[Layout('layouts.admin')] class extends Component
 
     public function previewPhoto(int $photoId): void
     {
-        $this->previewPhoto = Photo::with('user')->find($photoId);
+        // Подгружаем юзера с 1 аватаркой для модалки
+        $this->previewPhoto = Photo::with(['user' => fn($q) => $q->select('id', 'name')->with(['photos' => fn($sq) => $sq->select('id', 'user_id', 'path_thumb', 'path_medium')->take(1)])])->find($photoId);
         $this->showPreviewModal = true;
     }
 
-    // === ДЕЙСТВИЯ (Вызывают Action!) ===
+    // === ДЕЙСТВИЯ ===
 
     public function approveComment(int $commentId): void
     {
+        // Подгружаем parent чтобы проверить бизнес-логику в actionApprove
         $comment = PhotoComment::with('parent')->find($commentId);
         if (!$comment) return;
 
-        $success = (new ModerateCommentAction)->approve($comment);
+        $success = $this->actionApprove($comment);
 
         if (!$success) {
             $this->dispatch('show-toast', type: 'error', message: 'Нельзя одобрить ответ на неодобренный комментарий!');
@@ -82,7 +86,7 @@ new #[Layout('layouts.admin')] class extends Component
         $comment = PhotoComment::find($commentId);
         if (!$comment) return;
 
-        (new ModerateCommentAction)->reject($comment);
+        $this->actionReject($comment);
 
         $this->dispatch('show-toast', type: 'info', message: 'Комментарий отклонен');
         $this->dispatch('$refresh');
@@ -93,7 +97,7 @@ new #[Layout('layouts.admin')] class extends Component
         $comment = PhotoComment::find($commentId);
         if (!$comment) return;
 
-        (new ModerateCommentAction)->markSpam($comment);
+        $this->actionMarkSpam($comment);
 
         $this->dispatch('show-toast', type: 'error', message: 'Комментарий помечен как спам');
         $this->dispatch('$refresh');
@@ -104,7 +108,7 @@ new #[Layout('layouts.admin')] class extends Component
         $comment = PhotoComment::find($commentId);
         if (!$comment) return;
 
-        (new ModerateCommentAction)->delete($comment);
+        $this->actionDelete($comment);
 
         $this->dispatch('show-toast', type: 'success', message: 'Комментарий удален');
         $this->dispatch('$refresh');
@@ -115,7 +119,7 @@ new #[Layout('layouts.admin')] class extends Component
         $comment = PhotoComment::find($commentId);
         if (!$comment) return;
 
-        (new ModerateCommentAction)->restore($comment);
+        $this->actionRestore($comment);
 
         $this->dispatch('show-toast', type: 'info', message: 'Комментарий возвращен на модерацию');
         $this->dispatch('$refresh');
@@ -123,6 +127,7 @@ new #[Layout('layouts.admin')] class extends Component
 
     public function approveRemaining(int $photoId): void
     {
+        // Готовая коллекция с dependency injection для экшена
         $pendingComments = PhotoComment::where('photo_id', $photoId)
             ->where('status', 'pending')
             ->whereHas('user', fn($q) => $q->where('is_admin', false))
@@ -134,7 +139,7 @@ new #[Layout('layouts.admin')] class extends Component
             return;
         }
 
-        $count = (new ModerateCommentAction)->bulkApprove($pendingComments);
+        $count = $this->actionBulkApprove($pendingComments);
 
         $this->dispatch('show-toast', type: 'success', message: "Одобрено {$count} комментариев");
         $this->dispatch('$refresh');
@@ -153,7 +158,7 @@ new #[Layout('layouts.admin')] class extends Component
             return;
         }
 
-        $count = (new ModerateCommentAction)->bulkReject($pendingComments);
+        $count = $this->actionBulkReject($pendingComments);
 
         $this->dispatch('show-toast', type: 'info', message: "Отклонено {$count} комментариев");
         $this->dispatch('$refresh');
@@ -171,7 +176,7 @@ new #[Layout('layouts.admin')] class extends Component
             return;
         }
 
-        $count = (new ModerateCommentAction)->bulkApprove($pendingComments);
+        $count = $this->actionBulkApprove($pendingComments);
 
         $this->dispatch('show-toast', type: 'success', message: "Одобрено {$count} комментариев");
         $this->dispatch('$refresh');
@@ -189,7 +194,7 @@ new #[Layout('layouts.admin')] class extends Component
             return;
         }
 
-        $count = (new ModerateCommentAction)->bulkReject($pendingComments);
+        $count = $this->actionBulkReject($pendingComments);
 
         $this->dispatch('show-toast', type: 'info', message: "Отклонено {$count} комментариев");
         $this->dispatch('$refresh');
@@ -206,11 +211,10 @@ new #[Layout('layouts.admin')] class extends Component
         };
     }
 
-    // === ВЫВОД ДАННЫХ ===
+    // === ВЫВОД ДАННЫХ (Оптимизированные запросы) ===
 
     private function applyCommentFilters($query): void
     {
-        // Заменили тяжелый excludeAdmins на быстрый whereHas
         $query->whereHas('user', fn($q) => $q->where('is_admin', false));
 
         if ($this->statusFilter !== 'all') {
@@ -260,30 +264,34 @@ new #[Layout('layouts.admin')] class extends Component
     #[Computed]
     public function photos()
     {
+        // Универсальный подзапрос для подгрузки аватарок авторов (исключает N+1)
+        $userAvatarQuery = fn($q) => $q->select('id', 'name', 'is_banned', 'is_verified', 'is_premium', 'premium_expires_at')
+            ->with(['photos' => fn($sq) => $sq->select('id', 'user_id', 'path_thumb', 'path_medium')->where('is_primary', true)->orWhere('status', 'approved')->take(1)]);
+
         $query = Photo::whereHas('comments', function ($q) {
             $this->applyCommentFilters($q);
         })
-            ->with([
-                'album',
-                'comments' => function ($q) {
-                    $q->whereNull('parent_id');
-                    $this->applyCommentFilters($q);
+        ->with([
+            'album:id,name',
+            'user:id,name', // Автор фотки (в шапке карточки)
+            'comments' => function ($q) use ($userAvatarQuery) {
+                $q->whereNull('parent_id');
+                $this->applyCommentFilters($q);
 
-                    $q->with([
-                        'user',
-                        'replies' => function ($q) {
-                            $this->applyReplyFilters($q);
-                            $q->with('parent.user')->latest();
-                        },
-                    ])->latest();
-                },
-                'user',
-            ])
-            ->withCount([
-                'comments' => function ($q) {
-                    $this->applyCommentFilters($q);
-                },
-            ]);
+                $q->with([
+                    'user' => $userAvatarQuery,
+                    'replies' => function ($q) use ($userAvatarQuery) {
+                        $this->applyReplyFilters($q);
+                        $q->with(['parent:id,status', 'user' => $userAvatarQuery])->latest();
+                    },
+                ])->latest();
+            },
+        ])
+        ->withCount([
+            'comments' => function ($q) {
+                $this->applyCommentFilters($q);
+            },
+        ]);
 
         return $query->latest()->paginate($this->perPage);
     }
@@ -298,7 +306,7 @@ new #[Layout('layouts.admin')] class extends Component
             SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END) as rejected,
             SUM(CASE WHEN status = 'spam' THEN 1 ELSE 0 END) as spam,
             COUNT(*) as total
-        ",
+        "
         )->first();
 
         return [
@@ -308,6 +316,87 @@ new #[Layout('layouts.admin')] class extends Component
             'spam' => (int) ($stats->spam ?? 0),
             'total' => (int) ($stats->total ?? 0),
         ];
+    }
+
+    // === БИЗНЕС-ЛОГИКА (Интегрированный Action) ===
+
+    protected function actionApprove(PhotoComment $comment): bool
+    {
+        if ($comment->parent_id && $comment->parent && $comment->parent->status !== 'approved') {
+            return false;
+        }
+
+        $comment->update([
+            'status' => 'approved',
+            'approved_at' => now()
+        ]);
+
+        $this->notifyAuthor($comment, 'approved');
+        return true;
+    }
+
+    protected function actionReject(PhotoComment $comment): void
+    {
+        $comment->update([
+            'status' => 'rejected',
+            'rejected_at' => now()
+        ]);
+
+        $this->notifyAuthor($comment, 'rejected');
+    }
+
+    protected function actionMarkSpam(PhotoComment $comment): void
+    {
+        $comment->update(['status' => 'spam']);
+        $this->notifyAuthor($comment, 'spam');
+    }
+
+    protected function actionDelete(PhotoComment $comment): void
+    {
+        $this->notifyAuthor($comment, 'deleted');
+        $comment->delete();
+    }
+
+    protected function actionRestore(PhotoComment $comment): void
+    {
+        $comment->update(['status' => 'pending']);
+        $this->notifyAuthor($comment, 'restored');
+    }
+
+    protected function actionBulkApprove($comments): int
+    {
+        $approvedCount = 0;
+        foreach ($comments as $comment) {
+            if ($this->actionApprove($comment)) {
+                $approvedCount++;
+            }
+        }
+        return $approvedCount;
+    }
+
+    protected function actionBulkReject($comments): int
+    {
+        DB::transaction(function () use ($comments) {
+            foreach ($comments as $comment) {
+                $comment->update([
+                    'status' => 'rejected',
+                    'rejected_at' => now()
+                ]);
+                $this->notifyAuthor($comment, 'rejected');
+            }
+        });
+        return $comments->count();
+    }
+
+    private function notifyAuthor(PhotoComment $comment, string $status): void
+    {
+        try {
+            if ($comment->user) {
+                $comment->user->notify(new CommentModerated($comment, $status));
+            }
+        } catch (\Exception $e) {
+            Log::error('Ошибка уведомления о модерации комментария: ' . $e->getMessage());
+        }
     }
 };?>
 
@@ -768,8 +857,17 @@ new #[Layout('layouts.admin')] class extends Component
 
 @push('scripts')
     <script>
-        if (typeof Fancybox !== 'undefined') {
-            Fancybox.defaults.Hash = false;
-        }
+        document.addEventListener('livewire:init', () => {
+            if (typeof Fancybox !== 'undefined') {
+                Fancybox.defaults.Hash = false;
+            }
+
+            Livewire.hook('morph.updated', ({ el }) => {
+                if (typeof Fancybox !== 'undefined' && el.querySelector && el.querySelector('[data-fancybox]')) {
+                    Fancybox.unbind(el);
+                    Fancybox.bind(el);
+                }
+            });
+        });
     </script>
 @endpush

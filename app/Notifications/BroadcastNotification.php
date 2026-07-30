@@ -47,10 +47,17 @@ class BroadcastNotification extends Notification implements ShouldQueue
     public function toDatabase($notifiable): array
     {
         return [
-            'broadcast_id' => $this->broadcast->id,
+            // === УНИФИЦИРОВАННАЯ СТРУКТУРА ===
+            'type' => 'broadcast',
             'title' => $this->broadcast->title,
             'message' => $this->broadcast->message,
-            'type' => $this->broadcast->type,
+            'action_url' => url('/profile'),          
+            
+            // === СПЕЦИФИЧНЫЕ ДАННЫЕ ===
+            'data' => [
+                'broadcast_id' => $this->broadcast->id,
+                'broadcast_type' => $this->broadcast->type, // system, email, push
+            ]
         ];
     }
 
@@ -72,11 +79,18 @@ class BroadcastNotification extends Notification implements ShouldQueue
     public function toBroadcast($notifiable): BroadcastMessage
     {
         return new BroadcastMessage([
-            'broadcast_id' => $this->broadcast->id,
+            // === УНИФИЦИРОВАННАЯ СТРУКТУРА ===
+            'type' => 'broadcast',
             'title' => $this->broadcast->title,
             'message' => $this->broadcast->message,
-            'type' => $this->broadcast->type,
+            'action_url' => url('/profile'),
             'timestamp' => now()->toDateTimeString(),
+            
+            // === СПЕЦИФИЧНЫЕ ДАННЫЕ ===
+            'data' => [
+                'broadcast_id' => $this->broadcast->id,
+                'broadcast_type' => $this->broadcast->type,
+            ]
         ]);
     }
 }

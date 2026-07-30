@@ -11,9 +11,12 @@ class UserDeleted extends Notification implements ShouldQueue
 {
     use Queueable;
 
+    /**
+     * Уведомление об удалении аккаунта отправляется ТОЛЬКО на почту.
+     * В базу (колокольчик) не пишем, так как юзера больше не существует.
+     */
     public function via($notifiable): array
     {
-        //  ТОЛЬКО ПОЧТА! База и Push не нужны удаленному пользователю.
         return ['mail'];
     }
 
