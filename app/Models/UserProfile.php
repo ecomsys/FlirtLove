@@ -10,31 +10,27 @@ class UserProfile extends Model
 {
     protected $fillable = [
         'user_id', 
-        'gender', 'birth_date', 'dating_goal', 'city', 
-        'status', 'bio', 'looking_for', 'interests',
+        'gender', 'birth_date', 'dating_goal', 'city', 'country',
+        'headline', 'bio', 'looking_for', 'interests', 'self_portrait',
         'body_type', 'eye_color', 'hair_color', 'height', 'weight',
         'relationship_status', 'children_status', 'pets', 'housing', 'has_car', 'smoking', 'alcohol',
+        'zodiac_sign',
         'body_decorations', 'languages', 'sports',
         'education', 'occupation', 'institution', 'institution_year', 'activity', 'position',
-        'zodiac_sign',
-        'location', 'address', 'country',
-        'profile_views', 'likes_count'
+        'location', 'address',
     ];
 
     protected $casts = [
         'birth_date' => 'date',
-        'interests' => 'array',
         
-        // Множественный выбор (JSON-массивы с ID)
+        // JSON поля (Множественный выбор и теги)
+        'interests' => 'array',
+        'self_portrait' => 'array', // Наш новый блок "Автопортрет"
         'body_decorations' => 'array',
         'languages' => 'array',
         'sports' => 'array',
         
-        // Счетчики
-        'profile_views' => 'integer',
-        'likes_count' => 'integer',
-        
-        // Год выпуска
+        // Числовые значения
         'institution_year' => 'integer',
     ];
 
@@ -48,7 +44,7 @@ class UserProfile extends Model
     }
 
     // ============================================
-    // ГЕОЛОКАЦИЯ (Переехала из User)
+    // ГЕОЛОКАЦИЯ (PostGIS)
     // ============================================
 
     /**
@@ -57,24 +53,27 @@ class UserProfile extends Model
     public function setLocation(float $lat, float $lng): void
     {
         // Используем DB::raw для нативной функции PostGIS
-        $this->location = DB::raw("ST_SetSRID(ST_MakePoint({$lng}, {$lat}), 4326)");
+        $this->location = DB::raw("ST_SetSRID(ST_MakePoint({$lng}, {$lat}), 4326)::geography");
         $this->save();
     }
 
     /**
-     * Достаем Latitude из PostGIS точки
+     * Достаем Latitude из PostGIS точки.
+     * PDO обычно возвращает geography как строку в формате WKB (hex) или "POINT(lng lat)".
+     * Если использовать пакет вроде mstaack/laravel-postgis, он сам распарсит в объект.
+     * Но для нативного Laravel парсим строку.
      */
     public function getLatitudeAttribute(): ?float
     {
-        if (!$this->location) return null;
+        if (empty($this->location)) return null;
         
-        // Если PDO возвращает строку формата "POINT(lng lat)", парсим её
-        if (is_string($this->location)) {
-            $coords = sscanf($this->location, "POINT(%f %f)");
-            return $coords[1]; // Lat идет второй
+        $locationStr = (string) $this->location;
+        if (str_starts_with($locationStr, 'POINT(')) {
+            $coords = sscanf($locationStr, "POINT(%f %f)");
+            return $coords[1] ?? null; // Lat идет вторым
         }
         
-        return null; // Если объект, зависит от драйвера БД. Обычно sscanf решает проблему.
+        return null; 
     }
 
     /**
@@ -82,48 +81,75 @@ class UserProfile extends Model
      */
     public function getLongitudeAttribute(): ?float
     {
-        if (!$this->location) return null;
+        if (empty($this->location)) return null;
         
-        if (is_string($this->location)) {
-            $coords = sscanf($this->location, "POINT(%f %f)");
-            return $coords[0]; // Lng идет первой
+        $locationStr = (string) $this->location;
+        if (str_starts_with($locationStr, 'POINT(')) {
+            $coords = sscanf($locationStr, "POINT(%f %f)");
+            return $coords[0] ?? null; // Lng идет первым
         }
         
-        return null;
+        return null; 
     }
 
-    
-
     /**
-     * Скоуп для поиска анкет рядом
+     * Скоуп для поиска анкет рядом (в радиусе)
      */
     public function scopeNearby($query, float $lat, float $lng, int $radius = 50)
     {
         return $query->whereNotNull('location')
             ->whereRaw(
-                "ST_DWithin(location::geography, ST_SetSRID(ST_MakePoint(?, ?), 4326)::geography, ?)", 
-                [$lng, $lat, $radius * 1000]
+                "ST_DWithin(location, ST_SetSRID(ST_MakePoint(?, ?), 4326)::geography, ?)", 
+                [$lng, $lat, $radius * 1000] // Переводим км в метры
             );
     }
 
     // ============================================
-    // ХЕЛПЕРЫ
+    // СКОПЫ ДЛЯ ПОИСКА (МАТЧИНГА)
     // ============================================
 
     /**
-     * Безопасное увеличение просмотров профиля.
-     * Используем increment, чтобы не перезаписывать другие поля при одновременных запросах.
+     * Фильтр по полу (мужчины, женщины)
      */
-    public function incrementViews(): void
+    public function scopeOfGender($query, ?string $gender)
     {
-        $this->increment('profile_views');
+        if (!$gender || $gender === 'any') {
+            return $query;
+        }
+        return $query->where('gender', $gender);
     }
 
     /**
+     * Фильтр по возрасту (от и до)
+     */
+    public function scopeBetweenAges($query, ?int $minAge = 18, ?int $maxAge = 99)
+    {
+        $minDate = now()->subYears($maxAge)->format('Y-m-d');
+        $maxDate = now()->subYears($minAge)->format('Y-m-d');
+        
+        // Ищем тех, чья дата рождения попадает в диапазон
+        return $query->whereBetween('birth_date', [$minDate, $maxDate]);
+    }
+
+    // ============================================
+    // АКСЕССОРЫ И ХЕЛПЕРЫ
+    // ============================================
+
+    /**
      * Аксессор для возраста (чтобы не считать его в контроллерах каждый раз)
+     * Возвращает null, если дата рождения не указана.
      */
     public function getAgeAttribute(): ?int
     {
         return $this->birth_date?->age;
+    }
+    
+    /**
+     * Проверка, заполнен ли профиль достаточно для показа в ленте.
+     * (Например, обязательно наличие пола и даты рождения).
+     */
+    public function isCompleteEnough(): bool
+    {
+        return !is_null($this->gender) && !is_null($this->birth_date);
     }
 }

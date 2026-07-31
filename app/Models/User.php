@@ -3,28 +3,30 @@
 namespace App\Models;
 
 use Illuminate\Contracts\Auth\MustVerifyEmail;
-use Database\Factories\UserFactory;
-use Illuminate\Database\Eloquent\Attributes\Fillable;
-use Illuminate\Database\Eloquent\Attributes\Hidden;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
-use Illuminate\Foundation\Auth\User as Authenticatable;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
+use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
-use Illuminate\Support\Facades\Cache;
-
-#[Fillable([
-    'name', 'email', 'password',
-    'is_admin', 'is_banned', 'is_shadowbanned', 'is_premium', 'is_verified', 
-    'has_completed_onboarding', 'is_deactivated',
-    'superlikes_remaining', 'last_login_at', 'last_login_ip', 
-    'last_seen', 'premium_expires_at'
-])]
-#[Hidden(['password', 'remember_token'])]
+// use Laravel\Sanctum\HasApiTokens;
 
 class User extends Authenticatable implements MustVerifyEmail
 {
-    use HasFactory, Notifiable;
+    use HasFactory, Notifiable, SoftDeletes; // , HasApiTokens,
+
+    protected $fillable = [
+        'name', 'email', 'password',
+        'role', 'status', 'ban_reason', 'banned_until',
+        'is_premium', 'premium_expires_at',
+        'is_verified', 'has_completed_onboarding',
+        'last_seen', 'last_login_at', 'last_login_ip', 'device_id',
+    ];
+
+    protected $hidden = [
+        'password', 'remember_token',
+    ];
 
     protected function casts(): array
     {
@@ -34,31 +36,17 @@ class User extends Authenticatable implements MustVerifyEmail
             'last_login_at' => 'datetime',
             'last_seen' => 'datetime',
             'premium_expires_at' => 'datetime',
-            
-            // Булевы флаги
-            'is_admin' => 'boolean',
-            'is_banned' => 'boolean',
-            'is_shadowbanned' => 'boolean',
+            'banned_until' => 'datetime',
             'is_premium' => 'boolean',
             'is_verified' => 'boolean',
             'has_completed_onboarding' => 'boolean',
-            'is_deactivated' => 'boolean',
-            
-            // Счетчики
-            'superlikes_remaining' => 'integer',
         ];
-    }
-
-    public function routeNotificationForMail($notification): string
-    {
-        return $this->email;
     }
 
     // ============================================
     // СВЯЗИ (ОТНОШЕНИЯ)
     // ============================================
 
-    // Наши новые главные связи
     public function profile(): HasOne
     {
         return $this->hasOne(UserProfile::class);
@@ -69,23 +57,12 @@ class User extends Authenticatable implements MustVerifyEmail
         return $this->hasOne(UserPreference::class);
     }
 
-    // Связи из старой модели (пока оставляем как есть)
-    public function chats() 
-    {
-        // Позже мы перепишем это на belongsToMany, но пока пусть работает
-        return Chat::where('user1_id', $this->id)->orWhere('user2_id', $this->id);
-    }
-    
-    public function chatParticipants(): HasMany
-    {
-        return $this->hasMany(ChatParticipant::class);
-    }
-
     public function albums(): HasMany
     {
         return $this->hasMany(Album::class);
     }
 
+    // Твой крутой хелпер для дефолтного альбома
     public function defaultAlbum(): HasOne
     {
         return $this->hasOne(Album::class)->where('is_default', true);
@@ -96,19 +73,52 @@ class User extends Authenticatable implements MustVerifyEmail
         return $this->hasMany(Photo::class);
     }
 
-    public function photoComments(): HasMany
+    public function comments(): HasMany
     {
         return $this->hasMany(PhotoComment::class);
     }
 
-    public function receivedReports(): HasMany
+    // Чаты (Многие ко многим через сводную таблицу)
+    public function chats(): BelongsToMany
     {
-        return $this->hasMany(Report::class, 'reported_user_id');
+        return $this->belongsToMany(Chat::class, 'chat_participants')
+            ->withPivot(['unread_count', 'last_read_at', 'is_hidden', 'is_muted', 'is_blocked'])
+            ->withTimestamps();
     }
 
-    public function sentReports(): HasMany
+    public function messages(): HasMany
     {
-        return $this->hasMany(Report::class, 'user_id');
+        return $this->hasMany(Message::class, 'sender_id');
+    }
+
+    public function giftsSent(): HasMany
+    {
+        return $this->hasMany(UserGift::class, 'sender_id');
+    }
+
+    public function giftsReceived(): HasMany
+    {
+        return $this->hasMany(UserGift::class, 'receiver_id');
+    }
+
+    public function transactions(): HasMany  
+    {
+        return $this->hasMany(Transaction::class);
+    }
+
+    public function subscriptions(): HasMany 
+    {
+        return $this->hasMany(UserSubscription::class);
+    }
+
+    public function reportsMade(): HasMany
+    {
+        return $this->hasMany(Report::class, 'reporter_id');
+    }
+
+    public function reportsAgainst(): HasMany
+    {
+        return $this->hasMany(Report::class, 'reported_id');
     }
 
     public function swipesGiven(): HasMany
@@ -121,13 +131,92 @@ class User extends Authenticatable implements MustVerifyEmail
         return $this->hasMany(Swipe::class, 'target_user_id');
     }
 
-    public function matches() // Пока оставляем, потом перепишем
+    // В нашей БД user1_id всегда меньше user2_id. 
+    // Поэтому матчи делятся на две связи (где я инициатор записи, и где собеседник).
+    public function matchesAsUser1(): HasMany
     {
-        return UserMatch::where('user1_id', $this->id)->orWhere('user2_id', $this->id);
+        return $this->hasMany(UserMatch::class, 'user1_id');
+    }
+
+    public function matchesAsUser2(): HasMany
+    {
+        return $this->hasMany(UserMatch::class, 'user2_id');
     }
 
     // ============================================
-    // ХЕЛПЕРЫ И СКОПЫ
+    // СКОПЫ (SCOPES)
+    // ============================================
+
+    // Выводить только обычных юзеров (исключать админов/модераторов)
+    public function scopeExcludeStaff($query)
+    {
+        return $query->where('role', 'user');
+    }
+
+    // Выводить только активных (не забаненных и не деактивированных)
+    public function scopeActive($query)
+    {
+        return $query->where('status', 'active');
+    }
+
+    // ============================================
+    // АКСЕССОРЫ И ХЕЛПЕРЫ
+    // ============================================
+
+    /**
+     * Проверка, является ли пользователь сотрудником (для админки).
+     */
+    public function isStaff(): bool
+    {
+        return in_array($this->role, ['admin', 'moderator', 'support']);
+    }
+
+    public function isBanned(): bool
+    {
+        if ($this->status !== 'banned') {
+            return false;
+        }
+        // Если banned_until null — бан вечный. Если есть дата — проверяем, истек ли он.
+        return is_null($this->banned_until) || $this->banned_until->isFuture();
+    }
+
+    /**
+     * Проверка активной VIP-подписки.
+     */
+    public function getHasActivePremiumAttribute(): bool
+    {
+        return $this->is_premium 
+            && !is_null($this->premium_expires_at) 
+            && $this->premium_expires_at->isFuture();
+    }
+
+    /**
+     * Проверка "Кто онлайн" (был за последние 5 минут).
+     */
+    public function getIsOnlineAttribute(): bool
+    {
+        return $this->last_seen && $this->last_seen->gt(now()->subMinutes(5));
+    }
+
+    /**
+     * Получить URL аватарки.
+     * Если фотки загружены (eager loaded) — берет из памяти.
+     * Если нет — возвращаем пустую строку, чтобы <x-avatar> отрисовал заглушку с инициалами.
+     */
+    public function getAvatarUrlAttribute(): string
+    {
+        if ($this->relationLoaded('photos')) {
+            $photos = $this->getRelation('photos');
+            if ($photos && $photos->isNotEmpty()) {
+                $photo = $photos->firstWhere('is_primary', true) ?? $photos->first();
+                return $photo->path_thumb ?: $photo->path_medium ?: '';
+            }
+        }
+        return '';
+    }
+
+    // ============================================
+    // ПРОКСИ-АКСЕССОРЫ ДЛЯ НАСТРОЕК (Из твоей старой модели)
     // ============================================
 
     public function getLocaleAttribute(): string
@@ -140,96 +229,25 @@ class User extends Authenticatable implements MustVerifyEmail
         return $this->preferences?->theme ?? 'light';
     }
 
-    public function scopeExcludeAdmins($query)
-    {
-        return $query->where('is_admin', false);
-    }
-
-    public function getHasActivePremiumAttribute(): bool
-    {
-        return $this->is_premium && ($this->premium_expires_at === null || $this->premium_expires_at->isFuture());
-    }
-
-    public function getIsOnlineAttribute(): bool
-    {
-        return $this->last_seen && $this->last_seen->gt(now()->subMinutes(5));
-    }
-
-    // Удобные прокси-аксессоры, чтобы не писать $user->profile->bio в коде
-    // ВНИМАНИЕ: Используй их только там, где профиль уже загружен (eager loaded)!
-    public function getBioAttribute()
-    {
-        return $this->profile?->bio;
-    }
-
-    public function getGenderAttribute()
-    {
-        return $this->profile?->gender;
-    }
-    
-     
-      /**
-     * Получить URL аватарки.
-     * Если фотки загружены (eager loaded) — берет из памяти.
-     * Если нет или они пустые — возвращаем пустую строку,
-     * чтобы компонент <x-avatar> отрисовал красивую заглушку с инициалами.
-     */
-    public function getAvatarUrlAttribute(): string
-    {
-        // Проверяем, загружена ли связь в память
-        if ($this->relationLoaded('photos')) {
-            $photos = $this->getRelation('photos');
-            if ($photos && $photos->isNotEmpty()) {
-                $photo = $photos->first();
-                // Используем ?: чтобы отлавливать пустые строки
-                return $photo->thumb_url ?: $photo->medium_url ?: '';
-            }
-        }
-        
-        // Возвращаем пустоту, чтобы <x-avatar> сделал заглушку из имени
-        return '';
-    }
-
-        // ============================================
-    // ПРОКСИ-АКСЕССОРЫ ДЛЯ УВЕДОМЛЕНИЙ
-    // ============================================
-
-    /**
-     * Прокси для глобального тумблера Push-уведомлений.
-     * Позволяет обращаться $user->push_enabled в классах уведомлений.
-     */
     public function getPushEnabledAttribute(): bool
     {
-        // Если связи нет (юзер удалился) или настройка не указана — по умолчанию true
         return $this->preferences?->push_enabled ?? true;
     }
 
-    /**
-     * Прокси для настроек Email-уведомлений.
-     * Позволяет обращаться $user->email_settings['on_report'] в классах уведомлений.
-     */
     public function getEmailSettingsAttribute(): array
     {
-        // Если связи нет — возвращаем дефолтный массив, 
-        // чтобы избежать ошибок при обращении $user->email_settings['on_...']
         if (!$this->preferences) {
             return [
-                'on_message' => true, 
-                'on_like' => true, 
-                'on_view' => false,
-                'on_photo_moderated' => true, 
-                'on_report' => true,
-                'on_ban' => true, 
-                'on_broadcast' => true
+                'on_message' => true, 'on_like' => true, 'on_view' => false,
+                'on_photo_moderated' => true, 'on_report' => true,
+                'on_ban' => true, 'on_broadcast' => true
             ];
         }
-
-        // Берем готовый массив из UserPreference (там уже сработает array_merge с дефолтами)
         return $this->preferences->email_settings;
     }
 
     // ============================================
-    // СОБЫТИЯ МОДЕЛИ
+    // СОБЫТИЯ МОДЕЛИ (Booted)
     // ============================================
 
     protected static function booted()
@@ -239,7 +257,7 @@ class User extends Authenticatable implements MustVerifyEmail
             $user->profile()->create();
             $user->preferences()->create();
             
-            // Создаем альбом по умолчанию
+            // Создаем альбом по умолчанию (предполагаем, что в модели Album есть этот статический метод)
             Album::createDefaultForUser($user);
         });
     }

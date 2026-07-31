@@ -8,6 +8,7 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Notifications\Notification;
 use Illuminate\Notifications\Messages\MailMessage;
 use Illuminate\Notifications\Messages\BroadcastMessage;
+use Illuminate\Support\Facades\Log;
 
 class BroadcastNotification extends Notification implements ShouldQueue
 {
@@ -21,23 +22,34 @@ class BroadcastNotification extends Notification implements ShouldQueue
     }
 
     /**
-     * Определяем каналы доставки в зависимости от типа оповещения и настроек юзера
+     * Определяем каналы доставки в зависимости от типа оповещения и настроек юзера.
+     * В нашей БД типы: in_app, push, email.
      */
     public function via($notifiable): array
     {
-        $channels = ['database']; // В базу (колокольчик) пишем ВСЕГДА
+        $channels = [];
+        $type = $this->broadcast->type;
 
-        // Если это email-рассылка, проверяем, включена ли у юзера настройка on_broadcast
-        if ($this->broadcast->type === 'email' && ($notifiable->email_settings['on_broadcast'] ?? true)) {
+        // 1. In-App (только запись в БД, для колокольчика). Никак не валидируется настройками,
+        // т.к. это системное сообщение от админа.
+        if ($type === 'in_app') {
+            return ['database'];
+        }
+
+        // 2. Email рассылка (проверяем настройки юзера)
+        if ($type === 'email' && $notifiable->email_enabled && ($notifiable->email_settings['on_broadcast'] ?? true)) {
+            $channels[] = 'database'; // Дублируем в колокольчик
             $channels[] = 'mail';
         }
 
-        // Если это push-рассылка, проверяем глобальный тумблер push_enabled
-        if ($this->broadcast->type === 'push' && $notifiable->push_enabled) {
-            $channels[] = 'broadcast';
+        // 3. Push рассылка (WebSockets на сайте). Проверяем глобальный тумблер.
+        if ($type === 'push' && $notifiable->push_enabled) {
+            $channels[] = 'database'; // Дублируем в колокольчик
+            $channels[] = 'broadcast'; // Реалтайм через WebSockets
         }
 
-        // Для 'system' мы ничего не добавляем, остается только 'database'
+        // Если ни одно условие не подошло (например, юзер выключил пуши) — отдаем пустой массив,
+        // Laravel просто пропустит этого юзера.
         return $channels;
     }
 
@@ -47,22 +59,19 @@ class BroadcastNotification extends Notification implements ShouldQueue
     public function toDatabase($notifiable): array
     {
         return [
-            // === УНИФИЦИРОВАННАЯ СТРУКТУРА ===
             'type' => 'broadcast',
             'title' => $this->broadcast->title,
             'message' => $this->broadcast->message,
-            'action_url' => url('/profile'),          
-            
-            // === СПЕЦИФИЧНЫЕ ДАННЫЕ ===
+            'action_url' => $this->broadcast->data['action_url'] ?? url('/profile'),          
             'data' => [
                 'broadcast_id' => $this->broadcast->id,
-                'broadcast_type' => $this->broadcast->type, // system, email, push
+                'broadcast_type' => $this->broadcast->type,
             ]
         ];
     }
 
     /**
-     * Отправляем email (если нужно)
+     * Отправляем email
      */
     public function toMail($notifiable): MailMessage
     {
@@ -70,27 +79,34 @@ class BroadcastNotification extends Notification implements ShouldQueue
             ->subject($this->broadcast->title)
             ->greeting("Здравствуйте, {$notifiable->name}!")
             ->line($this->broadcast->message)
-            ->action('Перейти в профиль', url('/profile'));
+            ->action('Перейти на сайт', $this->broadcast->data['action_url'] ?? url('/profile'));
     }
 
     /**
-     * Отправляем push через WebSocket (если нужно)
+     * Отправляем push через WebSocket (Realtime)
      */
     public function toBroadcast($notifiable): BroadcastMessage
     {
         return new BroadcastMessage([
-            // === УНИФИЦИРОВАННАЯ СТРУКТУРА ===
             'type' => 'broadcast',
             'title' => $this->broadcast->title,
             'message' => $this->broadcast->message,
-            'action_url' => url('/profile'),
+            'action_url' => $this->broadcast->data['action_url'] ?? url('/profile'),
             'timestamp' => now()->toDateTimeString(),
-            
-            // === СПЕЦИФИЧНЫЕ ДАННЫЕ ===
             'data' => [
                 'broadcast_id' => $this->broadcast->id,
                 'broadcast_type' => $this->broadcast->type,
             ]
         ]);
+    }
+
+    /**
+     * ЗАЩИТА ОЧЕРЕДИ:
+     * Если рассылка была удалена админом, пока письмо висело в очереди,
+     * воркер не упадет с ModelNotFoundException, а просто запишет лог и завершится.
+     */
+    public function failed(\Throwable $exception): void
+    {
+        Log::error("Не удалось отправить BroadcastNotification (ID: {$this->broadcast->id}): " . $exception->getMessage());
     }
 }

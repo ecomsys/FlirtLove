@@ -10,28 +10,49 @@ return new class extends Migration
     {
         Schema::create('reports', function (Blueprint $table) {
             $table->id();
+            
+            // === КТО И НА КОГО ЖАЛУЕТСЯ ===
+            // Убрали cascade! Если юзер удаляется, жалоба остается в БД для службы безопасности.
+            $table->foreignId('reporter_id')->constrained('users'); // Кто подал жалобу
+            $table->foreignId('reported_id')->constrained('users'); // На кого подали жалобу
+            
+            // === ПОЛИМОРФНАЯ СВЯЗЬ (На что жалоба?) ===
+            // Позволяет жаловаться на фото, сообщения, комментарии, анкеты.
+            // reportable_type = 'Photo', reportable_id = 123
+            $table->nullableMorphs('reportable'); 
 
-            $table->foreignId('user_id')->constrained()->onDelete('cascade');
-            $table->foreignId('reported_user_id')->constrained('users')->onDelete('cascade');
-            $table->foreignId('photo_id')->nullable()->constrained()->onDelete('cascade');
-            $table->foreignId('moderator_id')->nullable()->constrained('users')->nullOnDelete();
+            // === СУТЬ ЖАЛОБЫ ===
+            // Причина жестко задана строкой (slug) для фильтрации в админке: spam, porn, scam, insult, minor
+            $table->string('reason')->index(); 
+            // Свободное описание от юзера (что именно нарушил, текст жалобы)
+            $table->text('description')->nullable();
 
-            $table->text('reason');
-            $table->enum('status', ['pending', 'resolved', 'rejected'])->default('pending');
-            $table->enum('type', ['user', 'photo'])->default('user');
+            // === СТАТУС И РАЗБИРАТЕЛЬСТВО ===
+            // pending (ожидает), resolved (разобрано - нарушитель наказан), rejected (разобрано - нет нарушения)
+            $table->string('status')->default('pending')->index();
+            
+            // Что сделал модератор: ban (бан), warn (предупреждение), shadowban, no_action (нет нарушения)
+            $table->string('resolution')->nullable(); 
+            // Внутренний комментарий модератора (почему он принял такое решение)
+            $table->text('resolution_note')->nullable(); 
 
-            $table->timestamp('resolved_at')->nullable();
+            // === КТО РАЗБИРАЛ ===
+            // Админ/модератор (приводим к единому неймингу с admin_logs)
+            $table->foreignId('admin_id')->nullable()->constrained('users');
+            $table->timestamp('resolved_at')->nullable(); // Когда жалоба была закрыта
 
             $table->timestamps();
-            $table->softDeletes();
+            $table->softDeletes(); // Жалобы не удаляются физически никогда!
 
-            // Индексы
-            $table->index(['user_id', 'status']);
-            $table->index(['reported_user_id', 'status']);
-            $table->index(['photo_id', 'status']);
-            $table->index('moderator_id');
-            $table->index(['status', 'created_at']); // Для вывода очереди жалоб в админке
-            $table->index('type'); // Для фильтрации: показать только жалобы на фото
+            // === ИНДЕКСЫ ===
+            // Очередь в админке: выводим все pending жалобы по дате создания
+            $table->index(['status', 'created_at']);
+            
+            // Проверка: жаловался ли уже этот юзер на этого юзера (чтобы не спамили жалобы)
+            $table->index(['reporter_id', 'reported_id']);
+            
+            // Для профиля админки: показать все жалобы, разобранные конкретным модератором
+            $table->index('admin_id');
         });
     }
 

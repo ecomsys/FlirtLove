@@ -2,6 +2,7 @@
 
 namespace Database\Seeders;
 
+use App\Models\Photo;
 use App\Models\Report;
 use App\Models\User;
 use Illuminate\Database\Seeder;
@@ -10,31 +11,28 @@ class ReportSeeder extends Seeder
 {
     public function run(): void
     {
-        // ✅ Берем только обычных юзеров (не админов)
-        $users = User::where('is_admin', false)->get();
+        // Берем только обычных юзеров
+        $users = User::where('role', 'user')->get();
         
         if ($users->count() < 2) {
             $this->command->warn('⚠️ Нужно минимум 2 обычных пользователя для жалоб!');
             return;
         }
 
+        $admin = User::where('role', 'admin')->first();
+
         $this->command->info('🚩 Создаем жалобы...');
 
-        $reasons = [
+        // Slug причин и текстовые описания
+        $reasonSlugs = ['spam', 'scam', 'insult', 'fake', 'porn', 'minor'];
+        $descriptions = [
             'Оскорбляет других пользователей в чате',
             'Профиль выглядит фейковым',
             'Спамит ссылками на посторонние сайты',
             'Выдает себя за другого человека',
             'Рассылает неприемлемый контент',
             'Нарушает правила сообщества',
-            'Некорректное поведение',
-            'Агрессия в общении',
-            'Рассылка рекламы',
-            'Неприемлемые фото',
         ];
-
-        $statuses = ['pending', 'resolved', 'rejected'];
-        $types = ['user', 'photo'];
 
         $createdCount = 0;
 
@@ -45,18 +43,23 @@ class ReportSeeder extends Seeder
         
         for ($i = 0; $i < 15; $i++) {
             $reporter = $users->random();
-            // Гарантируем, что юзер не кидает жалобу сам на себя
             $reported = $users->where('id', '!=', $reporter->id)->random();
             
+            $status = ['pending', 'resolved', 'rejected'][array_rand(['pending', 'resolved', 'rejected'])];
+            $resolution = $status === 'resolved' ? ['ban', 'warn', 'shadowban'][array_rand(['ban', 'warn', 'shadowban'])] : null;
+
             Report::create([
-                'user_id' => $reporter->id,
-                'reported_user_id' => $reported->id,
-                'photo_id' => null,
-                'reason' => $reasons[array_rand($reasons)],
-                'status' => $statuses[array_rand($statuses)],
-                'type' => 'user',
-                'moderator_id' => null,
-                'resolved_at' => null,
+                'reporter_id' => $reporter->id,
+                'reported_id' => $reported->id,
+                'reportable_type' => User::class, // Полиморфная связь на юзера
+                'reportable_id' => $reported->id,
+                'reason' => $reasonSlugs[array_rand($reasonSlugs)],
+                'description' => $descriptions[array_rand($descriptions)],
+                'status' => $status,
+                'resolution' => $resolution,
+                'resolution_note' => $resolution ? 'Разобрано модератором' : null,
+                'admin_id' => $status !== 'pending' && $admin ? $admin->id : null,
+                'resolved_at' => $status !== 'pending' ? now()->subDays(rand(0, 10)) : null,
                 'created_at' => now()->subDays(rand(0, 30)),
                 'updated_at' => now()->subDays(rand(0, 10)),
             ]);
@@ -71,7 +74,7 @@ class ReportSeeder extends Seeder
         // ============================================
         $this->command->info('   📝 Создаем жалобы на фото...');
 
-        $photos = \App\Models\Photo::where('status', 'approved')->get();
+        $photos = Photo::where('status', 'approved')->get();
 
         if ($photos->isNotEmpty()) {
             for ($i = 0; $i < 5; $i++) {
@@ -79,15 +82,20 @@ class ReportSeeder extends Seeder
                 $photo = $photos->random();
                 $reported = $photo->user; // Владелец фото
 
+                $status = ['pending', 'resolved', 'rejected'][array_rand(['pending', 'resolved', 'rejected'])];
+
                 Report::create([
-                    'user_id' => $reporter->id,
-                    'reported_user_id' => $reported->id,
-                    'photo_id' => $photo->id,
-                    'reason' => 'Неприемлемое фото: ' . $reasons[array_rand($reasons)],
-                    'status' => $statuses[array_rand($statuses)],
-                    'type' => 'photo',
-                    'moderator_id' => null,
-                    'resolved_at' => null,
+                    'reporter_id' => $reporter->id,
+                    'reported_id' => $reported->id,
+                    'reportable_type' => Photo::class, // Полиморфная связь на фото
+                    'reportable_id' => $photo->id,
+                    'reason' => 'porn', // На фото чаще всего жалуются на контент
+                    'description' => 'Неприемлемое фото: ' . $descriptions[array_rand($descriptions)],
+                    'status' => $status,
+                    'resolution' => $status === 'resolved' ? 'photo_deleted' : null,
+                    'resolution_note' => $status === 'resolved' ? 'Фото удалено модератором' : null,
+                    'admin_id' => $status !== 'pending' && $admin ? $admin->id : null,
+                    'resolved_at' => $status !== 'pending' ? now()->subDays(rand(0, 5)) : null,
                     'created_at' => now()->subDays(rand(0, 20)),
                     'updated_at' => now()->subDays(rand(0, 5)),
                 ]);
@@ -100,25 +108,26 @@ class ReportSeeder extends Seeder
         }
 
         // ============================================
-        // 3. РАЗРЕШЕННЫЕ ЖАЛОБЫ (с модератором)
+        // 3. РАЗРЕШЕННЫЕ ЖАЛОБЫ (с админом)
         // ============================================
-        $admin = User::where('is_admin', true)->first();
-        
         if ($admin) {
-            $this->command->info('   📝 Создаем разрешенные жалобы (с модератором)...');
+            $this->command->info('   📝 Создаем разрешенные жалобы (с админом)...');
             
             for ($i = 0; $i < 5; $i++) {
                 $reporter = $users->random();
                 $reported = $users->where('id', '!=', $reporter->id)->random();
                 
                 Report::create([
-                    'user_id' => $reporter->id,
-                    'reported_user_id' => $reported->id,
-                    'photo_id' => null,
-                    'reason' => $reasons[array_rand($reasons)],
+                    'reporter_id' => $reporter->id,
+                    'reported_id' => $reported->id,
+                    'reportable_type' => User::class,
+                    'reportable_id' => $reported->id,
+                    'reason' => $reasonSlugs[array_rand($reasonSlugs)],
+                    'description' => $descriptions[array_rand($descriptions)],
                     'status' => 'resolved',
-                    'type' => 'user',
-                    'moderator_id' => $admin->id,
+                    'resolution' => 'ban', // Жестко указываем бан
+                    'resolution_note' => 'Пользователь забанен за нарушение правил',
+                    'admin_id' => $admin->id,
                     'resolved_at' => now()->subDays(rand(1, 15)),
                     'created_at' => now()->subDays(rand(10, 30)),
                     'updated_at' => now()->subDays(rand(1, 10)),
@@ -142,14 +151,14 @@ class ReportSeeder extends Seeder
             'pending' => Report::where('status', 'pending')->count(),
             'resolved' => Report::where('status', 'resolved')->count(),
             'rejected' => Report::where('status', 'rejected')->count(),
-            'user_reports' => Report::where('type', 'user')->count(),
-            'photo_reports' => Report::where('type', 'photo')->count(),
+            'user_reports' => Report::where('reportable_type', User::class)->count(),
+            'photo_reports' => Report::where('reportable_type', Photo::class)->count(),
         ];
 
         $this->command->info('');
         $this->command->info('📊 Статистика:');
         $this->command->info("   ┌─────────────────────┬──────────┐");
-        $this->command->info("   │ Тип                 │ Количество │");
+        $this->command->info("   │ Тип                 │ Кол-во   │");
         $this->command->info("   ├─────────────────────┼──────────┤");
         $this->command->info("   │ Всего               │ {$stats['total']}        │");
         $this->command->info("   │ На пользователей    │ {$stats['user_reports']}        │");

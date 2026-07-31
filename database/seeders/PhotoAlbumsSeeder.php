@@ -13,7 +13,8 @@ class PhotoAlbumsSeeder extends Seeder
     {
         $this->command->info('📸 Создаём альбомы и фото (с реальными URL)...');
 
-        $users = User::where('is_admin', false)->get();
+        // Фильтруем только обычных юзеров (role = 'user')
+        $users = User::where('role', 'user')->get();
 
         if ($users->isEmpty()) {
             $this->command->warn('⚠️ Нет пользователей для создания альбомов.');
@@ -38,6 +39,7 @@ class PhotoAlbumsSeeder extends Seeder
                 [
                     'name' => 'Общие',
                     'description' => 'Основные фотографии пользователя',
+                    'is_private' => false, // Новое поле
                 ]
             );
 
@@ -45,6 +47,7 @@ class PhotoAlbumsSeeder extends Seeder
                 $totalAlbumsCreated++;
             }
 
+            // Если в дефолтном альбоме еще нет фото
             if ($defaultAlbum->photos()->count() === 0) {
                 $defaultPhotoCount = rand(2, 4);
                 for ($p = 0; $p < $defaultPhotoCount; $p++) {
@@ -53,17 +56,22 @@ class PhotoAlbumsSeeder extends Seeder
                     Photo::create([
                         'user_id' => $user->id,
                         'album_id' => $defaultAlbum->id,
+                        'type' => 'profile', // Новое поле (тип фото)
                         'path_original' => "https://i.pravatar.cc/800?img={$imgId}",
                         'path_large' => "https://i.pravatar.cc/800?img={$imgId}",
                         'path_medium' => "https://i.pravatar.cc/500?img={$imgId}",
                         'path_thumb' => "https://i.pravatar.cc/300?img={$imgId}",
-                        'is_primary' => $p === 0,
-                        'is_intimate' => false,
                         'status' => 'approved',
+                        'moderated_at' => now(), // Новое поле (дата модерации)
+                        'is_primary' => $p === 0, // Первое фото делаем аватаркой
+                        'is_intimate' => false,
                         'position' => $p,
                     ]);
                     $totalPhotos++;
                 }
+                
+                // Обновляем счетчик фото в альбоме (наш хелпер из модели Album)
+                $defaultAlbum->refreshPhotosCount();
             }
 
             // --- ДОПОЛНИТЕЛЬНЫЕ АЛЬБОМЫ ---
@@ -80,6 +88,7 @@ class PhotoAlbumsSeeder extends Seeder
                     [
                         'description' => "Альбом «{$name}» пользователя {$user->name}",
                         'is_default' => false,
+                        'is_private' => (bool) rand(0, 1), // Новое поле (рандомно делаем приватные)
                     ]
                 );
 
@@ -95,17 +104,22 @@ class PhotoAlbumsSeeder extends Seeder
                         Photo::create([
                             'user_id' => $user->id,
                             'album_id' => $album->id,
+                            'type' => 'profile', // Новое поле
                             'path_original' => "https://i.pravatar.cc/800?img={$imgId}",
                             'path_large' => "https://i.pravatar.cc/800?img={$imgId}",
                             'path_medium' => "https://i.pravatar.cc/500?img={$imgId}",
                             'path_thumb' => "https://i.pravatar.cc/300?img={$imgId}",
-                            'is_primary' => false,
-                            'is_intimate' => rand(0, 1) === 1,
                             'status' => 'approved',
+                            'moderated_at' => now(), // Новое поле
+                            'is_primary' => false,
+                            'is_intimate' => $album->is_private ? true : (bool) rand(0, 1), // В приватных альбомах фотки 18+
                             'position' => $p,
                         ]);
                         $totalPhotos++;
                     }
+                    
+                    // Обновляем счетчик фото в альбоме
+                    $album->refreshPhotosCount();
                 }
             }
         }

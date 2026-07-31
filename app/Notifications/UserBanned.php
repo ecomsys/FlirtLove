@@ -7,6 +7,7 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Notifications\Notification;
 use Illuminate\Notifications\Messages\MailMessage;
 use Illuminate\Notifications\Messages\BroadcastMessage;
+use Illuminate\Support\Facades\Log;
 
 class UserBanned extends Notification implements ShouldQueue
 {
@@ -17,7 +18,7 @@ class UserBanned extends Notification implements ShouldQueue
     ) {}
 
     /**
-     * Обновляем каналы доставки с учетом настроек юзера
+     *  Каналы доставки с учетом глобальных тумблеров и категорий
      */
     public function via($notifiable): array
     {
@@ -28,8 +29,8 @@ class UserBanned extends Notification implements ShouldQueue
             $channels[] = 'broadcast';
         }
 
-        // Проверяем настройку Email для бана (?? true — дефолт для старых юзеров)
-        if ($notifiable->email_settings['on_ban'] ?? true) {
+        // Проверяем глобальный тумблер Email И категорию "Новые события" (on_event)
+        if ($notifiable->email_enabled && ($notifiable->email_settings['on_event'] ?? true)) {
             $channels[] = 'mail';
         }
 
@@ -90,11 +91,20 @@ class UserBanned extends Notification implements ShouldQueue
 
     public function toBroadcast($notifiable): BroadcastMessage
     {
-        // Используем те же данные, что и для БД
+        // Используем те же данные, что и для БД (Твой крутой DRY-подход)
         $dbData = $this->toDatabase($notifiable);
 
         return new BroadcastMessage(array_merge($dbData, [
             'timestamp' => now()->toDateTimeString(),
         ]));
+    }
+
+    /**
+     * ЗАЩИТА ОЧЕРЕДИ
+     */
+    public function failed(\Throwable $exception): void
+    {
+        $status = $this->isBanned ? 'Banned' : 'Unbanned';
+        Log::error("Не удалось отправить UserBanned (Status: {$status}): " . $exception->getMessage());
     }
 }

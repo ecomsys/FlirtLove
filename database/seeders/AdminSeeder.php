@@ -1,4 +1,4 @@
-<?php
+<?php 
 
 namespace Database\Seeders;
 
@@ -18,20 +18,18 @@ class AdminSeeder extends Seeder
         $adminEmail = 'admin@admin.com';
         $adminPassword = '12121212';
 
-        // Находим или создаем админа
+        // 1. Создаем или обновляем Админа
         $admin = User::updateOrCreate(
             ['email' => $adminEmail],
             [
                 'name' => 'Администратор',
                 'password' => Hash::make($adminPassword),
-                'is_admin' => true,
-                'is_banned' => false,
-                'is_premium' => true, // Админу даем премиум
+                'role' => 'admin', // Новое поле вместо is_admin
+                'status' => 'active', // Новое поле вместо is_banned/is_deactivated
+                'is_premium' => true, 
                 'premium_expires_at' => now()->addYears(10),
                 'is_verified' => true,
                 'has_completed_onboarding' => true,
-                'is_deactivated' => false,
-                'superlikes_remaining' => 999,
                 'last_login_at' => now(),
                 'last_login_ip' => '127.0.0.1',
                 'last_seen' => now(),
@@ -39,24 +37,21 @@ class AdminSeeder extends Seeder
             ]
         );
 
-        // ============================================
-        // СОЗДАЕМ ПРОФИЛЬ АДМИНА
-        // ============================================
-        $profile = UserProfile::updateOrCreate(
+        // 2. Создаем профиль Админа
+        UserProfile::updateOrCreate(
             ['user_id' => $admin->id],
             [
                 'gender' => 'male',
                 'birth_date' => '1990-01-01',
                 'dating_goal' => 'friends',
                 'city' => 'Москва',
-                'address' => 'Москва, Россия',
                 'country' => 'Россия',
-                'status' => 'Главный администратор сайта',
+                'headline' => 'Главный администратор сайта', // Было status
                 'bio' => 'Я тут главный! Если есть вопросы - пишите в поддержку. 😎',
                 'looking_for' => 'Помогаю пользователям находить любовь ❤️',
                 'interests' => ['разработка', 'управление', 'поддержка', 'путешествия'],
+                'self_portrait' => null, // Новое JSON поле, пока пусто
                 
-                // Внешность (не важно для админа)
                 'body_type' => 2,
                 'eye_color' => 1,
                 'hair_color' => 1,
@@ -70,29 +65,25 @@ class AdminSeeder extends Seeder
                 'has_car' => 1,
                 'smoking' => 1,
                 'alcohol' => 1,
+                'zodiac_sign' => 10, // Теперь это число (например, 10 = Козерог)
                 
                 'body_decorations' => [],
-                'languages' => [1, 2], // Русский, Английский
+                'languages' => [1, 2], 
                 'sports' => [1, 2],
                 
-                'education' => 4, // Высшее
+                'education' => 'Высшее', 
                 'occupation' => 'Администратор',
                 'institution' => 'МГУ',
                 'institution_year' => 2012,
                 'activity' => 'IT',
                 'position' => 'CEO',
                 
-                'zodiac_sign' => 'capricorn',
-                
-                'profile_views' => 9999,
-                'likes_count' => 999,
+                // location и address не указываем, админу не обязательно
             ]
         );
 
-        // ============================================
-        // СОЗДАЕМ НАСТРОЙКИ АДМИНА
-        // ============================================
-        $preferences = UserPreference::updateOrCreate(
+        // 3. Создаем настройки Админа
+        UserPreference::updateOrCreate(
             ['user_id' => $admin->id],
             [
                 'locale' => 'ru',
@@ -103,39 +94,38 @@ class AdminSeeder extends Seeder
                 'preferred_gender' => 'any',
                 'preferred_distance_km' => 10000,
                 
-                'search_filters' => [
-                    'body_type' => null,
-                    'height_from' => null,
-                    'height_to' => null,
-                    'is_verified_only' => false,
-                    'is_premium_only' => false,
-                ],
-                
+                'search_filters' => null, 
                 'chat_filter_enabled' => false,
                 'chat_filter_settings' => null,
                 
                 'is_invisible' => false,
                 'hide_intimate' => false,
                 'disable_photo_comments' => false,
-                'hide_from_search' => false,
+                'hide_from_search' => true, // Админа не нужно показывать в ленте юзерам!
                 
+                // Лимиты и валюта (Переехали из таблицы users)
+                'superlikes_remaining' => 999,
+                'superlikes_reset_at' => now()->addDays(365),
+                'credits' => 999999, // Админ может тестировать подарки
+                
+                // Уведомления
                 'push_enabled' => true,
+                'email_enabled' => true,
                 'email_settings' => [
-                    'on_message' => true,
-                    'on_like' => true,
-                    'on_view' => true,
-                    'on_photo_moderated' => true,
-                    'on_report' => true,
-                    'on_ban' => true,
-                    'on_broadcast' => true,
+                    'on_message'    => true,
+                    'on_like'       => true,
+                    'on_view'       => true,
+                    'on_gift'       => true,
+                    'on_event'      => true, // Заменили on_report, on_ban, on_photo_moderated
+                    'on_broadcast'  => true,
+                    'sub_new_faces' => false,
+                    'sub_popular'   => false,
                 ],
             ]
         );
 
-        // ============================================
-        // СОЗДАЕМ АЛЬБОМ ДЛЯ АДМИНА
-        // ============================================
-        $album = Album::updateOrCreate(
+        // 4. Создаем альбом Админа
+        Album::updateOrCreate(
             [
                 'user_id' => $admin->id,
                 'is_default' => true,
@@ -143,6 +133,8 @@ class AdminSeeder extends Seeder
             [
                 'name' => 'Админские фото',
                 'description' => 'Фотографии администратора',
+                'is_private' => false,
+                'photos_count' => 0, // Новое поле
             ]
         );
 
@@ -150,8 +142,5 @@ class AdminSeeder extends Seeder
         $this->command->info("      📧 Email: {$adminEmail}");
         $this->command->info("      🔑 Пароль: {$adminPassword}");
         $this->command->info("      🆔 ID: {$admin->id}");
-        $this->command->info("      📋 Профиль: ID {$profile->id}");
-        $this->command->info("      ⚙️ Настройки: ID {$preferences->id}");
-        $this->command->info("      📁 Альбом: ID {$album->id}");
     }
 }

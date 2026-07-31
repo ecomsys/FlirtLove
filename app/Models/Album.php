@@ -16,10 +16,14 @@ class Album extends Model
         'name',
         'description',
         'is_default',
+        'is_private',     // Новое поле: приватный альбом
+        'photos_count',   // Новое поле: кэш количества фото
     ];
 
     protected $casts = [
         'is_default' => 'boolean',
+        'is_private' => 'boolean',
+        'photos_count' => 'integer',
     ];
 
     // ============================================
@@ -27,7 +31,8 @@ class Album extends Model
     // ============================================
 
     /**
-     * Создать альбом "Общие" для нового пользователя
+     * Создать альбом "Общие" для нового пользователя.
+     * Вызывается при регистрации (в User::booted).
      */
     public static function createDefaultForUser(User $user): self
     {
@@ -36,17 +41,19 @@ class Album extends Model
             'name' => 'Общие',
             'description' => 'Основные фотографии',
             'is_default' => true,
+            'is_private' => false,
         ]);
     }
 
     /**
-     * Получить или создать альбом по умолчанию
+     * Получить или создать альбом по умолчанию.
+     * Полезно, если по какой-то причине альбом не создался при регистрации.
      */
     public static function getDefaultForUser(User $user): self
     {
         return self::firstOrCreate(
             ['user_id' => $user->id, 'is_default' => true],
-            ['name' => 'Общие', 'description' => 'Основные фотографии']
+            ['name' => 'Общие', 'description' => 'Основные фотографии', 'is_private' => false]
         );
     }
 
@@ -61,13 +68,29 @@ class Album extends Model
 
     /**
      * Фото в альбоме.
-     * ВАЖНО: Добавлена сортировка по умолчанию!
+     * ВАЖНО: Сортировка по умолчанию!
      * Сначала идет главная фото (is_primary = 1 -> 0), потом по позиции.
+     * Твой код - просто золото, оставляем без изменений.
      */
     public function photos(): HasMany
     {
         return $this->hasMany(Photo::class)
             ->orderByDesc('is_primary')
             ->orderBy('position');
+    }
+
+    // ============================================
+    // ХЕЛПЕРЫ ДЛЯ ДЕНОРМАЛИЗАЦИИ
+    // ============================================
+
+    /**
+     * Обновить кэш количества фото в альбоме.
+     * Будем вызывать в Observer модели Photo при создании/удалении.
+     */
+    public function refreshPhotosCount(): void
+    {
+        // Считаем только неудаленные фото (Soft Scopes)
+        $this->photos_count = $this->photos()->count();
+        $this->save();
     }
 }

@@ -1,86 +1,98 @@
 <?php
 
+// Безопасность памяти (chunkById(1000, ...)): Теперь, даже если рассылка идет 1 миллиону юзеров, 
+// из БД будут выбираться по 1000 человек за раз. Память будет очищаться на каждой итерации.
+// Сегментация (target_audience): Теперь команда читает JSON с фильтрами, которые админ настроил в админке.
+// Если админ выбрал "только мужчин из Москвы", target_audience будет {"gender": "male", "city": "Москва"}, 
+// и скрипт применит эти условия через whereHas('profile').
+// Защита от двойного запуска: Перед началом цикла вызывается $broadcast->markAsSending($totalRecipients). 
+// Это меняет статус на sending. Если крон запустится через минуту (пока идет отправка), скоуп dueForDispatch() не найдет 
+// эту рассылку (так как она уже не scheduled).
+// Точечная статистика: Метод incrementSent() вызывается после каждой 1000 юзеров. Если ты зайдешь в админку во время 
+// рассылки, ты увидишь живой прогресс-бар (благодаря нашему аксессору getProgressAttribute).
+
 namespace App\Console\Commands;
 
-use App\Models\User;
 use App\Models\Broadcast;
+use App\Models\User;
 use App\Notifications\BroadcastNotification;
-use Illuminate\Support\Facades\Notification;
-use Illuminate\Console\Attributes\Description;
-use Illuminate\Console\Attributes\Signature;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Notification;
 
-// Запусти обаботчик очередей 
-// php artisan schedule:work
-
-// Настроить cron на сервере
-// На продакшене (или локальном сервере с Linux) нужно добавить cron-задачу:
-
-// bash
-// * * * * * cd /путь-к-проекту && php artisan schedule:run >> /dev/null 2>&1
-
-#[Signature('broadcasts:send-scheduled')]
-#[Description('Отправляет запланированные оповещения')]
 class SendScheduledBroadcasts extends Command
 {
-public function handle()
-{
-    $now = now();
+    protected $signature = 'broadcasts:send-scheduled';
+    protected $description = 'Отправляет запланированные оповещения (рассылки)';
 
-    $broadcasts = Broadcast::where('status', 'scheduled')
-        ->where('scheduled_at', '<=', $now)
-        ->get();
+    public function handle(): int
+    {
+        // 1. Получаем рассылки, время которых пришло. Используем наш скоуп!
+        $broadcasts = Broadcast::dueForDispatch()->get();
 
-    if ($broadcasts->isEmpty()) {
-        $this->info('Нет запланированных оповещений для отправки.');
+        if ($broadcasts->isEmpty()) {
+            $this->info('Нет запланированных оповещений для отправки.');
+            return 0;
+        }
+
+        foreach ($broadcasts as $broadcast) {
+            try {
+                $this->processBroadcast($broadcast);
+            } catch (\Exception $e) {
+                $this->error("Критическая ошибка при отправке #{$broadcast->id}: " . $e->getMessage());
+                Log::error("Сбой отправки оповещения #{$broadcast->id}: " . $e->getMessage());
+                $broadcast->markAsFailed();
+            }
+        }
+
         return 0;
     }
 
-    $sentCount = 0;
-
-    foreach ($broadcasts as $broadcast) {
-        try {
-            // 1. Сначала отправляем
-            $this->sendBroadcastToUsers($broadcast);
-
-            // 2. Только если успешно, меняем статус
-            $broadcast->update([
-                'status' => 'sent',
-                'sent_at' => $now,
-            ]);
-
-            $sentCount++;
-            $this->info("Оповещение #{$broadcast->id} успешно отправлено.");
-        } catch (\Exception $e) {
-            $this->error("Ошибка при отправке #{$broadcast->id}: " . $e->getMessage());
-            Log::error("Сбой отправки запланированного оповещения #{$broadcast->id}: " . $e->getMessage());
-        }
-    }
-
-    $this->info("Отправлено {$sentCount} запланированных оповещений.");
-    return 0;
-}
-
     /**
-     * Отправка оповещения пользователям (копия sendRealBroadcast)
+     * Обработка одной рассылки
      */
-    private function sendBroadcastToUsers($broadcast): void
+    private function processBroadcast(Broadcast $broadcast): void
     {
-        $users = $broadcast->user_id === null 
-            ? User::where('is_banned', false)->get(['id', 'name', 'email'])
-            : User::where('id', $broadcast->user_id)->get(['id', 'name', 'email']);
+        // 2. Формируем базовый запрос к активным юзерам (is_banned больше нет, есть status)
+        $query = User::query()->where('status', 'active');
 
-        if ($users->isEmpty()) {
+        // 3. Применяем фильтры сегментации из JSON target_audience
+        $filters = $broadcast->target_audience ?? [];
+        
+        if (!empty($filters['gender']) && $filters['gender'] !== 'any') {
+            $query->whereHas('profile', fn($q) => $q->where('gender', $filters['gender']));
+        }
+        if (!empty($filters['city'])) {
+            $query->whereHas('profile', fn($q) => $q->where('city', $filters['city']));
+        }
+        if (isset($filters['is_premium'])) {
+            $query->where('is_premium', $filters['is_premium']);
+        }
+
+        // 4. Подсчитываем общее количество получателей ДО отправки
+        $totalRecipients = $query->count();
+        if ($totalRecipients === 0) {
+            $this->info("Оповещение #{$broadcast->id}: нет подходящих получателей.");
+            $broadcast->markAsSent(); // Закрываем как отправленное (некому)
             return;
         }
 
-        Notification::send($users, new BroadcastNotification($broadcast));
+        // 5. Блокируем рассылку от повторного запуска кроном
+        $broadcast->markAsSending($totalRecipients);
+        $this->info("Оповещение #{$broadcast->id} запущено. Получателей: {$totalRecipients}.");
 
-        Log::info('Запланированное оповещение отправлено', [
-            'broadcast_id' => $broadcast->id,
-            'type' => $broadcast->type,
-            'sent_count' => $users->count(),
-        ]);
+        // 6. Отправляем чанками по 1000 юзеров (чтобы не съесть всю память)
+        $query->chunkById(1000, function ($users) use ($broadcast) {
+            // Notification::send автоматически распределит задачу в очередь (Queue), 
+            // если в BroadcastNotification реализован интерфейс ShouldQueue.
+            Notification::send($users, new BroadcastNotification($broadcast));
+            
+            // Обновляем счетчик успешно отправленных
+            $broadcast->incrementSent();
+        });
+
+        // 7. Завершаем рассылку
+        $broadcast->markAsSent();
+        $this->info("Оповещение #{$broadcast->id} успешно завершено.");
     }
 }

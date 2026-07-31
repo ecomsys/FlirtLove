@@ -5,7 +5,6 @@ use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Http\Request;
 use App\Http\Middleware\SetLocale;
-use App\Http\Middleware\CheckBlockedIp;
 use Illuminate\Console\Scheduling\Schedule;
 
 // ВАЖНО !!! Запускаеться в bootstrap/app.php 
@@ -19,8 +18,7 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withMiddleware(function (Middleware $middleware): void {
         // контроль за локалью
         $middleware->web(append: [
-            SetLocale::class,
-            CheckBlockedIp::class 
+            SetLocale::class            
         ]);
         
         $middleware->alias([

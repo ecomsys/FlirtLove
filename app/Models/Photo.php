@@ -1,24 +1,31 @@
-<?php
+<?php 
 
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Facades\Storage;
 
 class Photo extends Model
-{    
+{
+    use SoftDeletes; // Обязательно для сохранения улик!
+
     protected $fillable = [
         'user_id',
         'album_id', 
+        'type',              // Новое: profile или verification
         'path_original',
         'path_large',
         'path_medium',
         'path_thumb',
+        'status',            // pending, approved, rejected
+        'reject_reason',     // Новое: причина отклонения
+        'moderated_by',      // Новое: ID админа
+        'moderated_at',      // Новое: Время проверки
         'is_primary',
         'is_intimate',
-        'status',
         'position'
     ];
 
@@ -26,6 +33,7 @@ class Photo extends Model
         'is_primary' => 'boolean',
         'is_intimate' => 'boolean',
         'position' => 'integer',
+        'moderated_at' => 'datetime',
     ];
 
     // ============================================
@@ -40,6 +48,12 @@ class Photo extends Model
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
+    }
+
+    // Модератор, проверивший фото
+    public function moderator(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'moderated_by');
     }
 
     public function comments(): HasMany
@@ -58,7 +72,7 @@ class Photo extends Model
     }
 
     // ============================================
-    // ХЕЛПЕР ДЛЯ URL (С ПРОВЕРКОЙ НА ВНЕШНИЕ ССЫЛКИ)
+    // ХЕЛПЕР ДЛЯ URL (Твой код - оставляем без изменений)
     // ============================================
 
     /**
@@ -79,11 +93,6 @@ class Photo extends Model
         return Storage::url($path);
     }
 
-    // ============================================
-    // АКСЕССОРЫ ДЛЯ URL
-    // ============================================
-
-    // Основной URL (по умолчанию отдаем medium для показа в анкете)
     public function getUrlAttribute(): string
     {
         return $this->medium_url; 
@@ -115,8 +124,12 @@ class Photo extends Model
 
     public static function generatePath(int $userId, string $fileId, string $type): string
     {
-        $hash = substr(md5($userId), 0, 2);
-        return "photos/approved/{$hash}/{$userId}/{$type}_{$fileId}.webp";
+        // Берем 3 символа хэша (от 000 до fff = 4096 папок).
+        // Это идеальный баланс для масштабирования до миллионов юзеров без тормозов ФС.
+        $hash = substr(md5($userId), 0, 3);
+        
+        // Пример пути: photos/profile/a3f/105/large_12345.webp
+        return "photos/{$type}/{$hash}/{$userId}/{$fileId}.webp";
     }
 
     // ============================================
@@ -143,19 +156,50 @@ class Photo extends Model
         return $query->where('is_intimate', false);
     }
 
+    public function scopeOfType($query, string $type)
+    {
+        return $query->where('type', $type);
+    }
+
     // ============================================
-    // СОБЫТИЯ МОДЕЛИ
+    // ХЕЛПЕРЫ МОДЕРАЦИИ
+    // ============================================
+
+    public function markAsApproved(int $adminId): bool
+    {
+        return $this->update([
+            'status' => 'approved',
+            'moderated_by' => $adminId,
+            'moderated_at' => now(),
+            'reject_reason' => null,
+        ]);
+    }
+
+    public function markAsRejected(int $adminId, string $reason): bool
+    {
+        return $this->update([
+            'status' => 'rejected',
+            'moderated_by' => $adminId,
+            'moderated_at' => now(),
+            'reject_reason' => $reason,
+        ]);
+    }
+
+    // ============================================
+    // СОБЫТИЯ МОДЕЛИ (ИСПРАВЛЕНО ПОД SOFT DELETES)
     // ============================================
 
     protected static function booted()
     {
-        static::deleting(function ($photo) {
+        // Файлы удаляем ТОЛЬКО при жестком удалении (forceDelete)!
+        // При мягком удалении (delete) файлы остаются на диске для СБ.
+        static::forceDeleting(function ($photo) {
             $photo->deleteFiles();
         });      
     }
 
     /**
-     * Удалить все файлы фото с диска
+     * Удалить все файлы фото с диска (Твой код)
      */
     public function deleteFiles(): bool
     {
@@ -168,7 +212,6 @@ class Photo extends Model
 
         $deleted = true;
         foreach (array_filter($paths) as $path) {
-            //  Удаляем только локальные файлы!
             if (!filter_var($path, FILTER_VALIDATE_URL) && Storage::exists($path)) {
                 $deleted = $deleted && Storage::delete($path);
             }

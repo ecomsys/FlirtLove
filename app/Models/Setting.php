@@ -1,5 +1,4 @@
 <?php
-
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
@@ -8,7 +7,14 @@ use Illuminate\Support\Facades\Cache;
 class Setting extends Model
 {
     protected $fillable = [
-        'key', 'value', 'group', 'label', 'type', 'options', 'is_public'
+        'key', 
+        'value', 
+        'group', 
+        'label', 
+        'description', // Новое поле для админки
+        'type', 
+        'options', 
+        'is_public'
     ];
 
     protected $casts = [
@@ -16,52 +22,100 @@ class Setting extends Model
         'is_public' => 'boolean',
     ];
 
+    // ============================================
+    // КЭШИРОВАНИЕ
+    // ============================================
+
     /**
-     * Получить значение настройки (ВСЕГДА из кеша)
+     * Получить все настройки из кэша (в виде коллекции моделей).
+     * Кэшируем навсегда, пока не сбросим вручную.
      */
-    public static function get(string $key, $default = null)
+    public static function getAllCached(): \Illuminate\Support\Collection
     {
-        $settings = static::getAllCached();
-        $value = $settings[$key] ?? $default;
-
-        // Автокаст: если в БД тип 'boolean', вернем настоящий bool
-        $settingModel = static::where('key', $key)->first();
-        if ($settingModel && $settingModel->type === 'boolean') {
-            return filter_var($value, FILTER_VALIDATE_BOOLEAN);
-        }
-
-        return $value;
+        return Cache::rememberForever('settings_all', function () {
+            // keyBy('key') позволяет обращаться к настройке по ключу: $settings->get('site_name')
+            return static::all()->keyBy('key');
+        });
     }
 
     /**
-     * Установить настройку и сбросить кеш
+     * Сбросить кэш настроек (вызывается автоматически при save/delete)
      */
-    public static function set(string $key, $value, array $attributes = [])
+    public static function flushCache(): void
+    {
+        Cache::forget('settings_all');
+    }
+
+    // ============================================
+    // МАГИЧЕСКИЕ МЕТОДЫ ПОЛУЧЕНИЯ ЗНАЧЕНИЙ
+    // ============================================
+
+    /**
+     * Получить значение настройки с автокастингом (БЕЗ ЗАПРОСОВ В БД).
+     */
+    public static function get(string $key, mixed $default = null): mixed
+    {
+        $setting = static::getAllCached()->get($key);
+
+        if (!$setting) {
+            return $default;
+        }
+
+        // Автокаст: приводим значение к нужному типу прямо из кэша!
+        return match ($setting->type) {
+            'boolean' => filter_var($setting->value, FILTER_VALIDATE_BOOLEAN),
+            'integer' => (int) $setting->value,
+            'json'    => json_decode($setting->value, true),
+            default   => $setting->value,
+        };
+    }
+
+    /**
+     * Установить настройку и сбросить кэш
+     */
+    public static function set(string $key, mixed $value, array $attributes = []): self
     {
         $setting = static::updateOrCreate(
             ['key' => $key],
             array_merge(['value' => $value], $attributes)
         );
         
-        Cache::forget('settings');
+        static::flushCache();
         return $setting;
     }
 
     /**
-     * Получить все настройки группы
+     * Получить все настройки группы (например, для вкладки "Финансы")
      */
-    public static function getGroup(string $group): array
+    public static function getGroup(string $group): \Illuminate\Support\Collection
     {
-        return static::where('group', $group)->pluck('value', 'key')->toArray();
+        return static::getAllCached()->filter(fn($item) => $item->group === $group);
     }
 
     /**
-     * Кеширование настроек навсегда (пока не сбросим вручную)
+     * Получить публичные настройки для API (фронтенда)
      */
-    public static function getAllCached(): array
+    public static function getPublic(): array
     {
-        return Cache::rememberForever('settings', function () {
-            return static::all()->pluck('value', 'key')->toArray();
+        return static::getAllCached()
+            ->filter(fn($item) => $item->is_public)
+            ->mapWithKeys(fn($item) => [$item->key => self::get($item->key)])
+            ->toArray();
+    }
+
+    // ============================================
+    // СОБЫТИЯ МОДЕЛИ (Автоматический сброс кэша)
+    // ============================================
+
+    protected static function booted()
+    {
+        // Если админ изменил настройку в БД -> сбрасываем кэш
+        static::saved(function () {
+            static::flushCache();
+        });
+
+        static::deleted(function () {
+            static::flushCache();
         });
     }
 }

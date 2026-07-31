@@ -5,6 +5,7 @@ namespace Database\Seeders;
 use App\Models\User;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 
 class TestLogsSeeder extends Seeder
 {
@@ -12,54 +13,35 @@ class TestLogsSeeder extends Seeder
     {
         $this->command->info('🧪 Генерируем тестовые логи...');
 
-        // ✅ Берем ID только обычных юзеров (не админов)
-        $userIds = User::where('is_admin', false)->pluck('id')->toArray();
+        // ✅ Берем ID только обычных юзеров (role = 'user')
+        $userIds = User::where('role', 'user')->pluck('id')->toArray();
 
         if (empty($userIds)) {
             $this->command->warn('⚠️ Нет пользователей для генерации логов.');
             return;
         }
 
-        // ✅ ИСПРАВЛЕНО: выводим количество пользователей, а не массив
         $this->command->info("👥 Найдено " . count($userIds) . " пользователей");
 
         $levels = ['debug', 'info', 'notice', 'warning', 'error', 'critical', 'alert', 'emergency'];
         
         $messages = [
             // Информационные
-            'Пользователь вошел в систему',
-            'Успешная регистрация',
-            'Подписка активирована',
-            'Фото загружено',
-            'Комментарий добавлен',
-            'Настройки обновлены',
-            'Кеш очищен',
-            'Новый пользователь зарегистрировался',
-            'Профиль обновлен',
-            'Уведомление отправлено',
-            'Пароль успешно изменен',
-            'Email подтвержден',
-            'Пользователь вышел из системы',
+            'Пользователь вошел в систему', 'Успешная регистрация', 'Подписка активирована',
+            'Фото загружено', 'Комментарий добавлен', 'Настройки обновлены', 'Кеш очищен',
+            'Новый пользователь зарегистрировался', 'Профиль обновлен', 'Уведомление отправлено',
+            'Пароль успешно изменен', 'Email подтвержден', 'Пользователь вышел из системы',
             
             // Предупреждения
-            'Неверный пароль',
-            'Попытка входа с неверным email',
-            'Сессия истекла',
-            'Подозрительная активность',
-            'Медленный запрос к БД',
+            'Неверный пароль', 'Попытка входа с неверным email', 'Сессия истекла',
+            'Подозрительная активность', 'Медленный запрос к БД',
             
             // Ошибки
-            'Ошибка при загрузке файла',
-            'База данных недоступна',
-            'Ошибка отправки письма',
-            'Ошибка валидации данных',
-            'Ошибка при обработке платежа',
+            'Ошибка при загрузке файла', 'База данных недоступна', 'Ошибка отправки письма',
+            'Ошибка валидации данных', 'Ошибка при обработке платежа',
             
             // Критические
-            'Пользователь забанен',
-            'Жалоба решена',
-            'Критическая ошибка в системе',
-            'Потеря соединения с БД',
+            'Пользователь забанен', 'Жалоба решена', 'Критическая ошибка в системе', 'Потеря соединения с БД',
         ];
 
         $bar = $this->command->getOutput()->createProgressBar(100);
@@ -71,13 +53,8 @@ class TestLogsSeeder extends Seeder
             $level = $levels[array_rand($levels)];
             $message = $messages[array_rand($messages)];
             
-            // Рандомный пользователь из списка
             $userId = $userIds[array_rand($userIds)];
-            
-            // Случайный IP
             $ip = '192.168.' . rand(1, 255) . '.' . rand(1, 255);
-            
-            // Рандомное время (за последние 30 дней)
             $timestamp = now()->subDays(rand(0, 30))->subMinutes(rand(0, 1440));
             
             $context = [
@@ -86,12 +63,13 @@ class TestLogsSeeder extends Seeder
                 'user_agent' => $this->getRandomUserAgent(),
                 'iteration' => $i + 1,
                 'timestamp' => $timestamp->toIso8601String(),
-                'session_id' => session()->getId() ?? 'test_session_' . rand(1000, 9999),
+                // В консоли нет сессий! Генерируем случайный хэш, чтобы не сломать скрипт
+                'session_id' => 'test_session_' . Str::random(16), 
                 'random' => rand(1, 1000),
             ];
 
             // Добавляем дополнительные данные для разных уровней
-            if ($level === 'error' || $level === 'critical' || $level === 'alert') {
+            if (in_array($level, ['error', 'critical', 'alert'])) {
                 $context['stack_trace'] = "Error in file: /app/Http/Controllers/TestController.php line " . rand(10, 200);
                 $context['error_code'] = rand(100, 599);
             }
@@ -148,7 +126,6 @@ class TestLogsSeeder extends Seeder
             $this->command->info('');
             $this->command->info('💡 Просмотр логов:');
             $this->command->info('   tail -f ' . $logPath);
-            $this->command->info('   или откройте файл в редакторе');
         }
     }
 
@@ -170,16 +147,3 @@ class TestLogsSeeder extends Seeder
         return $agents[array_rand($agents)];
     }
 }
-// КАК ПРОВЕРИТЬ ЛОГИ
-// bash
-// # Просмотр последних 50 строк
-// tail -50 storage/logs/laravel.log
-
-// # Поиск ошибок
-// grep "error" storage/logs/laravel.log
-
-// # Поиск по пользователю
-// grep "user_id\":123" storage/logs/laravel.log
-
-// # Просмотр в реальном времени
-// tail -f storage/logs/laravel.log

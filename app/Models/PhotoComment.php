@@ -1,37 +1,40 @@
-<?php
+<?php 
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
-use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\SoftDeletes;
 
 class PhotoComment extends Model
 {
+    use SoftDeletes; // Обязательно для сохранения удаленных матов/оскорблений
+
     protected $fillable = [
         'photo_id',
         'user_id',
         'content',
         'status',
+        'reject_reason',     // Единый паттерн с Photo
+        'moderated_by',      // ID админа
+        'moderated_at',      // Время проверки
         'parent_id',
         'likes_count',
         'reports_count',
-        'is_edited',
+        'replies_count',     // Новое: кэш количества ответов
         'is_pinned',
-        'edited_at',
-        'approved_at',
-        'rejected_at',
+        'edited_at',         // Убрали is_edited, так как edited_at != null само по себе флаг
     ];
 
     protected $casts = [
-        'is_edited' => 'boolean',
         'is_pinned' => 'boolean',
         'likes_count' => 'integer',
         'reports_count' => 'integer',
+        'replies_count' => 'integer',
+        'moderated_at' => 'datetime',
         'edited_at' => 'datetime',
-        'approved_at' => 'datetime',
-        'rejected_at' => 'datetime',
     ];
 
     // ============================================
@@ -46,6 +49,12 @@ class PhotoComment extends Model
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
+    }
+
+    // Модератор, проверивший комментарий
+    public function moderator(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'moderated_by');
     }
 
     public function parent(): BelongsTo
@@ -101,6 +110,7 @@ class PhotoComment extends Model
         return $this->status === 'approved';
     }
 
+    // Твой крутой аксессор для UI (оставляем без изменений)
     public function getStatusBadgeAttribute(): array
     {
         return match ($this->status) {
@@ -113,32 +123,41 @@ class PhotoComment extends Model
     }
 
     /**
-     * Одобрить комментарий
+     * Одобрить комментарий (Обновлено под паттерн)
      */
-    public function approve(): void
+    public function approve(int $adminId): void
     {
         $this->update([
             'status' => 'approved',
-            'approved_at' => now(),
+            'moderated_by' => $adminId,
+            'moderated_at' => now(),
+            'reject_reason' => null,
         ]);
     }
 
     /**
-     * Отклонить комментарий
+     * Отклонить комментарий (Обновлено под паттерн)
      */
-    public function reject(): void
+    public function reject(int $adminId, string $reason): void
     {
         $this->update([
             'status' => 'rejected',
-            'rejected_at' => now(),
+            'moderated_by' => $adminId,
+            'moderated_at' => now(),
+            'reject_reason' => $reason,
         ]);
     }
 
     /**
-     * Пометить как спам
+     * Пометить как спам (Обновлено под паттерн)
      */
-    public function markAsSpam(): void
+    public function markAsSpam(int $adminId): void
     {
-        $this->update(['status' => 'spam']);
+        $this->update([
+            'status' => 'spam',
+            'moderated_by' => $adminId,
+            'moderated_at' => now(),
+            'reject_reason' => 'spam',
+        ]);
     }
 }

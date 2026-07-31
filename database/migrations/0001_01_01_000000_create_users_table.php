@@ -1,5 +1,4 @@
 <?php
-
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
@@ -12,54 +11,39 @@ return new class extends Migration
             $table->id();
             
             // === 1. БАЗОВАЯ АВТОРИЗАЦИЯ ===
-            // Это ядро, без которого Laravel не сможет работать.
-            $table->string('name');
+            $table->string('name')->nullable(); 
             $table->string('email')->unique();
             $table->timestamp('email_verified_at')->nullable();
-            $table->string('password');
+            $table->string('password')->nullable(); // nullable для соцсетей
             $table->rememberToken();
             $table->timestamps();
-            $table->softDeletes(); // Для возможности восстановления аккаунта
+            $table->softDeletes(); // Для восстановления аккаунта
 
-            // === 2. СТАТУСЫ И ФЛАГИ ===
-            // Почему они здесь, а не в профиле? Потому что мы проверяем их 
-            // при КАЖДОМ запросе (в middleware или policies). 
-            // Например: "А не забанен ли юзер?", "Может ли он смотреть админку?".
-            // Если вынести их в профиль, придется делать JOIN на каждый чих.
-            $table->boolean('is_admin')->default(false);
-            $table->boolean('is_banned')->default(false);            
-            $table->boolean('is_shadowbanned')->default(false);
+            // === 2. РОЛЬ И СТАТУС ===
+            $table->string('role')->default('user')->index(); // user, admin, moderator, support
+            $table->string('status')->default('active')->index(); // active, banned, shadowbanned, deactivated
+            $table->string('ban_reason')->nullable();
+            $table->timestamp('banned_until')->nullable();
+
+            // === 3. ПОДПИСКА (Кэш для middleware) ===
             $table->boolean('is_premium')->default(false);
             $table->timestamp('premium_expires_at')->nullable();
+
+            // === 4. ВЕРИФИКАЦИЯ И ОНБОРДИНГ ===
             $table->boolean('is_verified')->default(false);
             $table->boolean('has_completed_onboarding')->default(false);
-            $table->boolean('is_deactivated')->default(false); // Заморозка аккаунта           
 
-            // === 3. АКТИВНОСТЬ И ЛИМИТЫ ===
-            // Эти поля часто обновляются. last_seen обновляется при каждом открытии страницы.
-            // Если они лежат в таблице users, строка блокируется (row lock) реже, 
-            // так как сама таблица более легкая.
-            $table->unsignedInteger('superlikes_remaining')->default(5);
+            // === 5. АКТИВНОСТЬ И АНТИФРОД ===
+            $table->timestamp('last_seen')->nullable()->index(); 
             $table->timestamp('last_login_at')->nullable();
-            $table->string('last_login_ip')->nullable();
-            $table->timestamp('last_seen')->nullable();
+            $table->ipAddress('last_login_ip')->nullable();
+            $table->string('device_id')->nullable()->index(); 
 
-            // === 4. КРИТИЧЕСКИ ВАЖНЫЕ ИНДЕКСЫ ===
-            // В dating-сайтах 90% запросов к БД — это поиск анкет для ленты.
-            // Без этих индексов база будет сканировать всю таблицу (Full Table Scan) и ляжет.
-            
-            // Индекс для ленты рекомендаций: мы всегда фильтруем не забаненных, 
-            // прошедших онбординг юзеров определенного пола.
-            $table->index(['is_banned', 'has_completed_onboarding']); 
-                      
-            // Индекс для списка "Кто онлайн". Сортировка по last_seen.
-            $table->index('last_seen');
-            
-            // Индекс для крон-задач (раз в минуту проверяем, у кого истекла подписка).
+            // === КРИТИЧЕСКИ ВАЖНЫЕ ИНДЕКСЫ ===
+            $table->index(['status', 'has_completed_onboarding']); 
             $table->index(['is_premium', 'premium_expires_at']);
         });
 
-        // Таблицы стандартного ядра Laravel, оставляем без изменений
         Schema::create('password_reset_tokens', function (Blueprint $table) {
             $table->string('email')->primary();
             $table->string('token');

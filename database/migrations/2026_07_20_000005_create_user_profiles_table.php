@@ -10,19 +10,25 @@ return new class extends Migration
     {
         Schema::create('user_profiles', function (Blueprint $table) {
             $table->id();
-            $table->foreignId('user_id')->unique()->constrained()->onDelete('cascade');
+            $table->foreignId('user_id')->unique()->constrained()->cascadeOnDelete();
 
             // === БАЗОВАЯ ИНФА ===
-            $table->enum('gender', ['male', 'female'])->nullable();
-            $table->date('birth_date')->nullable();
-            $table->enum('dating_goal', ['friends', 'romantic', 'family', 'casual'])->nullable();
-            $table->string('city')->nullable();
+            $table->enum('gender', ['male', 'female'])->nullable()->index();
+            $table->date('birth_date')->nullable()->index();
+            $table->enum('dating_goal', ['friends', 'romantic', 'family', 'casual', 'travel'])->nullable()->index();
+            $table->string('city')->nullable()->index();
+            $table->string('country')->nullable();
             
-            // Текстовые блоки анкеты
-            $table->string('status')->nullable();                 // Статус (вверху анкеты, короткий текст)
-            $table->text('bio')->nullable();                      // Свободно о себе (длинный текст)
-            $table->text('looking_for')->nullable();              // Кого я хочу найти (информативный текст)
-            $table->json('interests')->nullable();                // Интересы (теги)
+            // === ТЕКСТОВЫЕ БЛОКИ ===
+            $table->string('headline')->nullable(); // Короткий статус
+            $table->text('bio')->nullable(); // Свободно о себе
+            $table->text('looking_for')->nullable(); // Кого я хочу найти
+            $table->json('interests')->nullable(); // Теги
+
+            // === АВТОПОРТРЕТ (Любимое, Отношение к жизни и т.д.) ===
+            // Вся простыня текстовых полей, которые не участвуют в поиске.
+            // Структура: {"favorite_music": "...", "favorite_movies": "...", "best_in_life": "..."}
+            $table->json('self_portrait')->nullable(); 
 
             // === ВНЕШНОСТЬ (Одиночный выбор -> TINYINT) ===
             $table->unsignedTinyInteger('body_type')->default(0);
@@ -39,6 +45,7 @@ return new class extends Migration
             $table->unsignedTinyInteger('has_car')->default(0);
             $table->unsignedTinyInteger('smoking')->default(0);
             $table->unsignedTinyInteger('alcohol')->default(0);
+            $table->unsignedTinyInteger('zodiac_sign')->default(0);
 
             // === ЛИЧНЫЕ ДАННЫЕ (Множественный выбор -> JSON) ===
             $table->json('body_decorations')->nullable(); 
@@ -46,37 +53,25 @@ return new class extends Migration
             $table->json('sports')->nullable();
 
             // === РАБОТА И ОБРАЗОВАНИЕ ===
-            $table->string('education')->nullable();              // Оставляем как было
-            $table->string('occupation')->nullable();             // Оставляем как было
-            $table->string('institution')->nullable();            // Учебное заведение
-            $table->unsignedSmallInteger('institution_year')->nullable(); // Год выпуска
-            $table->string('activity')->nullable();               // Сфера деятельности
-            $table->string('position')->nullable();               // Должность
+            $table->string('education')->nullable();
+            $table->string('occupation')->nullable();
+            $table->string('institution')->nullable();
+            $table->unsignedSmallInteger('institution_year')->nullable();
+            $table->string('activity')->nullable();
+            $table->string('position')->nullable();
 
-            // === ОСТАЛЬНОЕ ===
-            $table->string('zodiac_sign')->nullable();
-
-            // === ГЕОЛОКАЦИЯ ===
+            // === ГЕОЛОКАЦИЯ (PostGIS) ===
             $table->geography('location', subtype: 'point')->nullable();
             $table->string('address')->nullable();
-            $table->string('country')->nullable();
-
-            // === СЧЕТЧИКИ ===
-            $table->unsignedInteger('profile_views')->default(0);
-            $table->unsignedInteger('likes_count')->default(0);
 
             $table->timestamps();
 
             // === ИНДЕКСЫ ===
-            $table->index('birth_date'); 
-            $table->index('city');
-            $table->spatialIndex('location');
-            
-            // Индексы на самые популярные фильтры
             $table->index('body_type');
             $table->index('smoking');
             $table->index('relationship_status');
             $table->index('education');
+            $table->spatialIndex('location'); // Для молниеносного ST_DWithin
         });
     }
 

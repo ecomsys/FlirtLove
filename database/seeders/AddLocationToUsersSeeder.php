@@ -1,4 +1,4 @@
-<?php
+<?php 
 
 namespace Database\Seeders;
 
@@ -10,7 +10,6 @@ class AddLocationToUsersSeeder extends Seeder
 {
     public function run(): void
     {
-        // Проверяем, существует ли таблица user_profiles
         if (!Schema::hasTable('user_profiles')) {
             $this->command->error('❌ Таблица user_profiles не существует! Запусти миграции сначала.');
             return;
@@ -34,8 +33,8 @@ class AddLocationToUsersSeeder extends Seeder
             'Воронеж' => ['lat' => 51.6608, 'lng' => 39.2003],
         ];
 
-        // Получаем всех пользователей (не админов)
-        $users = DB::table('users')->where('is_admin', false)->get();
+        // Берем только обычных юзеров (role = 'user')
+        $users = DB::table('users')->where('role', 'user')->get();
 
         if ($users->isEmpty()) {
             $this->command->warn('⚠️ Нет пользователей для обновления координат.');
@@ -46,7 +45,6 @@ class AddLocationToUsersSeeder extends Seeder
 
         $updated = 0;
         foreach ($users as $user) {
-            // Рандомный город из списка
             $cityName = array_rand($cities);
             $center = $cities[$cityName];
 
@@ -57,34 +55,16 @@ class AddLocationToUsersSeeder extends Seeder
             $lat = $center['lat'] + $latOffset;
             $lng = $center['lng'] + $lngOffset;
 
-            // Обновляем профиль пользователя
-            $profileId = DB::table('user_profiles')
+            // ВАЖНО: Добавлено ::geography, так как колонка имеет тип geography!
+            // Профиль уже 100% существует (создается событием booted в модели User)
+            DB::table('user_profiles')
                 ->where('user_id', $user->id)
-                ->value('id');
-
-            if ($profileId) {
-                // Обновляем существующий профиль
-                DB::table('user_profiles')
-                    ->where('id', $profileId)
-                    ->update([
-                        'city' => $cityName,
-                        'address' => $cityName, // Для обратной совместимости
-                        'country' => 'Россия',
-                        'location' => DB::raw("ST_SetSRID(ST_MakePoint({$lng}, {$lat}), 4326)"),
-                        'updated_at' => now(),
-                    ]);
-            } else {
-                // Если профиля нет - создаем
-                DB::table('user_profiles')->insert([
-                    'user_id' => $user->id,
+                ->update([
                     'city' => $cityName,
-                    'address' => $cityName,
                     'country' => 'Россия',
-                    'location' => DB::raw("ST_SetSRID(ST_MakePoint({$lng}, {$lat}), 4326)"),
-                    'created_at' => now(),
+                    'location' => DB::raw("ST_SetSRID(ST_MakePoint({$lng}, {$lat}), 4326)::geography"),
                     'updated_at' => now(),
                 ]);
-            }
 
             $updated++;
             $this->command->line("   ✓ Пользователь ID {$user->id} → {$cityName} ({$lat}, {$lng})");

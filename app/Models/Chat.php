@@ -3,16 +3,14 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Chat extends Model
 {
     protected $fillable = [
-        'user1_id',
-        'user2_id',
-        'type',
-        'last_message_at',
+        'type',             // private, support
+        'last_message_at',  // Кэш времени последнего сообщения для сортировки
     ];
 
     protected $casts = [
@@ -23,40 +21,48 @@ class Chat extends Model
     // СВЯЗИ
     // ============================================
 
-    public function user1(): BelongsTo
-    {
-        return $this->belongsTo(User::class, 'user1_id');
-    }
-
-    public function user2(): BelongsTo
-    {
-        return $this->belongsTo(User::class, 'user2_id');
-    }
-
-    public function messages(): HasMany
-    {
-        // Убрал ->latest() из связи! 
-        // Это правило: связи не должны иметь дефолтной сортировки, 
-        // иначе ->create() на этой связи может работать криво.
-        // Сортировку будем делать при вызове: $chat->messages()->latest()->get()
-        return $this->hasMany(Message::class);
-    }
-
+    /**
+     * Участники чата (прямая связь со сводной таблицей).
+     * Нужна для управления настройками чата (мьюты, баны, счетчики).
+     */
     public function participants(): HasMany
     {
         return $this->hasMany(ChatParticipant::class);
     }
 
-        public function match()
+    /**
+     * Юзеры в чате (Многие ко многим через chat_participants).
+     * С пивотом для удобного доступа к настройкам.
+     */
+    public function users(): BelongsToMany
     {
-        // Возвращаем запрос, который ищет совпадение в любом порядке (кто кого лайкнул)
-        return UserMatch::where(function ($q) {
-            $q->where('user1_id', $this->user1_id)
-              ->where('user2_id', $this->user2_id);
-        })->orWhere(function ($q) {
-            $q->where('user1_id', $this->user2_id)
-              ->where('user2_id', $this->user1_id);
-        });
+        return $this->belongsToMany(User::class, 'chat_participants')
+            ->withPivot(['unread_count', 'last_read_at', 'is_hidden', 'is_muted', 'is_blocked'])
+            ->withTimestamps();
+    }
+
+    /**
+     * Сообщения в чате.
+     * Твой правило: связи не должны иметь дефолтной сортировки!
+     * Сортировку делаем при вызове: $chat->messages()->latest()->get()
+     */
+    public function messages(): HasMany
+    {
+        return $this->hasMany(Message::class);
+    }
+
+    // ============================================
+    // СКОПЫ
+    // ============================================
+
+    public function scopePrivate($query)
+    {
+        return $query->where('type', 'private');
+    }
+
+    public function scopeSupport($query)
+    {
+        return $query->where('type', 'support');
     }
 
     // ============================================
@@ -64,62 +70,64 @@ class Chat extends Model
     // ============================================
 
     /**
-     * Получить собеседника.
-     * ВАЖНО: Мы убрали Auth::id() из модели! Модель не должна знать о текущем запросе.
-     * Теперь мы передаем ID юзера явно: $chat->getPartner(auth()->id())
-     * Это позволяет использовать метод в очередях (queues) и тестах.
+     * Получить собеседника (Адаптировано под новую БД).
+     * Твой принцип: Модель не должна знать о текущем запросе, передаем ID явно.
      */
     public function getPartner(int $userId): ?User
     {
-        if ($this->user1_id === $userId) {
-            return $this->relationLoaded('user2') ? $this->user2 : $this->user2()->first();
+        // Если юзеры загружены через eager loading, берем из коллекции
+        if ($this->relationLoaded('users')) {
+            return $this->users->firstWhere('id', '!=', $userId);
         }
         
-        return $this->relationLoaded('user1') ? $this->user1 : $this->user1()->first();
+        // Иначе делаем легкий запрос через сводную таблицу
+        return $this->users()->where('user_id', '!=', $userId)->first();
     }
 
+    // ============================================
+    // БИЗНЕС-ЛОГИКА (СОЗДАНИЕ ЧАТОВ)
+    // ============================================
+
     /**
-     * Создать или получить приватный чат между двумя юзерами
+     * Создать или получить приватный чат между двумя юзерами.
      */
-    public static function getOrCreateBetween(User $userA, User $userB): self
+    public static function getOrCreateBetween(int $userAId, int $userBId): self
     {
-        $user1Id = min($userA->id, $userB->id);
-        $user2Id = max($userA->id, $userB->id);
+        // Ищем чат, где оба юзера являются участниками.
+        // Это безопаснее, чем хардкодить user1/user2 в таблице chats.
+        $chat = self::where('type', 'private')
+            ->whereHas('participants', fn($q) => $q->where('user_id', $userAId))
+            ->whereHas('participants', fn($q) => $q->where('user_id', $userBId))
+            ->first();
 
-        $chat = self::firstOrCreate(
-            ['user1_id' => $user1Id, 'user2_id' => $user2Id, 'type' => 'private'],
-            ['last_message_at' => now()]
-        );
-
-        // Гарантируем, что участники чата существуют в БД (чтобы работали счетчики)
-        // Это важный момент, которого не хватало в старой версии для приватных чатов!
-        self::ensureParticipantsExist($chat, $user1Id, $user2Id);
+        if (!$chat) {
+            $chat = self::create(['type' => 'private', 'last_message_at' => now()]);
+            self::ensureParticipantsExist($chat, $userAId, $userBId);
+        }
 
         return $chat;
     }
 
     /**
-     * Создать или получить чат поддержки
+     * Создать или получить чат поддержки.
      */
-    public static function getOrCreateSupportChat(User $admin, User $user): self
+    public static function getOrCreateSupportChat(int $adminId, int $userId): self
     {
-        // В саппорте админ всегда user1 (для порядка)
-        $chat = self::firstOrCreate(
-            [
-                'user1_id' => $admin->id, 
-                'user2_id' => $user->id,
-                'type' => 'support'
-            ],
-            ['last_message_at' => now()]
-        );
+        $chat = self::where('type', 'support')
+            ->whereHas('participants', fn($q) => $q->where('user_id', $userId))
+            ->first();
 
-        self::ensureParticipantsExist($chat, $admin->id, $user->id);
+        if (!$chat) {
+            $chat = self::create(['type' => 'support', 'last_message_at' => now()]);
+            self::ensureParticipantsExist($chat, $adminId, $userId);
+        }
 
         return $chat;
     }
 
     /**
-     * Внутренний метод для создания участников чата (чтобы не дублировать код)
+     * Внутренний метод для создания участников чата (Твоя идея).
+     * Гарантирует, что записи в pivot таблице существуют.
      */
     private static function ensureParticipantsExist(self $chat, int $user1Id, int $user2Id): void
     {

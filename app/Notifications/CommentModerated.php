@@ -8,6 +8,7 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Notifications\Notification;
 use Illuminate\Notifications\Messages\MailMessage;
 use Illuminate\Notifications\Messages\BroadcastMessage;
+use Illuminate\Support\Facades\Log;
 
 // В кабинете	toDatabase()	Сохраняется в БД
 // Email    	toMail()    	Отправляется через SMTP (в будующем сейчас в логи)
@@ -21,12 +22,6 @@ use Illuminate\Notifications\Messages\BroadcastMessage;
 // Удаление        ✅	       ✅        	❌        	Важно, но не критично
 // Восстановление  ✅	       ❌	        ❌	        Внутреннее действие
 
-// ЗАУПУСК ВОРКЕРА ОЧЕРЕДИ
-// php artisan queue:work - обычный запуск
-// php artisan queue:restart - рестар сигнал
-// php artisan queue:listen - с автоматическим перезапуском при изменеии в проекте
-// php artisan queue:flush - очистка очереди
-
 class CommentModerated extends Notification implements ShouldQueue
 {
     use Queueable;
@@ -37,19 +32,23 @@ class CommentModerated extends Notification implements ShouldQueue
     ) {}
 
     /**
-     *  Обновляем каналы доставки с учетом настроек юзера
+     *  Каналы доставки с учетом глобальных тумблеров и категорий
      */
     public function via($notifiable): array
     {
         // 1. В кабинет (БД) отправляем ВСЕГДА
         $channels = ['database'];
 
-        // 2. Email: отправляем ВСЕГДА, КРОМЕ "spam" и "restored", И ЕСЛИ ВКЛЮЧЕНА НАСТРОЙКА on_photo_moderated
-        if (($notifiable->email_settings['on_photo_moderated'] ?? true) && !in_array($this->status, ['spam', 'restored'])) {
+        // 2. Email: проверяем глобальный тумблер И категорию "Новые события" (on_event).
+        // Не отправляем при "spam" и "restored" по нашей бизнес-логике.
+        if ($notifiable->email_enabled 
+            && ($notifiable->email_settings['on_event'] ?? true) 
+            && !in_array($this->status, ['spam', 'restored'])) {
             $channels[] = 'mail';
         }
 
-        // 3. Push (Broadcast): отправляем ТОЛЬКО при "approved" и "rejected", И ЕСЛИ ВКЛЮЧЕН ГЛОБАЛЬНЫЙ ТУМБЛЕР push_enabled
+        // 3. Push (Broadcast): отправляем ТОЛЬКО при "approved" и "rejected", 
+        // И ЕСЛИ ВКЛЮЧЕН ГЛОБАЛЬНЫЙ ТУМБЛЕР push_enabled
         if ($notifiable->push_enabled && in_array($this->status, ['approved', 'rejected'])) {
             $channels[] = 'broadcast';
         }
@@ -82,13 +81,10 @@ class CommentModerated extends Notification implements ShouldQueue
         $messages = $this->getMessages();
         
         return [
-            // === УНИФИЦИРОВАННАЯ СТРУКТУРА ===
             'type' => 'comment_moderated',
             'title' => $messages['title'],
             'message' => $messages['message'],
-            'action_url' => url('/photos/' . $this->comment->photo_id), // Ссылка на фото          
-            
-            // === СПЕЦИФИЧНЫЕ ДАННЫЕ ===
+            'action_url' => url('/photos/' . $this->comment->photo_id),          
             'data' => [
                 'comment_id' => $this->comment->id,
                 'photo_id' => $this->comment->photo_id,
@@ -98,22 +94,16 @@ class CommentModerated extends Notification implements ShouldQueue
         ];
     }
 
-    /*
-    * Добавляем Push уведомления    
-    */    
     public function toBroadcast($notifiable): BroadcastMessage
     {
         $messages = $this->getMessages();
         
         return new BroadcastMessage([
-            // === УНИФИЦИРОВАННАЯ СТРУКТУРА ===
             'type' => 'comment_moderated',
             'title' => $messages['title'],
             'message' => $messages['message'],
             'action_url' => url('/photos/' . $this->comment->photo_id),
             'timestamp' => now()->toDateTimeString(),
-            
-            // === СПЕЦИФИЧНЫЕ ДАННЫЕ ===
             'data' => [
                 'comment_id' => $this->comment->id,
                 'photo_id' => $this->comment->photo_id,
@@ -163,5 +153,15 @@ class CommentModerated extends Notification implements ShouldQueue
                 'message' => 'Статус вашего комментария был изменен модератором.',
             ],
         };
+    }
+
+    /**
+     * ЗАЩИТА ОЧЕРЕДИ:
+     * Если комментарий удалят из БД, пока письмо висит в очереди,
+     * воркер не упадет, а запишет лог.
+     */
+    public function failed(\Throwable $exception): void
+    {
+        Log::error("Не удалось отправить CommentModerated (ID: {$this->comment->id}): " . $exception->getMessage());
     }
 }
