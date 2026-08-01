@@ -13,8 +13,8 @@ return new class extends Migration
             
             // === КТО И НА КОГО ЖАЛУЕТСЯ ===
             // Убрали cascade! Если юзер удаляется, жалоба остается в БД для службы безопасности.
-            $table->foreignId('reporter_id')->constrained('users'); // Кто подал жалобу
-            $table->foreignId('reported_id')->constrained('users'); // На кого подали жалобу
+            $table->foreignId('reporter_id')->constrained('users')->nullable()->nullOnDelete(); // Кто подал жалобу
+            $table->foreignId('reported_id')->constrained('users')->nullable()->nullOnDelete(); // На кого подали жалобу
             
             // === ПОЛИМОРФНАЯ СВЯЗЬ (На что жалоба?) ===
             // Позволяет жаловаться на фото, сообщения, комментарии, анкеты.
@@ -38,7 +38,7 @@ return new class extends Migration
 
             // === КТО РАЗБИРАЛ ===
             // Админ/модератор (приводим к единому неймингу с admin_logs)
-            $table->foreignId('admin_id')->nullable()->constrained('users');
+            $table->foreignId('admin_id')->nullable()->constrained('users')->nullOnDelete();
             $table->timestamp('resolved_at')->nullable(); // Когда жалоба была закрыта
 
             $table->timestamps();

@@ -18,7 +18,7 @@ return new class extends Migration
             // Кто отправил. nullable, потому что система может слать служебные сообщения 
             // (например, "Вам мэтч!" или "Пользователь заблокировал вас"). 
             // Без cascade! Если отправитель удалит аккаунт, переписка должна остаться у получателя.
-            $table->foreignId('sender_id')->nullable()->constrained('users'); 
+            $table->foreignId('sender_id')->nullable()->constrained('users')->nullOnDelete(); 
             
             // === КОНТЕНТ СООБЩЕНИЯ ===
             // Тип: text, image (фото, пока скрыто на фронте), system (служебное), gift (подарок)
@@ -40,7 +40,7 @@ return new class extends Migration
             // Если type=image, в сервис-классе мы принудительно ставим 'pending' и отдаем на проверку ИИ/админу.
             $table->enum('status', ['pending', 'approved', 'rejected'])->default('approved');
             $table->string('reject_reason')->nullable(); // porn, scam, minor, ad
-            $table->foreignId('moderated_by')->nullable()->constrained('users'); // Какой модератор заблокировал фотку
+            $table->foreignId('moderated_by')->nullable()->constrained('users')->nullOnDelete(); // Какой модератор заблокировал фотку
             $table->timestamp('moderated_at')->nullable();
             
             $table->timestamps();

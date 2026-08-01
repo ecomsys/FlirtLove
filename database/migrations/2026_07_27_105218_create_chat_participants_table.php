@@ -17,7 +17,7 @@ return new class extends Migration
             
             // Ссылка на юзера. Убрали cascade! Если юзер удаляет аккаунт, мы не должны 
             // удалять чат для второго собеседника (чтобы он мог прочитать старую переписку).
-            $table->foreignId('user_id')->constrained('users');
+            $table->foreignId('user_id')->constrained('users')->nullable()->nullOnDelete();
 
             // === СЧЕТЧИКИ И ВРЕМЯ (Денормализация) ===
             // Сколько непрочитанных сообщений в этом чате у конкретно этого юзера.

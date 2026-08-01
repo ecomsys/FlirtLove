@@ -2,6 +2,7 @@
 
 namespace Database\Seeders;
 
+use App\Models\{AdminLog, Broadcast, Chat, ChatParticipant, FraudAlert, Gift, Message, Photo, PhotoComment, Album, Report, StopWord, SubscriptionPlan, Swipe, Transaction, User, UserGift, UserMatch, UserPreference, UserProfile, UserSubscription, Setting};
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -9,12 +10,9 @@ use Illuminate\Support\Facades\Cache;
 
 class DatabaseSeeder extends Seeder
 {
-    /**
-     * Seed the application's database.
-     */
     public function run(): void
     {
-        $this->command->info('🚀 Запуск сидеров...');
+        $this->command->info('🚀 Запуск полной генерации базы данных LovePlanet...');
         $this->command->info('');
 
         // ============================================
@@ -36,30 +34,82 @@ class DatabaseSeeder extends Seeder
         // ============================================
         // 3. ОЧИСТКА КЕША НАСТРОЕК
         // ============================================
-        Cache::forget('settings');
+        Cache::forget('settings_all'); // Ключ из нашей новой модели Setting
         $this->command->info('🗑️ Кеш настроек очищен');
         $this->command->info('');
 
         // ============================================
-        // 4. ЗАПУСК СИДЕРОВ
+        // 4. ЗАПУСК СИДЕРОВ (СТРОГО ПО ЭТАПАМ)
         // ============================================
         $this->command->info('📦 Запуск сидеров...');
         $this->command->info('');
 
-        // ✅ Сначала создаем Админа
-        $this->call(AdminSeeder::class);
-        
-        // Затем создаем обычных юзеров и их данные
-        $this->call(UserSeeder::class);
-        $this->call(AddLocationToUsersSeeder::class);
-        $this->call(PhotoAlbumsSeeder::class);
-        $this->call(PhotoCommentSeeder::class);
-        $this->call(ReportSeeder::class);
-        $this->call(SettingSeeder::class);
-        $this->call(BroadcastSeeder::class);
-        $this->call(SwipeSeeder::class);
-        $this->call(ChatSeeder::class);        
-        $this->call(TestLogsSeeder::class);
+        // ЭТАП 1: БАЗА
+        $this->command->info('📌 ЭТАП 1: Базовые сущности');
+        $this->call([
+            AdminSeeder::class,
+            StaffSeeder::class,
+            UserSeeder::class,
+            SettingSeeder::class,
+        ]);
+
+        // ЭТАП 2: СПРАВОЧНИКИ
+        $this->command->info('📌 ЭТАП 2: Справочники');
+        $this->call([
+            SubscriptionPlanSeeder::class,
+            GiftSeeder::class,
+            StopWordSeeder::class,
+            PageSeeder::class,  
+            RubricSeeder::class,
+        ]);
+
+        // ЭТАП 3: КОНТЕНТ ЮЗЕРОВ
+        $this->command->info('📌 ЭТАП 3: Контент');
+        $this->call([
+            AddLocationToUsersSeeder::class,
+            PhotoAlbumsSeeder::class,
+            PhotoCommentSeeder::class,
+            ProfileViewSeeder::class,
+            DiarySeeder::class,
+        ]);
+
+        // ЭТАП 4: СОЦИАЛЬНЫЙ ГРАФ
+        $this->command->info('📌 ЭТАП 4: Взаимодействия');
+        $this->call([
+            SwipeSeeder::class,
+            DiarySubscriptionSeeder::class,
+        ]);
+
+        // ЭТАП 5: КОММУНИКАЦИЯ
+        $this->command->info('📌 ЭТАП 5: Коммуникация');
+        $this->call([
+            ChatSeeder::class,
+        ]);
+
+        // ЭТАП 6: МОНЕТИЗАЦИЯ
+        $this->command->info('📌 ЭТАП 6: Монетизация');
+        $this->call([
+            TransactionSeeder::class,
+            UserSubscriptionSeeder::class,
+            UserGiftSeeder::class,
+        ]);
+
+        // ЭТАП 7: БЕЗОПАСНОСТЬ И МОДЕРАЦИЯ
+        $this->command->info('📌 ЭТАП 7: Безопасность');
+        $this->call([
+            ReportSeeder::class,
+            FraudAlertSeeder::class,
+            VerificationSeeder::class, 
+            AdminLogSeeder::class,
+            UserBlockSeeder::class,
+        ]);
+
+        // ЭТАП 8: МАРКЕТИНГ И ЛОГИ
+        $this->command->info('📌 ЭТАП 8: Рассылки и логи');
+        $this->call([
+            BroadcastSeeder::class,
+            TestLogsSeeder::class,
+        ]);
 
         $this->command->info('');
         $this->command->info('🎉 Все сидеры выполнены успешно!');
@@ -68,47 +118,67 @@ class DatabaseSeeder extends Seeder
         // ============================================
         // 5. ИТОГОВАЯ СТАТИСТИКА
         // ============================================
-        $this->command->info('📊 Итоговая статистика:');
-        $this->command->info('   ┌─────────────────────────┬──────────┐');
-        $this->command->info('   │ Сущность                │ Количество │');
-        $this->command->info('   ├─────────────────────────┼──────────┤');
+        $this->command->info('📊 Итоговая статистика базы:');
+        $this->command->info('   ┌───────────────────────────┬────────────┐');
+        $this->command->info('   │ Сущность                  │ Количество │');
+        $this->command->info('   ├───────────────────────────┼────────────┤');
         
-        $this->command->info('   │ 👑 Админов              │ ' . str_pad(\App\Models\User::where('is_admin', true)->count(), 8, ' ', STR_PAD_LEFT) . ' │');
-        $this->command->info('   │ 👤 Пользователей        │ ' . str_pad(\App\Models\User::where('is_admin', false)->count(), 8, ' ', STR_PAD_LEFT) . ' │');
-        $this->command->info('   │ 📸 Фото                 │ ' . str_pad(\App\Models\Photo::count(), 8, ' ', STR_PAD_LEFT) . ' │');
-        $this->command->info('   │ 💬 Комментариев         │ ' . str_pad(\App\Models\PhotoComment::count(), 8, ' ', STR_PAD_LEFT) . ' │');
-        $this->command->info('   │ 🚩 Жалоб                │ ' . str_pad(\App\Models\Report::count(), 8, ' ', STR_PAD_LEFT) . ' │');
-        $this->command->info('   │ ⚙️ Настроек             │ ' . str_pad(\App\Models\Setting::count(), 8, ' ', STR_PAD_LEFT) . ' │');
-        $this->command->info('   │ 📨 Рассылок             │ ' . str_pad(\App\Models\Broadcast::count(), 8, ' ', STR_PAD_LEFT) . ' │');
-        $this->command->info('   │ 👉 Свайпов              │ ' . str_pad(\App\Models\Swipe::count(), 8, ' ', STR_PAD_LEFT) . ' │');
-        $this->command->info('   │ ❤️ Матчей               │ ' . str_pad(\App\Models\UserMatch::count(), 8, ' ', STR_PAD_LEFT) . ' │');
-        $this->command->info('   │ 💌 Чатов                │ ' . str_pad(\App\Models\Chat::count(), 8, ' ', STR_PAD_LEFT) . ' │');
-        $this->command->info('   │ 💬 Сообщений            │ ' . str_pad(\App\Models\Message::count(), 8, ' ', STR_PAD_LEFT) . ' │');
-        $this->command->info('   └─────────────────────────┴──────────┘');
+        $this->command->info('   │ 👑 Админов                │ ' . str_pad(User::where('role', 'admin')->count(), 8, ' ', STR_PAD_LEFT) . ' │');
+        $this->command->info('   │ 👤 Пользователей          │ ' . str_pad(User::where('role', 'user')->count(), 8, ' ', STR_PAD_LEFT) . ' │');
+        $this->command->info('   │ 📸 Фото                   │ ' . str_pad(Photo::count(), 8, ' ', STR_PAD_LEFT) . ' │');
+        $this->command->info('   │ 💬 Комментариев           │ ' . str_pad(PhotoComment::count(), 8, ' ', STR_PAD_LEFT) . ' │');
+        $this->command->info('   │ 👉 Свайпов                │ ' . str_pad(Swipe::count(), 8, ' ', STR_PAD_LEFT) . ' │');
+        $this->command->info('   │ ❤️ Матчей                 │ ' . str_pad(UserMatch::count(), 8, ' ', STR_PAD_LEFT) . ' │');
+        $this->command->info('   │ 💌 Чатов                  │ ' . str_pad(Chat::count(), 8, ' ', STR_PAD_LEFT) . ' │');
+        $this->command->info('   │ 💬 Сообщений              │ ' . str_pad(Message::count(), 8, ' ', STR_PAD_LEFT) . ' │');
+        $this->command->info('   │ 🎁 Подарков (каталог)     │ ' . str_pad(Gift::count(), 8, ' ', STR_PAD_LEFT) . ' │');
+        $this->command->info('   │ 💝 Подарков (отправлено)  │ ' . str_pad(UserGift::count(), 8, ' ', STR_PAD_LEFT) . ' │');
+        $this->command->info('   │ 💳 Транзакций             │ ' . str_pad(Transaction::count(), 8, ' ', STR_PAD_LEFT) . ' │');
+        $this->command->info('   │ 👑 Подписок               │ ' . str_pad(UserSubscription::count(), 8, ' ', STR_PAD_LEFT) . ' │');
+        $this->command->info('   │ 🚩 Жалоб                  │ ' . str_pad(Report::count(), 8, ' ', STR_PAD_LEFT) . ' │');
+        $this->command->info('   │ 🚨 Антифрод алертов       │ ' . str_pad(FraudAlert::count(), 8, ' ', STR_PAD_LEFT) . ' │');
+        $this->command->info('   │ 🛑 Стоп-слов              │ ' . str_pad(StopWord::count(), 8, ' ', STR_PAD_LEFT) . ' │');
+        $this->command->info('   │ 🕵️ Логов админа           │ ' . str_pad(AdminLog::count(), 8, ' ', STR_PAD_LEFT) . ' │');
+        $this->command->info('   │ ⚙️ Настроек               │ ' . str_pad(Setting::count(), 8, ' ', STR_PAD_LEFT) . ' │');
+        $this->command->info('   │ 📨 Рассылок               │ ' . str_pad(Broadcast::count(), 8, ' ', STR_PAD_LEFT) . ' │');
+        $this->command->info('   └───────────────────────────┴────────────┘');
+        
+        $this->command->info('');
+        $this->command->info('🔑 Данные для входа:');
+        $this->command->info('   Админ: admin@admin.com / 12121212');
+        $this->command->info('   Юзер:  user1@test.com (до 10) / password');
     }
 
     /**
-     * Очистка базы данных (универсальная)
+     * Очистка базы данных (универсальная для Postgres и MySQL)
      */
     private function cleanDatabase(): void
     {
         $driver = DB::connection()->getDriverName();
 
         if ($driver === 'pgsql') {
-            // ✅ PostgreSQL: правильный порядок очистки
+            // ✅ PostgreSQL: правильный порядок очистки с каскадом
             DB::statement('TRUNCATE TABLE 
-                messages,
+                admin_logs,
+                broadcasts,
                 chat_participants,
                 chats,
+                fraud_alerts,
+                messages,
                 photo_comments,
                 photos,
                 albums,
                 reports,
+                stop_words,
                 swipes,
+                user_gifts,
                 user_matches,
-                broadcasts,
                 user_preferences,
                 user_profiles,
+                user_subscriptions,
+                transactions,
+                subscription_plans,
+                gifts,
                 settings,
                 users
                 RESTART IDENTITY CASCADE'
@@ -117,28 +187,37 @@ class DatabaseSeeder extends Seeder
             // ✅ MySQL: отключаем проверку ключей
             DB::statement('SET FOREIGN_KEY_CHECKS=0');
             
-            // Удаляем в правильном порядке (сначала дочерние, потом родительские)
-            \App\Models\Message::query()->delete();
-            \App\Models\ChatParticipant::query()->delete();
-            \App\Models\Chat::query()->delete();
-            \App\Models\PhotoComment::query()->delete();
-            \App\Models\Photo::query()->delete();
-            \App\Models\Album::query()->delete();
-            \App\Models\Report::query()->delete();
-            \App\Models\Swipe::query()->delete();
-            \App\Models\UserMatch::query()->delete();
-            \App\Models\Broadcast::query()->delete();
-            \App\Models\UserPreference::query()->delete();
-            \App\Models\UserProfile::query()->delete();
-            \App\Models\Setting::query()->delete();
-            \App\Models\User::query()->delete();
+            // Удаляем все данные
+            AdminLog::query()->delete();
+            Broadcast::query()->delete();
+            ChatParticipant::query()->delete();
+            Message::query()->delete();
+            Chat::query()->delete();
+            FraudAlert::query()->delete();
+            PhotoComment::query()->delete();
+            Photo::query()->delete();
+            Album::query()->delete();
+            Report::query()->delete();
+            StopWord::query()->delete();
+            Swipe::query()->delete();
+            UserGift::query()->delete();
+            UserMatch::query()->delete();
+            Transaction::query()->delete();
+            UserSubscription::query()->delete();
+            SubscriptionPlan::query()->delete();
+            Gift::query()->delete();
+            UserPreference::query()->delete();
+            UserProfile::query()->delete();
+            Setting::query()->delete();
+            User::query()->delete();
             
             // Сброс автоинкремента
             $tables = [
-                'users', 'user_profiles', 'user_preferences', 'albums',
-                'photos', 'photo_comments', 'reports', 'broadcasts',
-                'settings', 'swipes', 'user_matches', 'chats',
-                'messages', 'chat_participants'
+                'users', 'user_profiles', 'user_preferences', 'albums', 'photos', 
+                'photo_comments', 'reports', 'stop_words', 'swipes', 'user_matches', 
+                'chats', 'chat_participants', 'messages', 'gifts', 'user_gifts', 
+                'subscription_plans', 'user_subscriptions', 'transactions', 'fraud_alerts', 
+                'admin_logs', 'broadcasts', 'settings'
             ];
             
             foreach ($tables as $table) {
@@ -154,7 +233,7 @@ class DatabaseSeeder extends Seeder
      */
     private function cleanPhotoDirectories(): void
     {
-        $directories = ['photos/pending', 'photos/approved'];
+        $directories = ['photos/pending', 'photos/approved', 'photos/profile']; // Добавил profile
         
         foreach ($directories as $dir) {
             if (Storage::disk('public')->exists($dir)) {

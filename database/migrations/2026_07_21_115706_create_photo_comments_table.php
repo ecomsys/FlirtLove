@@ -13,10 +13,10 @@ return new class extends Migration
             
             // Фото, к которому оставлен комментарий. 
             // Убрали cascade, т.к. используем softDeletes у фото. Если фото удалят насовсем, cascade сработает.
-            $table->foreignId('photo_id')->constrained();
+            $table->foreignId('photo_id')->constrained()->nullOnDelete();
             
             // Автор комментария. Аналогично, без cascade, чтобы сохранить комментарии забаненных юзеров для истории.
-            $table->foreignId('user_id')->constrained();
+            $table->foreignId('user_id')->constrained()->nullOnDelete();
             
             // Текст комментария
             $table->text('content');
@@ -28,12 +28,12 @@ return new class extends Migration
             $table->string('reject_reason')->nullable();
             
             // ID админа/модератора, проверившего комментарий (приводим к единому паттерну с фото)
-            $table->foreignId('moderated_by')->nullable()->constrained('users');
+            $table->foreignId('moderated_by')->nullable()->constrained('users')->nullOnDelete();
             // Дата и время модерации (заменили approved_at и rejected_at на одно поле)
             $table->timestamp('moderated_at')->nullable();
             
             // Для вложенных комментариев (ответы). Ссылается на эту же таблицу.
-            $table->foreignId('parent_id')->nullable()->constrained('photo_comments');
+            $table->foreignId('parent_id')->nullable()->constrained('photo_comments')->nullOnDelete();
             
             // Денормализация для скорости (чтобы не делать COUNT запросы при выводе дерева комментариев)
             $table->unsignedInteger('likes_count')->default(0);

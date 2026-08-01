@@ -14,10 +14,10 @@ return new class extends Migration
             // === КТО И КОМУ ===
             // Отправитель. Без cascade! Если отправитель удалит аккаунт, 
             // получатель должен видеть подарок в своей истории.
-            $table->foreignId('sender_id')->constrained('users');
+            $table->foreignId('sender_id')->constrained('users')->nullable()->nullOnDelete();
             
             // Получатель. Без cascade по той же причине.
-            $table->foreignId('receiver_id')->constrained('users');
+            $table->foreignId('receiver_id')->constrained('users')->nullable()->nullOnDelete();
             
             // === СВЯЗЬ С КАТАЛОГОМ И СНЭПШОТ ===
             // Ссылка на сам подарок. nullOnDelete: если админ удалит подарок из каталога, 

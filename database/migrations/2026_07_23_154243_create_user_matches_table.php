@@ -16,15 +16,15 @@ return new class extends Migration
             // Вася (ID 10) лайкнул Машу (ID 5). В БД пишем: user1_id = 5 (Маша), user2_id = 10 (Вася).
             // Зачем? Чтобы не было дубликатов (запись 5-10 и 10-5). 
             // Это правило мы будем жестко enforced в коде (в сервис-классе MatchService).
-            $table->foreignId('user1_id')->constrained('users');
-            $table->foreignId('user2_id')->constrained('users');
+            $table->foreignId('user1_id')->constrained('users')->nullable()->nullOnDelete();
+            $table->foreignId('user2_id')->constrained('users')->nullable()->nullOnDelete();
             
             // === СТАТУС МЭТЧЕЙ (Разрыв связи) ===
             // active (мэтч активен, можно писать), unmatched (кто-то нажал "Разматчить")
             $table->enum('status', ['active', 'unmatched'])->default('active');
             
             // Кто инициировал разрыв мэтча (для аналитики и саппорта, если кто-то пожалуется)
-            $table->foreignId('unmatched_by')->nullable()->constrained('users');
+            $table->foreignId('unmatched_by')->nullable()->constrained('users')->nullOnDelete();
             $table->timestamp('unmatched_at')->nullable();
 
             $table->timestamps();

@@ -34,7 +34,7 @@ return new class extends Migration
             $table->string('reject_reason')->nullable();
             
             // ID админа/модератора, который проверил фото
-            $table->foreignId('moderated_by')->nullable()->constrained('users');
+            $table->foreignId('moderated_by')->nullable()->constrained('users')->nullOnDelete();
             
             // Дата и время модерации (для аналитики скорости модерации)
             $table->timestamp('moderated_at')->nullable();

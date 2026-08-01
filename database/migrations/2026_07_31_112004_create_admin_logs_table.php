@@ -14,7 +14,7 @@ return new class extends Migration
             // === КТО СДЕЛАЛ ===
             // Админ/модератор. nullable, т.к. действия могут совершаться системой (воркером) автоматически.
             // Без cascade! Если админа уволят и удалят его аккаунт, история его действий должна остаться.
-            $table->foreignId('admin_id')->nullable()->constrained('users');
+            $table->foreignId('admin_id')->nullable()->constrained('users')->nullOnDelete();
             
             // === ЧТО СДЕЛАЛ И НАД ЧЕМ (Полиморфная связь) ===
             // Тип действия (action): user.ban, photo.approve, transaction.refund, setting.update

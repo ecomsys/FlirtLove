@@ -14,10 +14,10 @@ return new class extends Migration
             // Кто свайпнул (инициатор действия). 
             // Убрали cascade! Если юзер удаляется, мы не должны терять статистику его свайпов 
             // и связь для антифрода (например, если он до этого лайкал всех подряд).
-            $table->foreignId('user_id')->constrained('users');
+            $table->foreignId('user_id')->constrained('users')->nullable()->nullOnDelete();
             
             // Кого свайпнули (цель). Аналогично без каскадного удаления.
-            $table->foreignId('target_user_id')->constrained('users');
+            $table->foreignId('target_user_id')->constrained('users')->nullable()->nullOnDelete();
             
             // Тип свайпа: like (вправо), dislike (влево), superlike (суперлайк)
             $table->enum('type', ['like', 'dislike', 'superlike'])->default('like');
@@ -55,6 +55,9 @@ return new class extends Migration
         Schema::dropIfExists('swipes');
     }
 };
+
+
+
 
 
 

@@ -13,7 +13,7 @@ return new class extends Migration
             
             // === СВЯЗИ ===
             // Кто платил. Без cascade! Финансовая история не должна уничтожаться при удалении аккаунта.
-            $table->foreignId('user_id')->constrained('users');
+            $table->foreignId('user_id')->constrained('users')->nullable()->nullOnDelete();
             
             // === ДЕНЬГИ ===
             // Сумма списания в реальной валюте. Decimal(8,2) — железобетонный стандарт для денег.

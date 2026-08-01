@@ -14,7 +14,7 @@ return new class extends Migration
             // === КТО ПОДОЗРИТЕЛЕН ===
             // Юзер, на которого сработал триггер. 
             // Без cascade! Если скаммер успеет удалить аккаунт, алерт должен остаться для аналитики.
-            $table->foreignId('user_id')->constrained('users');
+            $table->foreignId('user_id')->constrained('users')->nullable()->nullOnDelete();
             
             // === СУТЬ НАРУШЕНИЯ ===
             // Тип триггера (что именно заметила система):
@@ -37,7 +37,7 @@ return new class extends Migration
             
             // === КТО РАЗОБРАЛ ===
             // Админ, который принял решение. Без cascade.
-            $table->foreignId('admin_id')->nullable()->constrained('users');
+            $table->foreignId('admin_id')->nullable()->constrained('users')->nullOnDelete();
             $table->timestamp('resolved_at')->nullable();
 
             $table->timestamps();

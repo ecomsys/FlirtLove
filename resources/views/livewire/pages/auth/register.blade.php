@@ -101,7 +101,7 @@ new #[Layout('layouts.guest')] class extends Component
     }
 }; ?>
 
-<div class="w-full max-w-md mx-auto py-10 px-4 bg-background text-foreground">
+<div class="w-full max-w-md mx-auto py-4 bg-background text-foreground h-[calc(100vh-4rem)] flex flex-col justify-center">
 
     <!-- Прогресс-бар -->
     <div class="flex items-center justify-center mb-8 gap-2">

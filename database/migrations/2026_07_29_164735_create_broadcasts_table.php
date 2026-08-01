@@ -13,7 +13,7 @@ return new class extends Migration
             
             // === КТО СОЗДАЛ ===
             // Админ, инициировавший рассылку. Без cascade, чтобы история рассылок не удалялась при увольнении админа.
-            $table->foreignId('admin_id')->nullable()->constrained('users');
+            $table->foreignId('admin_id')->nullable()->constrained('users')->nullOnDelete();
             
             // === ПАРАМЕТРЫ РАССЫЛКИ ===
             // Тип: in_app (в колокольчик/в БД), push (мобильный пуш), email. SMS убрано за ненадобностью.

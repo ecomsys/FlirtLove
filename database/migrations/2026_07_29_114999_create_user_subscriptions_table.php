@@ -14,7 +14,7 @@ return new class extends Migration
             // === СВЯЗИ ===
             // Кто купил. Без cascade! Финансовая история должна жить вечно, 
             // даже если юзер удалит аккаунт (для налоговой и фин. отчетов).
-            $table->foreignId('user_id')->constrained('users');
+            $table->foreignId('user_id')->constrained('users')->nullable()->nullOnDelete();
             
             // Какой тариф был куплен. nullOnDelete: если админ удалит тариф, история не сломается.
             $table->foreignId('plan_id')->nullable()->constrained('subscription_plans')->nullOnDelete();

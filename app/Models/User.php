@@ -141,6 +141,30 @@ class User extends Authenticatable implements MustVerifyEmail
     public function matchesAsUser2(): HasMany
     {
         return $this->hasMany(UserMatch::class, 'user2_id');
+    }    
+
+    // Просмотры
+    public function profileViewers() 
+    { 
+        return $this->hasMany(ProfileView::class, 'viewed_id'); 
+    }
+
+    // Кого заблокировали
+    public function blockedUsers() 
+    { 
+        return $this->hasMany(UserBlock::class, 'blocker_id'); 
+    } 
+
+    // Кто заблокировал
+    public function blockers() 
+    { 
+        return $this->hasMany(UserBlock::class, 'blocked_id'); 
+    } 
+
+    // верифицированные пользователи
+    public function verifications() 
+    { 
+        return $this->hasMany(Verification::class); 
     }
 
     // ============================================
@@ -245,6 +269,7 @@ class User extends Authenticatable implements MustVerifyEmail
         }
         return $this->preferences->email_settings;
     }
+
 
     // ============================================
     // СОБЫТИЯ МОДЕЛИ (Booted)
