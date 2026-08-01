@@ -46,6 +46,11 @@ class User extends Authenticatable implements MustVerifyEmail
     // ============================================
     // СВЯЗИ (ОТНОШЕНИЯ)
     // ============================================
+        // Логи действий администратора (для журнала аудита)
+    public function adminLogs(): HasMany
+    {
+        return $this->hasMany(AdminLog::class, 'admin_id');
+    }
 
     public function profile(): HasOne
     {

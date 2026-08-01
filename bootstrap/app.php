@@ -21,10 +21,9 @@ return Application::configure(basePath: dirname(__DIR__))
             SetLocale::class            
         ]);
         
-        $middleware->alias([
-            'admin' => \App\Http\Middleware\IsAdmin::class,
-            'onboarding' => \App\Http\Middleware\EnsureOnboardingCompleted::class,
-            'redirect.admin' => \App\Http\Middleware\RedirectIfAdmin::class,   
+        $middleware->alias([                 
+            'role' => \App\Http\Middleware\EnsureUserHasRole::class,    
+            'onboarding' => \App\Http\Middleware\EnsureOnboardingCompleted::class,            
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

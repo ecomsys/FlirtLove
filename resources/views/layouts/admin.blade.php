@@ -30,7 +30,7 @@
         <livewire:layout.admin-navigation />
 
         <div class="flex flex-1 relative">
-            <!-- Сайдбар через Livewire компонент -->
+            <!-- Сайдбар -->
             <aside class="fixed little-scroll top-[4rem] left-0 z-40 w-64 h-[calc(100vh-4rem)] bg-card border-r border-border flex flex-col px-4 pt-4 pb-10 overflow-y-auto">
                 <livewire:layout.admin-sidebar />
             </aside>
@@ -51,11 +51,10 @@
     <script src="https://cdn.jsdelivr.net/npm/@fancyapps/ui@5.0/dist/fancybox/fancybox.umd.js"></script>   
   
     <script>       
-            Fancybox.bind('[data-fancybox]', {
-                // Настройки
-            });       
+        Fancybox.bind('[data-fancybox]', {
+            // Настройки
+        });       
     </script>
-
 
     @stack('scripts')  
 </body>

@@ -1,96 +1,147 @@
 <?php
 
 use App\Models\Photo;
-use App\Models\PhotoComment;
 use App\Models\Report;
+use App\Models\Transaction;
 use App\Models\User;
 use App\Models\UserProfile;
+use App\Models\Verification;
+use App\Models\Swipe;
+use App\Models\UserMatch;
+use App\Models\Message;
 use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\DB; // ФИКС 1: Добавлен DB
 use Livewire\Attributes\Layout;
 use Livewire\Volt\Component;
 
 new #[Layout('layouts.admin')] class extends Component 
 {
-    /**
-     * Передача данных в представление.
-     * 
-     * @return array
-     */
     public function with(): array
     {
-        // Получаем закешированные метрики (кэш на 10 минут)
         $metrics = Cache::remember('admin_dashboard_metrics', 600, function () {
             return [
-                'totalUsers' => User::where('is_admin', false)->count(),
-                'newUsersToday' => User::where('is_admin', false)->whereDate('created_at', today())->count(),
-                'newUsersWeek' => User::where('is_admin', false)->where('created_at', '>=', now()->subDays(7))->count(),
+                'newUsersToday' => User::excludeStaff()->whereDate('created_at', today())->count(),
+                'newUsersWeek'  => User::excludeStaff()->where('created_at', '>=', now()->subDays(7))->count(),
                 
-                'photosTotal' => Photo::whereHas('user', fn($q) => $q->where('is_admin', false))->count(),
-                'photosPending' => Photo::whereHas('user', fn($q) => $q->where('is_admin', false))->where('status', 'pending')->count(),
-                'photosApproved' => Photo::whereHas('user', fn($q) => $q->where('is_admin', false))->where('status', 'approved')->count(),
+                'revenueToday'  => Transaction::success()->whereDate('created_at', today())->sum('amount'),
+                'revenueMonth'  => Transaction::success()->where('created_at', '>=', now()->subDays(30))->sum('amount'),
                 
-                'reportsPending' => Report::whereHas('user', fn($q) => $q->where('is_admin', false))->where('status', 'pending')->count(),
-                'reportsTotal' => Report::whereHas('user', fn($q) => $q->where('is_admin', false))->count(),
+                'moderationQueue' => Photo::pending()->count() + Verification::pending()->count() + Report::pending()->count(),
+                'pendingPhotos'   => Photo::pending()->count(),
+                'pendingVerifications' => Verification::pending()->count(),
+                'pendingReports'  => Report::pending()->count(),
+
+                'registrationData' => $this->getRegistrationData(30),
+                'registrationCategories' => $this->getDateCategories(30),
                 
-                'commentsTotal' => PhotoComment::whereHas('user', fn($q) => $q->where('is_admin', false))->count(),
-                'commentsPending' => PhotoComment::whereHas('user', fn($q) => $q->where('is_admin', false))->where('status', 'pending')->count(),
-                'commentsApproved' => PhotoComment::whereHas('user', fn($q) => $q->where('is_admin', false))->where('status', 'approved')->count(),
-                'commentsRejected' => PhotoComment::whereHas('user', fn($q) => $q->where('is_admin', false))->where('status', 'rejected')->count(),
-                'commentsSpam' => PhotoComment::whereHas('user', fn($q) => $q->where('is_admin', false))->where('status', 'spam')->count(),
-                'newCommentsToday' => PhotoComment::whereHas('user', fn($q) => $q->where('is_admin', false))->whereDate('created_at', today())->count(),
+                'revenueData' => $this->getRevenueData(30),
+                'revenueCategories' => $this->getDateCategories(30),
                 
+                'activityData' => $this->getActivityData(),
+
                 'genderStats' => $this->getGenderStats(),
                 'ageStats' => $this->getAgeStats(),
                 'topCities' => $this->getTopCities(),
-                'registrationData' => $this->getRegistrationData(),
-                'categories' => $this->getCategories(),
-                'commentsData' => $this->getCommentsData(),
-                'commentCategories' => $this->getCategories(),
             ];
         });
 
-        // Онлайн считаем всегда в реальном времени (без кэша)
-        $onlineUsers = DB::table('sessions')
-            ->join('users', 'sessions.user_id', '=', 'users.id')
-            ->where('users.is_admin', false)
-            ->where('sessions.last_activity', '>=', now()->subMinutes(5)->timestamp)
-            ->distinct('sessions.user_id')
-            ->count('sessions.user_id');
+        $onlineUsers = User::excludeStaff()
+            ->where('last_seen', '>=', now()->subMinutes(5))
+            ->count();
 
         return array_merge($metrics, ['onlineUsers' => $onlineUsers]);
     }
 
-    /**
-     * Мягкое обновление данных (сбрасываем кэш).
-     * 
-     * @return void
-     */
     public function refresh(): void
     {
         Cache::forget('admin_dashboard_metrics');
         $this->dispatch('show-toast', type: 'success', message: 'Данные обновлены!');
     }
 
-    /**
-     * Полная очистка кеша проекта (через Artisan).
-     * 
-     * @return void
-     */
     public function clearCache(): void
     {
         try {
             \Artisan::call('cache:project-clear');
-            Cache::forget('admin_dashboard_metrics'); // Сбрасываем и локальный кэш дашборда
+            Cache::forget('admin_dashboard_metrics');
             $this->dispatch('show-toast', type: 'success', message: 'Кеш успешно очищен!');
         } catch (\Exception $e) {
             $this->dispatch('show-toast', type: 'error', message: 'Ошибка: ' . $e->getMessage());
         }
     }
 
-    // ============================================
-    // ПРИВАТНЫЕ МЕТОДЫ (Оптимизированные запросы)
-    // ============================================
+    private function getDateCategories(int $days): array
+    {
+        $categories = [];
+        for ($i = $days - 1; $i >= 0; $i--) {
+            $categories[] = now()->subDays($i)->format('d.m');
+        }
+        return $categories;
+    }
+
+    private function getRegistrationData(int $days): array
+    {
+        $stats = User::excludeStaff()
+            ->selectRaw('DATE(created_at) as date, count(*) as total')
+            ->where('created_at', '>=', now()->subDays($days))
+            ->groupBy('date')
+            ->orderBy('date') // Добавил сортировку для стабильности
+            ->pluck('total', 'date')
+            ->toArray();
+
+        $data = [];
+        for ($i = $days - 1; $i >= 0; $i--) {
+            $date = now()->subDays($i)->format('Y-m-d');
+            $data[] = $stats[$date] ?? 0;
+        }
+        return $data;
+    }
+
+    private function getRevenueData(int $days): array
+    {
+        $stats = Transaction::success()
+            ->selectRaw('DATE(created_at) as date, SUM(amount) as total')
+            ->where('created_at', '>=', now()->subDays($days))
+            ->groupBy('date')
+            ->orderBy('date')
+            ->pluck('total', 'date')
+            ->toArray();
+
+        $data = [];
+        for ($i = $days - 1; $i >= 0; $i--) {
+            $date = now()->subDays($i)->format('Y-m-d');
+            $data[] = round($stats[$date] ?? 0, 2);
+        }
+        return $data;
+    }
+
+    private function getActivityData(): array
+    {
+        $period = now()->subDays(7);
+        
+        $swipes = Swipe::selectRaw('DATE(created_at) as date, count(*) as total')
+            ->where('created_at', '>=', $period)->groupBy('date')->orderBy('date')->pluck('total', 'date')->toArray();
+
+        $matches = UserMatch::selectRaw('DATE(created_at) as date, count(*) as total')
+            ->where('created_at', '>=', $period)->groupBy('date')->orderBy('date')->pluck('total', 'date')->toArray();
+
+        $messages = Message::selectRaw('DATE(created_at) as date, count(*) as total')
+            ->where('created_at', '>=', $period)->groupBy('date')->orderBy('date')->pluck('total', 'date')->toArray();
+
+        $swipesData = []; $matchesData = []; $messagesData = [];
+        for ($i = 6; $i >= 0; $i--) {
+            $date = now()->subDays($i)->format('Y-m-d');
+            $swipesData[] = $swipes[$date] ?? 0;
+            $matchesData[] = $matches[$date] ?? 0;
+            $messagesData[] = $messages[$date] ?? 0;
+        }
+
+        return [
+            'swipes' => $swipesData,
+            'matches' => $matchesData,
+            'messages' => $messagesData,
+            'categories' => $this->getDateCategories(7)
+        ];
+    }
 
     private function getGenderStats(): array
     {
@@ -137,220 +188,166 @@ new #[Layout('layouts.admin')] class extends Component
             ->pluck('total', 'city')
             ->toArray();
     }
-
-    private function getRegistrationData(): array
-    {
-        $stats = User::where('is_admin', false)
-            ->select(DB::raw('DATE(created_at) as date'), DB::raw('count(*) as total'))
-            ->where('created_at', '>=', now()->subDays(7))
-            ->groupBy('date')
-            ->orderBy('date')
-            ->pluck('total', 'date')
-            ->toArray();
-
-        $data = [];
-        for ($i = 6; $i >= 0; $i--) {
-            $date = now()->subDays($i)->format('Y-m-d');
-            $data[] = $stats[$date] ?? 0;
-        }
-        return $data;
-    }
-
-    private function getCategories(): array
-    {
-        $categories = [];
-        for ($i = 6; $i >= 0; $i--) {
-            $categories[] = now()->subDays($i)->format('D');
-        }
-        return $categories;
-    }
-
-    private function getCommentsData(): array
-    {
-        $stats = PhotoComment::whereHas('user', fn($q) => $q->where('is_admin', false))
-            ->select(DB::raw('DATE(created_at) as date'), DB::raw('count(*) as total'))
-            ->where('created_at', '>=', now()->subDays(7))
-            ->groupBy('date')
-            ->orderBy('date')
-            ->pluck('total', 'date')
-            ->toArray();
-
-        $data = [];
-        for ($i = 6; $i >= 0; $i--) {
-            $date = now()->subDays($i)->format('Y-m-d');
-            $data[] = $stats[$date] ?? 0;
-        }
-        return $data;
-    }
 }; 
 ?>
 
 <div class="space-y-6">
     <!-- Заголовок -->
     <div class="flex items-center justify-between flex-wrap gap-4">
-        <h1 class="text-2xl font-semibold">Панель управления</h1>
+        <h1 class="text-2xl font-semibold">Дашборд</h1>
         <div class="flex items-center gap-3">
             <div class="text-sm text-muted-foreground">
                 {{ now()->format('d.m.Y H:i') }}
             </div>
-               <x-ui.button 
-                    wire:click="clearCache" 
-                    wire:loading.attr="disabled"
-                    variant="outline" 
-                    size="sm"
-                    class="gap-2"
-                >
-                    <span wire:loading.remove wire:target="clearCache">
-                        <x-lucide-rotate-ccw class="w-4 h-4" />
-                    </span>
-                    <span wire:loading wire:target="clearCache">
-                        <x-ui.spinner class="w-4 h-4" />
-                    </span>
-                    <span wire:loading.remove wire:target="clearCache">Очистить кеш</span>
-                    <span wire:loading wire:target="clearCache">Очистка...</span>
-                </x-ui.button>
-           <x-ui.button 
-                wire:click="refresh" 
-                wire:loading.attr="disabled"
-                variant="outline" 
-                size="sm"
-                class="gap-2"
-            >
-                <span wire:loading.remove wire:target="refresh">
-                    <x-lucide-refresh-ccw class="w-4 h-4" />
-                </span>
-                <span wire:loading wire:target="refresh">
-                    <x-ui.spinner class="w-4 h-4" />
-                </span>
+            <x-ui.button wire:click="clearCache" wire:loading.attr="disabled" variant="outline" size="sm" class="gap-2">
+                <span wire:loading.remove wire:target="clearCache"><x-lucide-rotate-ccw class="w-4 h-4" /></span>
+                <span wire:loading wire:target="clearCache"><x-ui.spinner class="w-4 h-4" /></span>
+                <span wire:loading.remove wire:target="clearCache">Очистить кеш</span>
+                <span wire:loading wire:target="clearCache">Очистка...</span>
+            </x-ui.button>
+            <x-ui.button wire:click="refresh" wire:loading.attr="disabled" variant="outline" size="sm" class="gap-2">
+                <span wire:loading.remove wire:target="refresh"><x-lucide-refresh-ccw class="w-4 h-4" /></span>
+                <span wire:loading wire:target="refresh"><x-ui.spinner class="w-4 h-4" /></span>
                 <span wire:loading.remove wire:target="refresh">Обновить</span>
                 <span wire:loading wire:target="refresh">Обновление...</span>
             </x-ui.button>
         </div>
     </div>
 
-    <!-- Основные метрики -->
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-        <!-- Всего юзеров -->
+    <!-- Виджеты -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <x-ui.card>
             <div class="flex flex-col h-full">
                 <div class="flex items-center justify-between">
-                    <p class="text-sm text-muted-foreground">Всего юзеров</p>
+                    <p class="text-sm text-muted-foreground">Новые юзеры</p>
                     <x-lucide-users class="w-5 h-5 text-blue-500" />
                 </div>
-                <p class="text-2xl font-bold mt-1">{{ $totalUsers }}</p>
+                <p class="text-2xl font-bold mt-1">+{{ $newUsersToday }}</p>
                 <div class="flex items-center gap-2 mt-auto text-xs pt-2 flex-wrap">
-                    <span class="text-green-500">+{{ $newUsersToday }}</span>
-                    <span class="text-muted-foreground">сегодня</span>
-                    <span class="text-blue-500">+{{ $newUsersWeek }}</span>
-                    <span class="text-muted-foreground">за неделю</span>
+                    <span class="text-muted-foreground">за 24 часа</span>
+                    <span class="text-blue-500 ml-auto">+{{ $newUsersWeek }}</span>
+                    <span class="text-muted-foreground">за 7 дней</span>
                 </div>
             </div>
         </x-ui.card>
 
-        <!-- Онлайн -->
         <x-ui.card>
             <div class="flex flex-col h-full">
                 <div class="flex items-center justify-between">
-                    <p class="text-sm text-muted-foreground">Онлайн</p>
+                    <p class="text-sm text-muted-foreground">Онлайн прямо сейчас</p>
                     <x-lucide-circle class="w-5 h-5 text-green-500 fill-green-500" />
                 </div>
                 <p class="text-2xl font-bold mt-1">{{ $onlineUsers }}</p>
-                <p class="text-xs text-muted-foreground mt-auto pt-2">за последние 5 минут</p>
+                <p class="text-xs text-muted-foreground mt-auto pt-2">были за последние 5 минут</p>
             </div>
         </x-ui.card>
 
-        <!-- Фото -->
         <x-ui.card>
             <div class="flex flex-col h-full">
                 <div class="flex items-center justify-between">
-                    <p class="text-sm text-muted-foreground">Фото</p>
-                    <x-lucide-image class="w-5 h-5 text-purple-500" />
+                    <p class="text-sm text-muted-foreground">Выручка</p>
+                    <x-lucide-credit-card class="w-5 h-5 text-emerald-500" />
                 </div>
-                <p class="text-2xl font-bold mt-1">{{ $photosTotal }}</p>
+                <p class="text-2xl font-bold mt-1">{{ number_format($revenueToday, 0, '.', ' ') }} ₽</p>
                 <div class="flex items-center gap-2 mt-auto text-xs pt-2 flex-wrap">
-                    <span class="text-yellow-500">{{ $photosPending }}</span>
-                    <span class="text-muted-foreground">на модерации</span>
-                    <span class="text-green-500">{{ $photosApproved }}</span>
-                    <span class="text-muted-foreground">одобрено</span>
+                    <span class="text-muted-foreground">за 24 часа</span>
+                    <span class="text-emerald-500 ml-auto">{{ number_format($revenueMonth, 0, '.', ' ') }} ₽</span>
+                    <span class="text-muted-foreground">за 30 дней</span>
                 </div>
             </div>
         </x-ui.card>
 
-        <!-- Комментарии -->
         <x-ui.card>
             <div class="flex flex-col h-full">
                 <div class="flex items-center justify-between">
-                    <p class="text-sm text-muted-foreground">Комментарии</p>
-                    <x-lucide-message-circle class="w-5 h-5 text-teal-500" />
+                    <p class="text-sm text-muted-foreground">Очередь модерации</p>
+                    <x-lucide-shield class="w-5 h-5 text-orange-500" />
                 </div>
-                <p class="text-2xl font-bold mt-1">{{ $commentsTotal }}</p>
-                <div class="flex flex-wrap items-center gap-2 mt-auto text-xs pt-2">
-                    <span class="text-yellow-500">{{ $commentsPending }}</span>
-                    <span class="text-muted-foreground">на модерации</span>
-                    <span class="text-green-500">{{ $commentsApproved }}</span>
-                    <span class="text-muted-foreground">одобрено</span>
-                    <span class="text-red-500">{{ $commentsSpam }}</span>
-                    <span class="text-muted-foreground">спам</span>
-                </div>
-                <div class="text-xs text-muted-foreground pt-1">
-                    +{{ $newCommentsToday }} сегодня
-                </div>
-            </div>
-        </x-ui.card>
-
-        <!-- Жалобы -->
-        <x-ui.card>
-            <div class="flex flex-col h-full">
-                <div class="flex items-center justify-between">
-                    <p class="text-sm text-muted-foreground">Жалобы</p>
-                    <x-lucide-flag class="w-5 h-5 text-red-500" />
-                </div>
-                <p class="text-2xl font-bold mt-1">{{ $reportsTotal }}</p>
-                <div class="flex items-center gap-2 mt-auto text-xs pt-2">
-                    <span class="text-red-500">{{ $reportsPending }}</span>
-                    <span class="text-muted-foreground">ожидают</span>
+                <p class="text-2xl font-bold mt-1">{{ $moderationQueue }}</p>
+                <div class="flex items-center gap-2 mt-auto text-xs pt-2 flex-wrap">
+                    <span class="text-yellow-500">{{ $pendingPhotos }} фото</span>
+                    <span class="text-blue-500">{{ $pendingVerifications }} вериф.</span>
+                    <span class="text-red-500">{{ $pendingReports }} жалоб</span>
                 </div>
             </div>
         </x-ui.card>
     </div>
 
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <!-- Регистрации за неделю -->
+    <!-- Графики -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        
+        <!-- Регистрации за 30 дней -->
         <x-ui.card>
-            <h3 class="font-semibold text-sm mb-3">Регистрации за неделю</h3>
-            @php
-                $regColors = [
-                    'var(--chart-1)',
-                    'var(--chart-2)',
-                    'var(--chart-3)',
-                    'var(--chart-4)',
-                    'var(--chart-5)',
-                    'var(--chart-6)',
-                    'var(--chart-7)',
-                ];
-            @endphp
-            <x-ui.chart type="bar" :config="['registrations' => ['label' => 'Регистрации', 'color' => 'var(--chart-1)']]" :series="[['name' => 'Регистрации', 'data' => $registrationData]]" :colors="$regColors" :options="[
-                'xaxis' => [
-                    'categories' => $categories,
-                    'labels' => ['show' => true],
-                    'axisBorder' => ['show' => false],
-                    'axisTicks' => ['show' => false],
-                ],
-                'plotOptions' => [
-                    'bar' => [
-                        'borderRadius' => 5,
-                        'columnWidth' => '60%',
-                        'distributed' => true,
-                    ],
-                ],
-                'yaxis' => ['show' => true],
-                'grid' => ['show' => false],
-                'legend' => ['show' => false],
-            ]"
-                class="aspect-auto h-[250px]" />
+            <h3 class="font-semibold text-sm mb-3">Регистрации (30 дней)</h3>
+            <x-ui.chart 
+                type="line" 
+                :config="['Регистрации' => ['label' => 'Регистрации', 'color' => 'var(--chart-1)']]" 
+                :series="[['name' => 'Регистрации', 'data' => $registrationData]]" 
+                :colors="['var(--chart-1)']" 
+                :options="[
+                    'xaxis' => ['categories' => $registrationCategories, 'labels' => ['show' => false]],
+                    'stroke' => ['width' => 2, 'curve' => 'smooth'],
+                    'fill' => ['type' => 'gradient', 'gradient' => ['shadeIntensity' => 1, 'opacityFrom' => 0.4, 'opacityTo' => 0.1]],
+                    'yaxis' => ['show' => true],
+                    'grid' => ['show' => false],
+                    'legend' => ['show' => false],
+                ]"
+                class="aspect-auto h-[250px]" 
+            />
         </x-ui.card>
 
-        <!-- Статистика по полу -->
+        <!-- Выручка за 30 дней -->
+        <x-ui.card>
+            <h3 class="font-semibold text-sm mb-3">Выручка (30 дней)</h3>
+            <x-ui.chart 
+                type="area" 
+                :config="['Выручка' => ['label' => 'Выручка', 'color' => 'var(--chart-2)']]" 
+                :series="[['name' => 'Выручка', 'data' => $revenueData]]" 
+                :colors="['var(--chart-2)']" 
+                :options="[
+                    'xaxis' => ['categories' => $revenueCategories, 'labels' => ['show' => false]],
+                    'stroke' => ['width' => 2, 'curve' => 'smooth'],
+                    'fill' => ['type' => 'gradient', 'gradient' => ['shadeIntensity' => 1, 'opacityFrom' => 0.4, 'opacityTo' => 0.1]],
+                    'yaxis' => ['show' => true],
+                    'grid' => ['show' => false],
+                    'legend' => ['show' => false],
+                    'tooltip' => ['y' => ['formatter' => 'function(val) { return val + " ₽"; }']],
+                ]"
+                class="aspect-auto h-[250px]" 
+            />
+        </x-ui.card>
+
+        <!-- Активность -->
+        <x-ui.card>
+            <h3 class="font-semibold text-sm mb-3">Активность (7 дней)</h3>
+            <x-ui.chart 
+                type="line" 
+                :config="[
+                    'Свайпы' => ['label' => 'Свайпы', 'color' => 'var(--chart-1)'],
+                    'Мэтчи' => ['label' => 'Мэтчи', 'color' => 'var(--chart-2)'],
+                    'Сообщения' => ['label' => 'Сообщения', 'color' => 'var(--chart-3)'],
+                ]" 
+                :series="[
+                    ['name' => 'Свайпы', 'data' => $activityData['swipes']],
+                    ['name' => 'Мэтчи', 'data' => $activityData['matches']],
+                    ['name' => 'Сообщения', 'data' => $activityData['messages']],
+                ]" 
+                :colors="['var(--chart-1)', 'var(--chart-2)', 'var(--chart-3)']" 
+                :options="[
+                    'xaxis' => ['categories' => $activityData['categories'], 'labels' => ['show' => true]],
+                    'stroke' => ['width' => 2, 'curve' => 'smooth'],
+                    'yaxis' => ['show' => true],
+                    'grid' => ['show' => false],
+                    'legend' => ['show' => true, 'position' => 'bottom'],
+                ]"
+                class="aspect-auto h-[250px]" 
+            />
+        </x-ui.card>
+    </div>
+
+    <!-- Аналитика 2-го эшелона -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <!-- Пол -->
         <x-ui.card>
             <h3 class="font-semibold text-sm mb-3">Соотношение по полу</h3>
             @php
@@ -383,159 +380,61 @@ new #[Layout('layouts.admin')] class extends Component
                 </div>
             </div>
         </x-ui.card>
-    </div>
 
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
-        <!-- Комментирование фотографий (area график) -->
-        <x-ui.card>
-            <h3 class="font-semibold text-sm mb-3">Комментирование фотографий</h3>
-            <x-ui.chart
-                type="area"
-                :config="['comments' => ['label' => 'Комментарии', 'color' => 'var(--chart-1)']]"
-                :series="[['name' => 'Комментарии', 'data' => $commentsData]]"
-                :colors="['var(--chart-1)']"
-                :options="[
-                    'xaxis' => ['categories' => $commentCategories],
-                    'fill' => [
-                        'type' => 'gradient',
-                        'gradient' => [
-                            'shadeIntensity' => 1,
-                            'opacityFrom' => 0.4,
-                            'opacityTo' => 0.1,
-                            'stops' => [0, 100]
-                        ]
-                    ],
-                    'stroke' => ['width' => 2, 'curve' => 'smooth'],
-                    'yaxis' => ['show' => false],
-                    'tooltip' => ['x' => ['show' => true]],
-                ]"
-                class="aspect-auto h-[250px]"
-            />
-        </x-ui.card>
-
-        <!-- Статусы комментариев (круговая диаграмма) -->
-        <x-ui.card>
-            <h3 class="font-semibold text-sm mb-3">Статусы комментариев к фоткам</h3>
-            @php
-                $statusLabels = ['Одобрены', 'На модерации', 'Отклонены', 'Спам'];
-                $statusData = [$commentsApproved, $commentsPending, $commentsRejected, $commentsSpam];
-                $statusColors = ['var(--chart-2)', 'var(--chart-3)', 'var(--chart-4)', 'var(--chart-5)'];
-                $hasStatusData = array_sum($statusData) > 0;
-            @endphp
-            @if($hasStatusData)
-                <x-ui.chart
-                    type="pie"
-                    :series="$statusData"
-                    :labels="$statusLabels"
-                    :colors="$statusColors"
-                    :options="['legend' => ['show' => false], 'stroke' => ['width' => 0], 'tooltip' => ['enabled' => true], 'dataLabels' => ['enabled' => true]]"
-                    class="mx-auto aspect-square max-h-[250px] px-0"
-                />
-            @else
-                <div class="flex items-center justify-center h-[250px] text-muted-foreground">
-                    <div class="text-center">
-                        <x-lucide-message-circle class="w-12 h-12 mx-auto mb-2 opacity-30" />
-                        <p>Нет комментариев</p>
-                    </div>
-                </div>
-            @endif
-        </x-ui.card>
-    </div>
-
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <!-- Возрастное распределение -->
+        <!-- Возраст -->
         <x-ui.card>
             <h3 class="font-semibold text-sm mb-3">Возрастное распределение</h3>
             @php
                 $ageLabels = array_keys($ageStats);
                 $ageData = array_values($ageStats);
-                $hasAgeData = !empty($ageData) && array_sum($ageData) > 0;
                 $ageColors = ['var(--chart-1)', 'var(--chart-2)', 'var(--chart-3)', 'var(--chart-4)', 'var(--chart-5)'];
             @endphp
-
-            @if($hasAgeData)
-                <x-ui.chart type="bar" :config="[
+            <x-ui.chart type="bar" 
+                :config="[
                     '18-24' => ['label' => '18-24', 'color' => 'var(--chart-1)'],
                     '25-34' => ['label' => '25-34', 'color' => 'var(--chart-2)'],
                     '35-44' => ['label' => '35-44', 'color' => 'var(--chart-3)'],
                     '45-54' => ['label' => '45-54', 'color' => 'var(--chart-4)'],
-                    '55+' => ['label' => '55+', 'color' => 'var(--chart-5)'],
-                ]" :series="[['name' => 'Возраст', 'data' => $ageData]]" :colors="$ageColors" :options="[
-                    'xaxis' => [
-                        'categories' => $ageLabels,
-                        'labels' => ['show' => true],
-                        'axisBorder' => ['show' => false],
-                        'axisTicks' => ['show' => false],
-                    ],
-                    'plotOptions' => [
-                        'bar' => [
-                            'borderRadius' => 5,
-                            'columnWidth' => '50%',
-                            'distributed' => true,
-                        ],
-                    ],
+                    '55+'   => ['label' => '55+', 'color' => 'var(--chart-5)'],
+                ]" 
+                :series="[['name' => 'Возраст', 'data' => $ageData]]" 
+                :colors="$ageColors" 
+                :options="[
+                    'xaxis' => ['categories' => $ageLabels, 'labels' => ['show' => true], 'axisBorder' => ['show' => false], 'axisTicks' => ['show' => false]],
+                    'plotOptions' => ['bar' => ['borderRadius' => 5, 'columnWidth' => '50%', 'distributed' => true]],
                     'yaxis' => ['show' => true],
                     'grid' => ['show' => false],
                     'legend' => ['show' => false],
                 ]"
-                    class="aspect-auto h-[250px]" />
-            @else
-                <div class="flex items-center justify-center h-[250px] text-muted-foreground">
-                    <div class="text-center">
-                        <x-lucide-users class="w-12 h-12 mx-auto mb-2 opacity-30" />
-                        <p>Нет данных о возрасте</p>
-                        <p class="text-xs">Пользователи не указали дату рождения</p>
-                    </div>
-                </div>
-            @endif
+                class="aspect-auto h-[250px]" 
+            />
         </x-ui.card>
 
-        <!-- Топ городов -->
+        <!-- Города -->
         <x-ui.card>
-            <h3 class="font-semibold text-sm mb-3">Топ городов по количеству пользователей</h3>
-            @if(!empty($topCities) && count($topCities) > 0)
-                @php
-                    $cityLabels = array_keys($topCities);
-                    $cityData = array_values($topCities);
-                    $cityColors = ['var(--chart-1)', 'var(--chart-2)', 'var(--chart-3)', 'var(--chart-4)', 'var(--chart-5)'];
-                    $cityConfig = [];
-                    foreach ($cityLabels as $index => $label) {
-                        $cityConfig[$label] = ['label' => $label, 'color' => $cityColors[$index]];
-                    }
-                @endphp
-                <x-ui.chart type="bar" :config="$cityConfig" :series="[['name' => 'Пользователи', 'data' => $cityData]]" :colors="$cityColors" :options="[
-                    'xaxis' => [
-                        'categories' => $cityLabels,
-                        'labels' => ['show' => false],
-                        'axisBorder' => ['show' => false],
-                        'axisTicks' => ['show' => false],
-                    ],
-                    'plotOptions' => [
-                        'bar' => [
-                            'horizontal' => true,
-                            'borderRadius' => 5,
-                            'distributed' => true,
-                        ],
-                    ],
+            <h3 class="font-semibold text-sm mb-3">Топ городов</h3>
+            @php
+                $cityLabels = array_keys($topCities);
+                $cityData = array_values($topCities);
+                $cityColors = ['var(--chart-1)', 'var(--chart-2)', 'var(--chart-3)', 'var(--chart-4)', 'var(--chart-5)'];
+                $cityConfig = [];
+                foreach ($cityLabels as $index => $label) {
+                    $cityConfig[$label] = ['label' => $label, 'color' => $cityColors[$index]];
+                }
+            @endphp
+            <x-ui.chart type="bar" 
+                :config="$cityConfig" 
+                :series="[['name' => 'Пользователи', 'data' => $cityData]]" 
+                :colors="$cityColors" 
+                :options="[
+                    'xaxis' => ['categories' => $cityLabels, 'labels' => ['show' => false], 'axisBorder' => ['show' => false], 'axisTicks' => ['show' => false]],
+                    'plotOptions' => ['bar' => ['horizontal' => true, 'borderRadius' => 5, 'distributed' => true]],
                     'yaxis' => ['show' => true],
                     'grid' => ['show' => false],
                     'legend' => ['show' => false],
                 ]"
-                    class="aspect-auto h-[250px]" />
-                @if (count($topCities) > 5)
-                    <p class="text-xs text-muted-foreground mt-3 text-center">
-                        + еще {{ count($topCities) - 5 }} городов
-                    </p>
-                @endif
-            @else
-                <div class="flex items-center justify-center h-[250px] text-muted-foreground">
-                    <div class="text-center">
-                        <x-lucide-map-pin class="w-12 h-12 mx-auto mb-2 opacity-30" />
-                        <p>Нет данных о городах</p>
-                        <p class="text-xs">Пользователи не указали город</p>
-                    </div>
-                </div>
-            @endif
+                class="aspect-auto h-[250px]" 
+            />
         </x-ui.card>
     </div>
 </div>
