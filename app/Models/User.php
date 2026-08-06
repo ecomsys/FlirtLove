@@ -21,7 +21,7 @@ class User extends Authenticatable implements MustVerifyEmail
         'role', 'status', 'ban_reason', 'banned_until',
         'is_premium', 'premium_expires_at',
         'is_verified', 'has_completed_onboarding',
-        'last_seen', 'last_login_at', 'last_login_ip', 'device_id',
+        'last_seen', 'last_login_at', 'last_login_ip', 'device_id', 'device_os'
     ];
 
     protected $hidden = [
@@ -232,13 +232,15 @@ class User extends Authenticatable implements MustVerifyEmail
      * Если фотки загружены (eager loaded) — берет из памяти.
      * Если нет — возвращаем пустую строку, чтобы <x-avatar> отрисовал заглушку с инициалами.
      */
-    public function getAvatarUrlAttribute(): string
+       public function getAvatarUrlAttribute(): string
     {
         if ($this->relationLoaded('photos')) {
             $photos = $this->getRelation('photos');
             if ($photos && $photos->isNotEmpty()) {
                 $photo = $photos->firstWhere('is_primary', true) ?? $photos->first();
-                return $photo->path_thumb ?: $photo->path_medium ?: '';
+                
+                // ИСПОЛЬЗУЕМ АКСЕССОРЫ МОДЕЛИ PHOTO (они возвращают полный URL /storage/...)
+                return $photo->thumb_url ?: $photo->medium_url ?: $photo->large_url ?: $photo->original_url ?: '';
             }
         }
         return '';
@@ -262,6 +264,13 @@ class User extends Authenticatable implements MustVerifyEmail
     {
         return $this->preferences?->push_enabled ?? true;
     }
+
+    public function getEmailEnabledAttribute(): bool
+    {
+        // Если настройки загружены — берем оттуда, иначе по умолчанию true
+        return $this->preferences?->email_enabled ?? true;
+    }
+
 
     public function getEmailSettingsAttribute(): array
     {

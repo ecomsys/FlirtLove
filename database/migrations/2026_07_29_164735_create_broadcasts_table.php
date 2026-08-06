@@ -20,6 +20,7 @@ return new class extends Migration
             $table->enum('type', ['in_app', 'push', 'email'])->default('in_app');
             $table->string('title');
             $table->text('message');
+            $table->text('email_body')->nullable();
             
             // Payload для фронта (deep link куда переходить при клике, иконки и т.д.)
             $table->json('data')->nullable();

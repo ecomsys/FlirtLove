@@ -64,7 +64,7 @@
     [$minDate, $minTime] = $parseDT($min);
     [$maxDate, $maxTime] = $parseDT($max);
 
-    $placeholder ??= $isRange ? 'Pick a date range' : 'Pick a date & time';
+    $placeholder ??= $isRange ? 'Выберите диапазон дат' : 'Выберите дату и время';
     $width ??= $isRange ? 'w-[320px]' : 'w-[280px]';
 
     $triggerCls = 'border-input dark:bg-input/30 dark:hover:bg-input/50 inline-flex h-9 items-center justify-start gap-2 rounded-md border bg-transparent px-3 py-2 text-left text-sm font-normal whitespace-nowrap shadow-xs transition-[color,box-shadow] outline-none hover:bg-transparent focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:border-destructive aria-invalid:ring-destructive/20';
@@ -129,16 +129,16 @@
             if (this.mode === 'range') {
                 const f = this.ms(this.from, this.timeFrom);
                 const t = this.ms(this.to, this.timeTo);
-                if (f !== null && lo !== null && f < lo) e.push('Start is before the earliest allowed date/time.');
-                if (t !== null && hi !== null && t > hi) e.push('End is after the latest allowed date/time.');
-                if (f !== null && t !== null && t < f) e.push('End is before start.');
+                if (f !== null && lo !== null && f < lo) e.push('Начало — раньше самой ранней допустимой даты/времени.');
+                if (t !== null && hi !== null && t > hi) e.push('Дата/время окончания наступает после максимально допустимой даты/времени.');
+                if (f !== null && t !== null && t < f) e.push('Конец — перед началом');
                 const n = this.nights(this.from, this.to);
-                if (n !== null && this.minNights !== null && n < this.minNights) e.push('Minimum ' + this.minNights + ' night' + this.plural(this.minNights) + '.');
-                if (n !== null && this.maxNights !== null && n > this.maxNights) e.push('Maximum ' + this.maxNights + ' night' + this.plural(this.maxNights) + '.');
+                if (n !== null && this.minNights !== null && n < this.minNights) e.push('Минимально ' + this.minNights + ' night' + this.plural(this.minNights) + '.');
+                if (n !== null && this.maxNights !== null && n > this.maxNights) e.push('Максимально ' + this.maxNights + ' night' + this.plural(this.maxNights) + '.');
             } else {
                 const v = this.ms(this.date, this.time);
-                if (v !== null && lo !== null && v < lo) e.push('Before the earliest allowed date/time.');
-                if (v !== null && hi !== null && v > hi) e.push('After the latest allowed date/time.');
+                if (v !== null && lo !== null && v < lo) e.push('До самой ранней допустимой даты/времени.');
+                if (v !== null && hi !== null && v > hi) e.push('После последней допустимой даты/времени.');
             }
             return e;
         },
@@ -197,9 +197,9 @@
         x-trap="open"
         :id="$id('blat-datetimepicker')"
         role="dialog"
-        aria-label="{{ $isRange ? 'Choose a date and time range' : 'Choose date and time' }}"
+        aria-label="{{ $isRange ? 'Выберите диапазон дат и времени' : 'Выберите дату и время' }}"
         tabindex="-1"
-        class="bg-popover text-popover-foreground z-50 flex w-auto origin-top flex-col overflow-y-auto overscroll-contain rounded-md border shadow-md"
+        class="little-scroll bg-popover text-popover-foreground z-50 flex w-auto origin-top flex-col overflow-y-auto overscroll-contain rounded-md border shadow-md"
         x-transition:enter="transition ease-out duration-150"
         x-transition:enter-start="opacity-0 scale-95"
         x-transition:enter-end="opacity-100 scale-100"
@@ -221,16 +221,16 @@
         <div class="flex flex-col gap-3 border-t p-3">
             @if ($isRange)
                 <div class="flex items-center justify-between gap-3">
-                    <span class="text-sm font-medium">Start</span>
+                    <span class="text-sm font-medium">Начало</span>
                     <x-ui.time-field part="from" :value="$fromTime" :variant="$timeVariant" :hour-cycle="$hourCycle" :seconds="$seconds" :minute-step="$minuteStep" />
                 </div>
                 <div class="flex items-center justify-between gap-3">
-                    <span class="text-sm font-medium">End</span>
+                    <span class="text-sm font-medium">Конец</span>
                     <x-ui.time-field part="to" :value="$toTime" :variant="$timeVariant" :hour-cycle="$hourCycle" :seconds="$seconds" :minute-step="$minuteStep" />
                 </div>
             @else
                 <div class="flex items-center justify-between gap-3">
-                    <span class="text-sm font-medium">Time</span>
+                    <span class="text-sm font-medium">Время</span>
                     <x-ui.time-field :value="$initTime" :variant="$timeVariant" :hour-cycle="$hourCycle" :seconds="$seconds" :minute-step="$minuteStep" />
                 </div>
             @endif
@@ -248,7 +248,7 @@
         </div>
 
         <div class="flex justify-end border-t p-3">
-            <x-ui.button type="button" size="sm" ::disabled="invalid" @click="open = false">Done</x-ui.button>
+            <x-ui.button type="button" size="sm" ::disabled="invalid" @click="open = false">Готово</x-ui.button>
         </div>
     </div>
     </template>

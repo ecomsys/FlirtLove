@@ -16,6 +16,7 @@
         "livewire/volt": "^1.7.0",
         "mallardduck/blade-lucide-icons": "1.26",
         "masmerise/livewire-toaster": "^2.10",
+        "mews/purifier": "^3.4",
         "nesbot/carbon": "^3.13",
         "pusher/pusher-php-server": "^7.2"
     },

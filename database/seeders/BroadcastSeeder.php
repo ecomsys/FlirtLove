@@ -119,17 +119,17 @@ class BroadcastSeeder extends Seeder
             [
                 'title' => '🎉 Обновление сайта',
                 'message' => 'Мы добавили новые функции! Теперь вы можете искать по интересам и фильтровать по городам.',
-                'audience' => ['gender' => 'any'], // Все
+                'audience' => [], // Все
             ],
             [
                 'title' => '💝 С Днем Святого Валентина!',
                 'message' => 'Желаем вам любви и счастья! Специальный промокод LOVE2025 на скидку 20%.',
-                'audience' => ['gender' => 'any'], // Все
+                'audience' => [], // Все
             ],
             [
                 'title' => '🌟 Новый дизайн сайта',
                 'message' => 'Мы обновили дизайн LovePlanet. Наслаждайтесь новым интерфейсом и удобной навигацией!',
-                'audience' => ['gender' => 'male', 'is_premium' => false], // Только мужчины без VIP
+                'audience' => ['gender' => 'male', 'is_premium' => "true"], // Только мужчины без VIP
             ],
         ];
 

@@ -18,42 +18,26 @@ new #[Layout('layouts.admin')] class extends Component
     public string $dateFilter = '';
     public int $perPage = 50;
 
-    /**
-     * Загрузка компонента. Восстанавливаем фильтр из сессии.
-     * 
-     * @return void
-     */
+    // Авторизация: только админы могут смотреть системные логи
     public function mount(): void
     {
+        abort_unless(auth()->user()?->role === 'admin', 403);
         $this->levelFilter = session('admin_logs_level', 'all');
     }
 
-    /**
-     * Сброс пагинации при изменении поиска.
-     * 
-     * @return void
-     */
+    // Сброс пагинации при поиске
     public function updatedSearch(): void
     {
         $this->resetPage();
     }
 
-    /**
-     * Сброс пагинации при изменении даты.
-     * 
-     * @return void
-     */
+    // Сброс пагинации при смене даты
     public function updatedDateFilter(): void
     {
         $this->resetPage();
     }
 
-    /**
-     * Установка фильтра по уровню ошибки и сохранение в сессию.
-     * 
-     * @param string $level
-     * @return void
-     */
+    // Установка фильтра уровня (с сохранением в сессию)
     public function setLevelFilter(string $level): void
     {
         $this->levelFilter = $level;
@@ -61,18 +45,14 @@ new #[Layout('layouts.admin')] class extends Component
         $this->resetPage();
     }
 
-    /**
-     * Очистка всех системных логов.
-     * 
-     * @return void
-     */
+    // Очистка файла логов
     public function clearLogs(): void
     {
         $logPath = storage_path('logs/laravel.log');
         
         try {
             if (File::exists($logPath)) {
-                File::put($logPath, '');
+                File::put($logPath, ''); // Очищаем файл, не удаляя его
             }
             
             Log::info('Логи очищены администратором');
@@ -86,11 +66,6 @@ new #[Layout('layouts.admin')] class extends Component
     // ВЫВОД ДАННЫХ (Computed)
     // ============================================
 
-    /**
-     * Парсинг, фильтрация и пагинация логов.
-     * 
-     * @return \Illuminate\Pagination\LengthAwarePaginator
-     */
     #[Computed]
     public function logs()
     {
@@ -100,14 +75,6 @@ new #[Layout('layouts.admin')] class extends Component
             return new LengthAwarePaginator([], 0, $this->perPage, 1);
         }
 
-        $content = File::get($logPath);
-        
-        // Разделяем файл на отдельные записи по шаблону даты
-        $pattern = '/^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\]/m';
-        $entries = preg_split($pattern, $content, -1, PREG_SPLIT_NO_EMPTY);
-        preg_match_all($pattern, $content, $dates);
-        $dates = $dates[0];
-        
         $levelColors = [
             'ERROR'      => 'bg-red-500/10 text-red-500',
             'WARNING'    => 'bg-yellow-500/10 text-yellow-500',
@@ -120,31 +87,37 @@ new #[Layout('layouts.admin')] class extends Component
         ];
         
         $logs = [];
-        $totalEntries = count($entries);
-        
-        for ($i = 0; $i < $totalEntries; $i++) {
-            $fullEntry = trim($entries[$i]);
-            if (empty($fullEntry)) {
-                continue;
-            }
-            
-            $fullLog = ($dates[$i] ?? '') . $fullEntry;
-            $firstLine = explode("\n", $fullEntry)[0];
-            
-            if (preg_match('/^(\w+)\.(\w+):/', $firstLine, $matches)) {
-                $level = $matches[2];
-                $message = substr($firstLine, strpos($firstLine, ': ') + 2);
+        $currentEntry = null;
+
+        // ИСПОЛЬЗУЕМ ГЕНЕРАТОР File::lines() ДЛЯ ЭКОНОМИИ ПАМЯТИ!
+        // Читаем файл построчно, не грузя весь файл в ОЗУ.
+        foreach (File::lines($logPath) as $line) {
+            // Если строка начинается с даты — это новая запись лога
+            if (preg_match('/^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]\s+(\w+)\.(\w+):\s?(.*)/', $line, $matches)) {
+                if ($currentEntry) {
+                    $logs[] = $currentEntry;
+                }
                 
-                $logs[] = [
-                    'timestamp'    => trim($dates[$i] ?? '', '[]'),
-                    'environment'  => $matches[1],
-                    'level'        => $level,
-                    'message'      => $message,
-                    'trace'        => '',
-                    'full'         => $fullLog,
-                    'level_color'  => $levelColors[$level] ?? 'bg-muted text-muted-foreground',
+                $level = $matches[3];
+                $currentEntry = [
+                    'timestamp'   => $matches[1],
+                    'environment' => $matches[2],
+                    'level'       => $level,
+                    'message'     => $matches[4],
+                    'trace'       => '',
+                    'full'        => $line,
+                    'level_color' => $levelColors[$level] ?? 'bg-muted text-muted-foreground',
                 ];
+            } elseif ($currentEntry) {
+                // Если строка не начинается с даты — это стек-трейс предыдущей записи
+                $currentEntry['trace'] .= $line . "\n";
+                $currentEntry['full'] .= "\n" . $line;
             }
+        }
+        
+        // Добавляем самую последнюю запись
+        if ($currentEntry) {
+            $logs[] = $currentEntry;
         }
         
         // Сортируем от новых к старым
@@ -164,8 +137,12 @@ new #[Layout('layouts.admin')] class extends Component
         }
 
         if (!empty($this->dateFilter)) {
-            $logs = array_filter($logs, fn($log) => str_contains($log['timestamp'], $this->dateFilter));
+            $logs = array_filter($logs, fn($log) => str_starts_with($log['timestamp'], $this->dateFilter));
         }
+
+        // ВАЖНО: Переиндексируем ключи массива после фильтрации!
+        // Иначе пагинация Laravel получит массив с дырами (0, 5, 14...) и сломается.
+        $logs = array_values($logs);
 
         $total = count($logs);
         $page = Paginator::resolveCurrentPage('page');
@@ -182,12 +159,6 @@ new #[Layout('layouts.admin')] class extends Component
         );
     }
 
-    /**
-     * Получение статистики по логам (счетчики для фильтров).
-     * Считаем именно записи, а не строки, чтобы не учитывать стек-трейсы.
-     * 
-     * @return array
-     */
     #[Computed]
     public function stats(): array
     {
@@ -198,40 +169,24 @@ new #[Layout('layouts.admin')] class extends Component
             return $stats;
         }
 
-        $content = File::get($logPath);
-        
-        // Ищем все строки, которые начинаются с даты — это и есть начала новых записей
-        preg_match_all('/^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\]\s+(\w+)\.(\w+):/m', $content, $matches, PREG_SET_ORDER);
-        
-        $stats['total_entries'] = count($matches);
-
-        foreach ($matches as $match) {
-            $level = $match[2];
-            if (!isset($stats['levels'][$level])) {
-                $stats['levels'][$level] = 0;
+        // Тоже используем генератор для безопасности памяти
+        foreach (File::lines($logPath) as $line) {
+            if (preg_match('/^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\]\s+\w+\.(\w+):/', $line, $matches)) {
+                $level = $matches[1];
+                $stats['total_entries']++;
+                $stats['levels'][$level] = ($stats['levels'][$level] ?? 0) + 1;
             }
-            $stats['levels'][$level]++;
         }
 
         return $stats;
     }
 
-    /**
-     * Список доступных уровней логов.
-     * 
-     * @return array
-     */
     #[Computed]
     public function logLevels(): array
     {
         return ['DEBUG', 'INFO', 'NOTICE', 'WARNING', 'ERROR', 'CRITICAL', 'ALERT', 'EMERGENCY'];
     }
 
-    /**
-     * Получение размера файла логов в удобочитаемом формате.
-     * 
-     * @return string
-     */
     #[Computed]
     public function logSize(): string
     {
@@ -251,10 +206,10 @@ new #[Layout('layouts.admin')] class extends Component
 
         return round($size, 2) . ' ' . $units[$i];
     }
-};
+}; 
 ?>
 
-<div class="space-y-6">
+<div class="space-y-6 pb-6">
     <!-- Header -->
     <div class="flex items-center justify-between flex-wrap gap-4">
         <div>
@@ -308,7 +263,6 @@ new #[Layout('layouts.admin')] class extends Component
             class="flex items-center gap-1.5"
         >
             Все
-            <!-- Используем абсолютный счетчик всех записей из stats -->
             <x-ui.badge size="xs">{{ $this->stats['total_entries'] }}</x-ui.badge>
         </x-ui.button>
         
@@ -362,7 +316,6 @@ new #[Layout('layouts.admin')] class extends Component
         @endforeach
 
         <div class="flex items-center gap-2 ml-auto">
-            <!-- Заменили инпут на твой компонент -->
             <x-ui.date-picker wire:model.live="dateFilter" placeholder="Дата" width="w-[10rem]" wire:key="date-filter" />
 
             <div class="relative w-64">
@@ -397,7 +350,8 @@ new #[Layout('layouts.admin')] class extends Component
 
         <x-ui.table-body>
             @forelse ($this->logs as $index => $log)
-                <x-ui.table-row wire:key="log-{{ $index }}">
+                <!-- Сделали wire:key уникальным и стабильным -->
+                <x-ui.table-row wire:key="log-{{ $log['timestamp'] }}-{{ $index }}">
                     <x-ui.table-cell class="text-xs text-muted-foreground whitespace-nowrap">
                         {{ \Illuminate\Support\Carbon::parse($log['timestamp'])->format('d.m.Y H:i:s') }}
                     </x-ui.table-cell>

@@ -8,19 +8,20 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 class Broadcast extends Model
 {
     protected $fillable = [
-        'admin_id',
+        'admin_id',          // кто отправил или заплпнировал
         'type',              // in_app, push, email
-        'title',
-        'message',
+        'title',             // загловок  
+        'message',           // поле для пуш и колокольчика (обязательное)
+        'email_body',        // поле только для емейл - html (опциональное)
         'data',              // JSON: deep links, иконки
         'target_audience',   // JSON: фильтры сегментации
         'status',            // draft, scheduled, sending, sent, failed
-        'scheduled_at',
-        'started_at',
-        'sent_at',
+        'scheduled_at',      // отправка запланировна на ...
+        'started_at',        // отправка началась ...
+        'sent_at',           // отправлено ...
         'total_recipients',  // Счетчики статистики
-        'sent_count',
-        'failed_count',
+        'sent_count',        // кол-во отправленных 
+        'failed_count',      // кол-во упавших отправок
     ];
 
     protected $casts = [
@@ -147,6 +148,60 @@ class Broadcast extends Model
         }
 
         return (int) round((($this->sent_count + $this->failed_count) / $this->total_recipients) * 100);
+    }
+
+     /**
+     * Возвращает массив частей аудитории для списока (UL > LI)
+     */
+       public function getAudiencePartsAttribute(): array
+    {
+        $audience = $this->target_audience ?? [];
+        $parts = [];
+
+        if (!empty($audience['gender'])) {
+            $parts[] = $audience['gender'] === 'male' ? 'Мужчины' : 'Женщины';
+        }
+        if (isset($audience['is_premium'])) {
+            $parts[] = ($audience['is_premium'] === true || $audience['is_premium'] === 'true') ? 'VIP' : 'Без VIP';
+        }
+        if (!empty($audience['city'])) {
+            $parts[] = 'Город: ' . $audience['city'];
+        }
+        
+        $ageStr = '';
+        if (!empty($audience['age_from'])) $ageStr .= 'от ' . $audience['age_from'];
+        if (!empty($audience['age_from']) && !empty($audience['age_to'])) $ageStr .= '-';
+        elseif (!empty($audience['age_to'])) $ageStr .= 'до ';
+        if (!empty($audience['age_to'])) $ageStr .= $audience['age_to'];
+        if ($ageStr) $parts[] = 'Возраст: ' . $ageStr . ' лет';
+        
+        if (!empty($audience['device_os'])) {
+            $osMap = ['ios' => 'iOS', 'android' => 'Android', 'web' => 'Web'];
+            $parts[] = $osMap[$audience['device_os']] ?? $audience['device_os'];
+        }
+        if (!empty($audience['last_seen_days'])) {
+            $parts[] = 'неактивные >' . $audience['last_seen_days'] . 'д';
+        }
+        if (isset($audience['has_photo'])) {
+            $parts[] = ($audience['has_photo'] === true || $audience['has_photo'] === 'true') ? 'с фото' : 'без фото';
+        }
+
+        return $parts;
+    }
+
+    /**
+     * Возвращает строку аудитории (используется для title="" и одиночного юзера)
+     */
+    public function getAudienceLabelAttribute(): string
+    {
+        $audience = $this->target_audience ?? [];
+
+        if (!empty($audience['user_id'])) {
+            return 'Юзер: ' . ($audience['user_name'] ?? 'ID ' . $audience['user_id']);
+        }
+
+        $parts = $this->audience_parts;
+        return empty($parts) ? 'Все пользователи' : implode(', ', $parts);
     }
 }
 

@@ -14,11 +14,8 @@ use Intervention\Image\ImageManager;
 use Intervention\Image\Drivers\Gd\Driver;
 use Illuminate\Support\Facades\DB;
 
-/**
- * Job для обработки одобренных фотографий.
- * Создает 4 версии (original, large, medium, thumb) в формате WebP,
- * сохраняет пути в БД и удаляет исходный загруженный файл.
- */
+// php artisan queue:work --queue=heav
+
 class ProcessApprovedPhoto implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
@@ -26,16 +23,18 @@ class ProcessApprovedPhoto implements ShouldQueue
     public int $tries = 3;
     public int $timeout = 120;
 
-    public function __construct(public int $photoId) {}
+    public function __construct(public int $photoId)
+    {
+        // Тяжелые джобы ресайза лучше гнать в отдельную очередь, чтобы не блокировать почту/пуши
+        $this->onQueue('heavy');
+    }
 
     /**
      * Генерация пути к файлу на основе хэша ID пользователя.
-     * Используем 3 символа хэша (4096 папок) и папку типа фото.
      */
     private function getStoragePath(int $userId, string $photoType, string $size, string $fileId): string
     {
         $hash = substr(md5((string) $userId), 0, 3);
-        // Пример: photos/profile/a3f/105/large_64a9f.webp
         return "photos/{$photoType}/{$hash}/{$userId}/{$size}_{$fileId}.webp";
     }
 
@@ -44,10 +43,11 @@ class ProcessApprovedPhoto implements ShouldQueue
      */
     public function handle(): void
     {
-        // Увеличиваем лимит памяти для Intervention Image
+        // Увеличиваем лимит памяти для Intervention Image (GD драйвер прожорлив)
         ini_set('memory_limit', '256M');
 
         $paths = [];
+        $originalDbPath = null;
 
         try {
             $photo = Photo::find($this->photoId);
@@ -57,7 +57,7 @@ class ProcessApprovedPhoto implements ShouldQueue
             }
 
             // Защита от двойной обработки
-            if ($photo->status !== 'pending') {
+            if ($photo->path_large) {
                 Log::info('Фото уже обработано', ['photo_id' => $this->photoId, 'status' => $photo->status]);
                 return;
             }
@@ -65,14 +65,13 @@ class ProcessApprovedPhoto implements ShouldQueue
             $userId = $photo->user_id;
             $photoType = $photo->type; // 'profile' или 'verification'
             
-            // Читаем оригинальный путь (теперь он хранится в path_original)
             $originalDbPath = $photo->path_original;
             $originalPath = storage_path('app/public/' . $originalDbPath);
             
             if (!file_exists($originalPath)) {
                 Log::warning('Оригинальный файл не найден', ['path' => $originalPath]);
-                // Если файла нет, отклоняем фото, чтобы не висело в pending
-                $photo->markAsRejected(0, 'file_missing'); // 0 = Система
+                // ИСПРАВЛЕНО: null вместо 0, чтобы не нарушить Foreign Key
+                $photo->markAsRejected(null, 'file_missing'); 
                 return;
             }
 
@@ -88,7 +87,6 @@ class ProcessApprovedPhoto implements ShouldQueue
             ];
             
             foreach ($sizes as $sizeName => $config) {
-                // Передаем $photoType в генератор пути
                 $fullPath = $this->getStoragePath($userId, $photoType, $sizeName, $fileId);
                 
                 if (isset($config['cover']) && $config['cover']) {
@@ -114,21 +112,22 @@ class ProcessApprovedPhoto implements ShouldQueue
             unset($image);
             gc_collect_cycles();
 
-            // Обновляем БД и удаляем оригинал в транзакции
-            DB::transaction(function () use ($photo, $paths, $originalDbPath) {
-                // ВАЖНО: Обновляем 4 поля путей. Поля 'path' больше не существует!
+            // Обновляем БД в транзакции (файловые операции не внутри!)
+            DB::transaction(function () use ($photo, $paths) {
                 $photo->update([
                     'path_original' => $paths['original'],
                     'path_large'    => $paths['large'],
                     'path_medium'   => $paths['medium'],
                     'path_thumb'    => $paths['thumb'],
-                    'status'        => 'approved',
+                    // Статус уже 'approved', но мы обновляем moderated_at для фиксации времени готовности
                     'moderated_at'  => now(),
                 ]);
-
-                // Удаляем исходный загруженный файл (временный)
-                Storage::disk('public')->delete($originalDbPath);
             });
+
+            // Удаляем исходный загруженный файл ТОЛЬКО после успешного коммита в БД
+            if ($originalDbPath) {
+                Storage::disk('public')->delete($originalDbPath);
+            }
 
             Log::info('Фото успешно обработано', [
                 'photo_id' => $this->photoId,
@@ -146,16 +145,15 @@ class ProcessApprovedPhoto implements ShouldQueue
                 Storage::disk('public')->delete($failedPath);
             }
 
-            // Откатываем статус фото
-            DB::transaction(function () {
-                $photo = Photo::find($this->photoId);
-                if ($photo && $photo->status === 'pending') {
-                    // Используем наш хелпер из модели! 0 = Система
-                    $photo->markAsRejected(0, 'processing_error');
-                }
-            });
+            // ИСПРАВЛЕНО: Откатываем статус фото. 
+            // Проверяем на 'approved', так как экшен уже поменял статус до диспатча.
+            $photo = Photo::find($this->photoId);
+            if ($photo && $photo->status === 'approved') {
+                $photo->markAsRejected(null, 'processing_error');
+            }
 
             if ($this->attempts() < $this->tries) {
+                // Повторяем через 5 минут
                 $this->release(60 * 5);
             } else {
                 $this->fail($e);

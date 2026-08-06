@@ -10,6 +10,7 @@
     <link href="https://fonts.bunny.net/css?family=instrument-sans:400,500,600,700&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fancyapps/ui@5.0/dist/fancybox/fancybox.css" />
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    @stack('styles')
     <script>
         (function() {
             const theme = localStorage.getItem('theme') || 'light';
@@ -47,9 +48,10 @@
     <x-ui.sonner expand="true" />
     <x-ui.confirm-modal />
 
+    <!-- Подключаем скрипт Trix -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@fancyapps/ui@5.0/dist/fancybox/fancybox.umd.js"></script>   
-  
+   
     <script>       
         Fancybox.bind('[data-fancybox]', {
             // Настройки

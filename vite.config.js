@@ -3,6 +3,7 @@
 //    build pipeline.
 import { defineConfig } from 'vite';
 import laravel from 'laravel-vite-plugin';
+import path from 'path';
 
 // 2. Tailwind v4 ships as a first-class Vite plugin — no PostCSS config
 //    file needed, no tailwind.config.js required.
@@ -17,4 +18,14 @@ export default defineConfig({
         //    your views at build time.
         tailwindcss(),
     ],
+    resolve: {
+        alias: {
+            'prosemirror-state': path.resolve(__dirname, 'node_modules/prosemirror-state'),
+            'prosemirror-view': path.resolve(__dirname, 'node_modules/prosemirror-view'),
+            'prosemirror-transform': path.resolve(__dirname, 'node_modules/prosemirror-transform'),
+            'prosemirror-model': path.resolve(__dirname, 'node_modules/prosemirror-model'),
+            'prosemirror-commands': path.resolve(__dirname, 'node_modules/prosemirror-commands'),
+            'prosemirror-keymap': path.resolve(__dirname, 'node_modules/prosemirror-keymap'),
+        }
+    }
 });

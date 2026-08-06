@@ -31,12 +31,23 @@ new #[Layout('layouts.admin')] class extends Component
     x-data="{ tab: localStorage.getItem('admin_user_tab') || 'profile' }" 
     class="space-y-6"
 >
-    {{-- ШАПКА ПРОФИЛЯ --}}
+       {{-- ШАПКА ПРОФИЛЯ --}}
     <div class="flex items-center justify-between flex-wrap gap-4">
         <div class="flex items-center gap-4">
-            <a href="{{ route('admin.users.index') }}" class="p-2 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors">
+            @php
+                // Определяем URL для возврата:
+                // Берем предыдущий URL, но если он совпадает с текущим (например, юзер нажал F5), 
+                // то отправляем на список юзеров, чтобы не зациклить его на этой же странице.
+                $previousUrl = url()->previous();
+                $backUrl = ($previousUrl && $previousUrl !== url()->current()) 
+                    ? $previousUrl 
+                    : route('admin.users.index');
+            @endphp
+
+            <a href="{{ $backUrl }}" wire:navigate class="p-2 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors">
                 <x-lucide-arrow-left class="w-5 h-5" />
             </a>
+            
             <x-avatar src="{{ $user->avatar_url }}" name="{{ $user->name }}" size="lg" />
             <div>
                 <h1 class="text-2xl font-semibold flex items-center gap-2">
@@ -56,7 +67,6 @@ new #[Layout('layouts.admin')] class extends Component
             </x-ui.button>
         </div>
     </div>
-
     {{-- МЕНЮ ТАБОВ --}}
     <div class="border-b border-border">
         <nav class="flex gap-4 flex-wrap">

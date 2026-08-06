@@ -86,14 +86,14 @@ new #[Layout('layouts.admin')] class extends Component
 
         AdminLog::record('comment.mass_approve', Photo::find($photoId), auth()->user(), null, ['count' => $count]);
 
-        $this->dispatch('show-toast', type: 'success', message : 'Одобрено {$count} комментариев');
+        // ИСПРАВЛЕНО: двойные кавычки для парсинга $count
+        $this->dispatch('show-toast', type: 'success', message: "Одобрено {$count} комментариев");
     }
 
     // === ВЫВОД ДАННЫХ ===
 
     public function with(): array
     {
-        // Считаем метрики
         $counts = PhotoComment::whereHas('user', fn($q) => $q->excludeStaff())
             ->selectRaw("
                 SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
@@ -103,7 +103,6 @@ new #[Layout('layouts.admin')] class extends Component
                 COUNT(*) as total
             ")->first();
 
-        // Получаем фото, у которых есть комментарии с текущим фильтром
         $photos = Photo::whereHas('comments', function ($q) {
             $q->whereHas('user', fn($uq) => $uq->excludeStaff());
             
@@ -120,7 +119,6 @@ new #[Layout('layouts.admin')] class extends Component
         ->with([
             'user:id,name', 
             'comments' => function ($q) {
-                // Подгружаем комментарии с тем же фильтром
                 $q->whereHas('user', fn($uq) => $uq->excludeStaff());
                 
                 if ($this->statusFilter !== 'all') {
@@ -135,7 +133,8 @@ new #[Layout('layouts.admin')] class extends Component
                     });
                 }
 
-                $q->with('user')->latest();
+                // ИСПРАВЛЕНО: Жадная загрузка photos для аватара, чтобы не было N+1
+                $q->with(['user' => fn($uq) => $uq->with(['photos' => fn($puq) => $puq->orderByDesc('is_primary')->limit(1)])])->latest();
             }
         ])
         ->latest()
@@ -203,8 +202,9 @@ new #[Layout('layouts.admin')] class extends Component
                     <!-- Шапка фото -->
                     <div class="p-4 border-b border-border flex items-center justify-between bg-muted/20">
                         <div class="flex items-center gap-3">
-                            <a href="{{ $photo->original_url }}" data-fancybox="comment-photos" class="w-12 h-12 rounded-md overflow-hidden bg-muted shrink-0">
-                                <img src="{{ $photo->thumb_url }}" class="w-full h-full object-cover">
+                            <a href="{{ $photo->original_url ?: $photo->medium_url }}" data-fancybox="comment-photos" class="w-12 h-12 rounded-md overflow-hidden bg-muted shrink-0">
+                                <!-- ИСПРАВЛЕНО: Fallback на original_url, если thumb пустой -->
+                                <img src="{{ $photo->thumb_url ?: $photo->original_url }}" class="w-full h-full object-cover">
                             </a>
                             <div>
                                 <p class="font-semibold text-sm">Фото #{{ $photo->id }}</p>
@@ -223,7 +223,7 @@ new #[Layout('layouts.admin')] class extends Component
                     <div class="divide-y divide-border">
                         @foreach ($photo->comments as $comment)
                             <div wire:key="comment-{{ $comment->id }}" class="p-4 flex items-start gap-3 {{ $comment->status === 'pending' ? 'bg-yellow-500/5' : '' }}">
-                                <x-avatar src="{{ $comment->user?->avatar_url }}" name="{{ $comment->user?->name }}" size="sm" />
+                                <x-avatar src="{{ $comment->user?->avatar_url }}" name="{{ $comment->user?->name }}" size="sm" userId="{{ $comment->user?->id }}" :isOnline="$comment->user?->is_online" />
                                 
                                 <div class="flex-1 min-w-0">
                                     <div class="flex items-center gap-2 flex-wrap">
@@ -231,7 +231,17 @@ new #[Layout('layouts.admin')] class extends Component
                                             {{ $comment->user?->name ?? 'Удален' }}
                                         </a>
                                         <span class="text-xs text-muted-foreground">{{ $comment->created_at->diffForHumans() }}</span>
-                                        @php $badge = $comment->status_badge; @endphp
+                                        
+                                        @php 
+                                            // ИСПРАВЛЕНО: Безопасный инлайн-маппинг бейджа
+                                            $statusMap = [
+                                                'pending'  => ['variant' => 'warning', 'label' => 'Ожидает'],
+                                                'approved' => ['variant' => 'success', 'label' => 'Одобрен'],
+                                                'rejected' => ['variant' => 'destructive', 'label' => 'Отклонен'],
+                                                'spam'     => ['variant' => 'secondary', 'label' => 'Спам'],
+                                            ];
+                                            $badge = $statusMap[$comment->status] ?? ['variant' => 'secondary', 'label' => 'Неизвестно'];
+                                        @endphp
                                         <x-ui.badge variant="{{ $badge['variant'] }}" size="xs">{{ $badge['label'] }}</x-ui.badge>
                                     </div>
                                     <p class="text-sm mt-1">{{ $comment->content }}</p>
@@ -260,8 +270,8 @@ new #[Layout('layouts.admin')] class extends Component
     @endif
 
     <!-- МОДАЛКА ОТКЛОНЕНИЯ КОММЕНТАРИЯ -->
-    <div x-data="{ show: @entangle('rejectingCommentId') }" x-show="show" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" style="display: none;">
-        <div class="bg-card border border-border rounded-lg p-6 w-full max-w-md shadow-xl">
+    <div wire:key="reject-comment-modal-{{ $rejectingCommentId ?? 'none' }}" x-data="{ show: @entangle('rejectingCommentId') }" x-show="show" x-cloak class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" style="display: none;">
+        <div class="bg-card border border-border rounded-lg p-6 w-full max-w-md shadow-xl" @click.outside="$wire.rejectingCommentId = null">
             <h3 class="text-lg font-semibold mb-4">Причина отклонения комментария</h3>
             
             <div class="space-y-2 mb-4">
@@ -276,23 +286,20 @@ new #[Layout('layouts.admin')] class extends Component
             </div>
 
             <div class="flex justify-end gap-2">
-                <x-ui.button wire:click="$set('rejectingCommentId', null)">Отмена</x-ui.button>
+                <x-ui.button @click="$wire.rejectingCommentId = null" variant="outline">Отмена</x-ui.button>
                 <x-ui.button wire:click="rejectComment" variant="destructive">Отклонить</x-ui.button>
             </div>
         </div>
     </div>
 </div>
 
-@push('scripts')
-    <script>
-        document.addEventListener('livewire:init', () => {
-            if (typeof Fancybox !== 'undefined') Fancybox.defaults.Hash = false;
-            Livewire.hook('morph.updated', ({ el }) => {
-                if (typeof Fancybox !== 'undefined' && el.querySelector && el.querySelector('[data-fancybox]')) {
-                    Fancybox.unbind(el);
-                    Fancybox.bind(el);
-                }
-            });
-        });
-    </script>
-@endpush
+@script
+<script>
+    document.addEventListener('DOMContentLoaded', () => {
+        if (typeof Fancybox !== 'undefined') {
+            Fancybox.defaults.Hash = false; 
+            Fancybox.bind(document, '[data-fancybox]'); 
+        }
+    });
+</script>
+@endscript

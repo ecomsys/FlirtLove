@@ -38,6 +38,7 @@ return new class extends Migration
             $table->timestamp('last_login_at')->nullable();
             $table->ipAddress('last_login_ip')->nullable();
             $table->string('device_id')->nullable()->index(); 
+            $table->string('device_os')->nullable()->index();
 
             // === КРИТИЧЕСКИ ВАЖНЫЕ ИНДЕКСЫ ===
             $table->index(['status', 'has_completed_onboarding']); 

@@ -103,14 +103,14 @@
     }
     
     // ОПРЕДЕЛЯЕМ ОНЛАЙН СТАТУС
-    // Если isOnline передан явно - используем его
-    // Иначе пытаемся вычислить через кеш
     $onlineStatus = false;
-    if ($showStatus && $userId) {
+    if ($showStatus) {
+        // ПРИОРИТЕТ 1: Если isOnline передан явно - используем его (самый быстрый путь)
         if ($isOnline !== null) {
             $onlineStatus = $isOnline;
-        } else {
-            //  Используем кеш вместо прямого запроса!
+        } 
+        // ПРИОРИТЕТ 2: Если передан userId, но нет isOnline - идем в кеш/БД
+        elseif ($userId) {
             $onlineStatus = \Illuminate\Support\Facades\Cache::remember("user_online_{$userId}", 60, function () use ($userId) {
                 return \DB::table('sessions')
                     ->where('user_id', $userId)

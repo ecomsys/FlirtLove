@@ -99,7 +99,16 @@ new class extends Component
                 </div>
                 <div class="flex justify-between items-center py-1.5">
                     <span class="text-xs text-muted-foreground">Последний визит</span>
-                    <span class="text-sm font-medium">{{ $user->last_seen ? $user->last_seen->diffForHumans() : 'Никогда' }}</span>
+                    @if($user->is_online)
+                        <span class="text-sm font-medium text-green-500 flex items-center gap-1.5">
+                            <span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span> 
+                            В сети
+                        </span>
+                    @else
+                        <span class="text-sm font-medium">
+                            {{ $user->last_seen ? $user->last_seen->diffForHumans() : 'Никогда' }}
+                        </span>
+                    @endif
                 </div>
                 <div class="flex justify-between items-center py-1.5">
                     <span class="text-xs text-muted-foreground">IP адрес</span>

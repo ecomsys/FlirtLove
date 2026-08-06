@@ -70,16 +70,32 @@ class BroadcastNotification extends Notification implements ShouldQueue
         ];
     }
 
-    /**
+     /**
      * Отправляем email
      */
     public function toMail($notifiable): MailMessage
     {
-        return (new MailMessage)
+        $mail = (new MailMessage)
             ->subject($this->broadcast->title)
-            ->greeting("Здравствуйте, {$notifiable->name}!")
-            ->line($this->broadcast->message)
-            ->action('Перейти на сайт', $this->broadcast->data['action_url'] ?? url('/profile'));
+            ->greeting("Здравствуйте, {$notifiable->name}!");
+            
+        // Если есть HTML верстка - используем её (через view, чтобы не экранировать теги)
+        if (!empty($this->broadcast->email_body)) {
+            // Laravel сам обернет наш HTML в свой стандартный шаблон письма
+            $mail->view('emails.broadcast_html', [
+                'content' => $this->broadcast->email_body
+            ]);
+        } else {
+            // Если HTML нет (админ ленится) - берем обычный текст
+            $mail->line($this->broadcast->message);
+        }
+
+        // Кнопка перехода
+        if (!empty($this->broadcast->data['action_url'])) {
+            $mail->action('Перейти на сайт', $this->broadcast->data['action_url']);
+        }
+
+        return $mail;
     }
 
     /**
@@ -99,14 +115,18 @@ class BroadcastNotification extends Notification implements ShouldQueue
             ]
         ]);
     }
-
     /**
      * ЗАЩИТА ОЧЕРЕДИ:
      * Если рассылка была удалена админом, пока письмо висело в очереди,
-     * воркер не упадет с ModelNotFoundException, а просто запишет лог и завершится.
+     * воркер не упадет, а просто запишет лог и завершится.
      */
     public function failed(\Throwable $exception): void
     {
-        Log::error("Не удалось отправить BroadcastNotification (ID: {$this->broadcast->id}): " . $exception->getMessage());
+        // Проверяем, существует ли модель (вдруг удалили из БД, пока висело в очереди)
+        if ($this->broadcast) {
+            Log::error("Не удалось отправить BroadcastNotification (ID: {$this->broadcast->id}): " . $exception->getMessage());
+        } else {
+            Log::warning("Не удалось отправить BroadcastNotification: рассылка была удалена из БД до момента отправки. Ошибка: " . $exception->getMessage());
+        }
     }
 }
