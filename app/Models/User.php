@@ -227,22 +227,28 @@ class User extends Authenticatable implements MustVerifyEmail
         return $this->last_seen && $this->last_seen->gt(now()->subMinutes(5));
     }
 
-    /**
+        /**
      * Получить URL аватарки.
-     * Если фотки загружены (eager loaded) — берет из памяти.
-     * Если нет — возвращаем пустую строку, чтобы <x-avatar> отрисовал заглушку с инициалами.
+     * СТРОГОЕ ПРАВИЛО: Только из жадной загрузки и только нарезанный thumb_url!
+     * Если нет — пустая строка (выведутся инициалы).
      */
-       public function getAvatarUrlAttribute(): string
+    public function getAvatarUrlAttribute(): string
     {
         if ($this->relationLoaded('photos')) {
             $photos = $this->getRelation('photos');
+            
             if ($photos && $photos->isNotEmpty()) {
-                $photo = $photos->firstWhere('is_primary', true) ?? $photos->first();
+                // Ищем главное одобренное -> любое одобренное -> главное (любого статуса) -> первое попавшееся
+                $photo = $photos->firstWhere(fn($p) => $p->is_primary && $p->status === 'approved')
+                    ?? $photos->firstWhere('status', 'approved')
+                    ?? $photos->firstWhere('is_primary', true)
+                    ?? $photos->first();
                 
-                // ИСПОЛЬЗУЕМ АКСЕССОРЫ МОДЕЛИ PHOTO (они возвращают полный URL /storage/...)
-                return $photo->thumb_url ?: $photo->medium_url ?: $photo->large_url ?: $photo->original_url ?: '';
+                // Возвращаем строго thumb_url (если он null, вернем пустую строку)
+                return $photo ? ($photo->thumb_url ?: '') : '';
             }
         }
+        
         return '';
     }
 

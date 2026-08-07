@@ -8,6 +8,7 @@ use App\Models\Photo;
 use App\Models\User;
 use App\Notifications\PhotoModerated;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Cache;
 
 class ModeratePhotoAction
 {
@@ -16,13 +17,10 @@ class ModeratePhotoAction
      */
     public function approve(Photo $photo, User $admin): Photo
     {
-        // Сохраняем состояние ДО
-        $before = $photo->only(['status', 'reject_reason', 'moderated_by', 'moderated_at']);
+        // Сохраняем состояние ДО (с указанием ID фото)
+        $before = ['photo_id' => $photo->id, 'status' => $photo->status];
 
-        // Используем хелпер модели
         $photo->markAsApproved($admin->id);
-
-        // Запускаем нарезку картинок
         ProcessApprovedPhoto::dispatch($photo->id);
 
         if ($photo->is_primary && $photo->user) {
@@ -30,12 +28,18 @@ class ModeratePhotoAction
         }
 
         if ($photo->user) {
-            $photo->user->notify(new PhotoModerated($photo->id, $photo->user_id, 'approved', 1));
+            $cacheKey = "photo_approved_notif_{$photo->user_id}";
+            if (!Cache::has($cacheKey)) {
+                $photo->user->notify(new PhotoModerated($photo->id, $photo->user_id, 'approved', 1));
+                Cache::put($cacheKey, true, now()->addMinutes(5));
+            }
         }
 
-        // Сохраняем состояние ПОСЛЕ и пишем лог
-        $after = $photo->fresh()->only(['status', 'reject_reason', 'moderated_by', 'moderated_at']);
-        AdminLog::record('photo.approve', $photo, $admin, $before, $after);
+        // Сохраняем состояние ПОСЛЕ
+        $after = ['photo_id' => $photo->id, 'status' => 'approved'];
+        
+        // ЛОГИРУЕМ ЮЗЕРА, а не фото! (Ссылка на юзера никогда не сломается)
+        AdminLog::record('photo.approve', $photo->user, $admin, $before, $after);
 
         return $photo;
     }
@@ -47,63 +51,50 @@ class ModeratePhotoAction
     {
         $user = $photo->user;
         
-        // Сохраняем состояние ДО
-        $before = $photo->only(['status', 'reject_reason', 'moderated_by', 'moderated_at', 'deleted_at']);
+        $before = ['photo_id' => $photo->id, 'status' => $photo->status];
 
-        // 1. Меняем статус и записываем причину
         $photo->markAsRejected($admin->id, $reason);
-        
-        // 2. Soft Delete (прячем из БД, но запись остается)
         $photo->delete(); 
-
-        // ФАЙЛЫ НЕ ТРОГАЕМ! Они остаются в карантине на 30 дней.
 
         if ($user) {
             $user->notify(new PhotoModerated($photo->id, $photo->user_id, 'rejected', 1));
         }
 
-        // Сохраняем состояние ПОСЛЕ (с учетом deleted_at) и пишем лог
-        $after = $photo->fresh()->only(['status', 'reject_reason', 'moderated_by', 'moderated_at', 'deleted_at']);
-        AdminLog::record('photo.reject', $photo, $admin, $before, $after);
+        $after = ['photo_id' => $photo->id, 'status' => 'rejected', 'reason' => $reason];
+        
+        // ЛОГИРУЕМ ЮЗЕРА
+        AdminLog::record('photo.reject', $user, $admin, $before, $after);
     }
-    
+
     /**
-     * Удалить фото из архива навсегда (с физическим удалением файлов).
+     * Физическое удаление фото (вместе с файлами на диске).
      */
     public function destroy(Photo $photo, User $admin): void
     {
-        $user = $photo->user;
+        $before = ['photo_id' => $photo->id, 'status' => $photo->status];
 
-        // Сохраняем данные до уничтожения (после forceDelete они сотрутся)
-        $before = $photo->only(['id', 'status', 'deleted_at', 'reject_reason']);
-
-        // forceDelete вызовет событие forceDeleting в модели, которое удалит файлы!
+        // Модель Photo удалит файлы через слушатель forceDeleting
         $photo->forceDelete();
 
-        if ($user) {
-            $user->notify(new PhotoModerated($photo->id, $photo->user_id, 'deleted', 1));
-        }
-
-        // Пишем лог (after = null, так как объект уничтожен)
-        AdminLog::record('photo.destroy', $photo, $admin, $before, null);
+        AdminLog::record('photo.destroy', $photo->user, $admin, $before, null);
     }
-
+   
     /**
      * Сделать фото главным (аватаркой).
      */
     public function setPrimary(Photo $photo, User $admin): void
     {
-        // Сохраняем состояние ДО
-        $before = $photo->only(['is_primary']);
+        $before = ['photo_id' => $photo->id, 'is_primary' => $photo->is_primary];
 
         DB::transaction(function () use ($photo) {
             Photo::where('user_id', $photo->user_id)->update(['is_primary' => false]);
             $photo->update(['is_primary' => true]);
         });
 
-        // Сохраняем состояние ПОСЛЕ и пишем лог
-        $after = $photo->fresh()->only(['is_primary']);
-        AdminLog::record('photo.set_primary', $photo, $admin, $before, $after);
+        $after = ['photo_id' => $photo->id, 'is_primary' => true];
+        
+        // ЛОГИРУЕМ ЮЗЕРА
+        AdminLog::record('photo.set_primary', $photo->user, $admin, $before, $after);
     }
 
     /**

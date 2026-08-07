@@ -87,8 +87,7 @@ class AdminSeeder extends Seeder
                     'languages' => [1, 2], 
                     'sports' => [1, 2],
                     
-                    'education' => 'Высшее', 
-                    'occupation' => 'Владелец',
+                    'education' => 'Высшее',                   
                     'institution' => 'МГУ',
                     'institution_year' => 2012,
                     'activity' => 'IT',

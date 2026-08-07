@@ -2,100 +2,142 @@
 
 namespace App\Actions\Admin;
 
+use App\Models\AdminLog;
 use App\Models\PhotoComment;
+use App\Models\User;
 use App\Notifications\CommentModerated;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 class ModerateCommentAction
 {
-    /**
-     * Одобрить комментарий.
-     * Возвращает false, если нельзя одобрить (ответ на неодобренный родитель).
-     */
-    public function approve(PhotoComment $comment): bool
+    public function approve(PhotoComment $comment, User $admin): bool
     {
-        // Бизнес-логика: нельзя одобрить ответ, если родитель еще не одобрен
         if ($comment->parent_id && $comment->parent && $comment->parent->status !== 'approved') {
             return false;
         }
 
+        $before = $comment->only(['status', 'moderated_at', 'reject_reason']);
         $comment->update([
-            'status' => 'approved',
-            'approved_at' => now()
+            'status' => 'approved', 
+            'moderated_at' => now(),
+            'reject_reason' => null,
+            'moderated_by' => $admin->id
         ]);
-
+        $after = $comment->fresh()->only(['status', 'moderated_at', 'reject_reason']);
+        
+        AdminLog::record('comment.approve', $comment, $admin, $before, $after);
         $this->notifyAuthor($comment, 'approved');
+        
         return true;
     }
 
-    /**
-     * Отклонить комментарий.
-     */
-    public function reject(PhotoComment $comment): void
+    public function reject(PhotoComment $comment, User $admin, string $reason = 'other'): void
     {
+        $before = $comment->only(['status', 'moderated_at', 'reject_reason']);
         $comment->update([
-            'status' => 'rejected',
-            'rejected_at' => now()
+            'status' => 'rejected', 
+            'moderated_at' => now(),
+            'reject_reason' => $reason,
+            'moderated_by' => $admin->id
         ]);
-
+        $after = $comment->fresh()->only(['status', 'moderated_at', 'reject_reason']);
+        
+        AdminLog::record('comment.reject', $comment, $admin, $before, $after);
         $this->notifyAuthor($comment, 'rejected');
     }
 
-    /**
-     * Пометить как спам.
-     */
-    public function markSpam(PhotoComment $comment): void
+    public function markSpam(PhotoComment $comment, User $admin): void
     {
-        $comment->update(['status' => 'spam']);
+        $before = $comment->only(['status', 'moderated_at', 'reject_reason']);
+        $comment->update([
+            'status' => 'spam', 
+            'moderated_at' => now(),
+            'reject_reason' => 'spam',
+            'moderated_by' => $admin->id
+        ]);
+        $after = $comment->fresh()->only(['status', 'moderated_at', 'reject_reason']);
+        
+        AdminLog::record('comment.spam', $comment, $admin, $before, $after);
         $this->notifyAuthor($comment, 'spam');
     }
 
-    /**
-     * Удалить комментарий (с уведомлением до удаления).
-     */
-    public function delete(PhotoComment $comment): void
+    public function restore(PhotoComment $comment, User $admin): void
     {
-        $this->notifyAuthor($comment, 'deleted');
-        $comment->delete();
-    }
-
-    /**
-     * Восстановить комментарий (вернуть на модерацию).
-     */
-    public function restore(PhotoComment $comment): void
-    {
-        $comment->update(['status' => 'pending']);
+        $before = $comment->only(['status', 'moderated_at', 'reject_reason']);
+        $comment->update([
+            'status' => 'pending',
+            'moderated_at' => null,
+            'reject_reason' => null,
+            'moderated_by' => null
+        ]);
+        $after = $comment->fresh()->only(['status', 'moderated_at', 'reject_reason']);
+        
+        AdminLog::record('comment.restore', $comment, $admin, $before, $after);
         $this->notifyAuthor($comment, 'restored');
     }
 
-    /**
-     * Массовое одобрение (с проверкой родителей).
-     */
-    public function bulkApprove($comments): int
+    public function bulkApprove($comments, User $admin): int
     {
         $approvedCount = 0;
-        foreach ($comments as $comment) {
-            if ($this->approve($comment)) {
+        $firstComment = null;
+        $approvedIds = [];
+
+        DB::transaction(function () use ($comments, $admin, &$approvedCount, &$firstComment, &$approvedIds) {
+            foreach ($comments as $comment) {
+                if ($comment->parent_id && $comment->parent && $comment->parent->status !== 'approved') {
+                    continue;
+                }
+
+                $comment->update([
+                    'status' => 'approved', 
+                    'moderated_at' => now(),
+                    'moderated_by' => $admin->id
+                ]);
+                $this->notifyAuthor($comment, 'approved');
+                
+                if (!$firstComment) $firstComment = $comment;
+                $approvedIds[] = $comment->id;
                 $approvedCount++;
             }
+        });
+
+        if ($approvedCount > 0 && $firstComment) {
+            AdminLog::record('comment.mass_approve', $firstComment, $admin, null, ['count' => $approvedCount, 'ids' => $approvedIds]);
         }
+
         return $approvedCount;
     }
 
-    /**
-     * Массовое отклонение.
-     */
-    public function bulkReject($comments): int
+    public function bulkReject($comments, User $admin, string $reason = 'mass_reject'): int
     {
-        foreach ($comments as $comment) {
-            $this->reject($comment);
+        $firstComment = null;
+        $rejectedIds = [];
+        $count = 0;
+
+        DB::transaction(function () use ($comments, $admin, $reason, &$firstComment, &$count, &$rejectedIds) {
+            foreach ($comments as $comment) {
+                $comment->update([
+                    'status' => 'rejected', 
+                    'moderated_at' => now(),
+                    'reject_reason' => $reason,
+                    'moderated_by' => $admin->id
+                ]);
+                $this->notifyAuthor($comment, 'rejected');
+                
+                if (!$firstComment) $firstComment = $comment;
+                $rejectedIds[] = $comment->id;
+                $count++;
+            }
+        });
+
+        if ($count > 0 && $firstComment) {
+            AdminLog::record('comment.mass_reject', $firstComment, $admin, null, ['count' => $count, 'ids' => $rejectedIds]);
         }
-        return $comments->count();
+
+        return $count;
     }
 
-    /**
-     * Безопасная отправка уведомлений.
-     */
     private function notifyAuthor(PhotoComment $comment, string $status): void
     {
         try {

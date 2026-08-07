@@ -63,7 +63,7 @@ new #[Layout('layouts.guest')] class extends Component
     public function step2Next(): void
     {
         $this->validate([
-            'dating_goal' => ['required', 'in:friends,romantic,family,casual'],
+            'dating_goal' => ['required', 'in:friends,romantic,family,casual,travel'],
         ]);
 
         $this->step = 3;
@@ -74,24 +74,38 @@ new #[Layout('layouts.guest')] class extends Component
         $this->step--;
     }
 
-    public function register(): void
+        public function register(): void
     {
+        // Валидируем финальный шаг, а также перепроверяем данные из предыдущих шагов (защита от читеров)
         $validated = $this->validate([
+            'name' => ['required', 'string', 'max:255'],
+            'gender' => ['required', 'in:male,female'],
+            'birth_day' => ['required', 'integer', 'between:1,31'],
+            'birth_month' => ['required', 'integer', 'between:1,12'],
+            'birth_year' => ['required', 'integer', 'between:1950,2010'],
+            'dating_goal' => ['required', 'in:friends,romantic,family,casual,travel'],
+            
             'city' => ['required', 'string', 'max:255'],
             'email' => ['required', 'string', 'lowercase', 'email', 'max:255', 'unique:' . User::class],
             'password' => ['required', 'string', Rules\Password::defaults()],
         ]);
 
-        $birthDate = "{$this->birth_year}-{$this->birth_month}-{$this->birth_day}";
-
+        // 1. Создаем самого Юзера (только базовые поля таблицы users)
         $user = User::create([
             'name' => $this->name,
+            'email' => $this->email,
+            'password' => Hash::make($this->password),
+        ]);
+
+        // 2. Безопасно формируем дату (Y-m-d), чтобы PostgreSQL не ругался на формат
+        $birthDate = sprintf('%04d-%02d-%02d', $this->birth_year, $this->birth_month, $this->birth_day);
+
+        // 3. Обновляем Профиль юзера (который был автоматически создан в User::booted())
+        $user->profile->update([
             'gender' => $this->gender,
             'birth_date' => $birthDate,
             'dating_goal' => $this->dating_goal,
             'city' => $this->city,
-            'email' => $this->email,
-            'password' => Hash::make($this->password),
         ]);
 
         event(new Registered($user));
@@ -271,60 +285,72 @@ new #[Layout('layouts.guest')] class extends Component
                 {{ __('common.next') }}
             </x-ui.button>
         </form>
-    @elseif ($step === 2)
+       @elseif ($step === 2)
         <!-- ЭТАП 2 -->
         <form wire:submit="step2Next" class="space-y-6">
 
             <h2 class="text-lg font-medium text-center text-muted-foreground">{{ __('auth.goal') }}</h2>
 
-            <div class="grid grid-cols-2 gap-4">
-                <!-- Друзья -->
-                <div wire:click="$set('dating_goal', 'friends')"
-                    class="cursor-pointer p-6 border rounded-lg flex flex-col items-center gap-3 transition-all duration-200 {{ $dating_goal === 'friends' ? 'border-primary bg-primary/10 shadow-sm' : 'border-border hover:bg-accent hover:border-muted-foreground/20' }}">
-                    <svg class="w-12 h-12 {{ $dating_goal === 'friends' ? 'text-primary' : 'text-muted-foreground' }}"
-                        xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5"
-                        stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round"
-                            d="M18 18.72a9.094 9.094 0 0 0 3.741-.479 3 3 0 0 0-4.682-2.72m.94 3.198.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0 1 12 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 0 1 6 18.719m12 0a5.971 5.971 0 0 0-.941-3.197m0 0A5.995 5.995 0 0 0 12 12.75a5.995 5.995 0 0 0-5.058 2.772m0 0a3 3 0 0 0-4.681 2.72 8.986 8.986 0 0 0 3.74.477m.94-3.197a5.971 5.971 0 0 0-.94 3.197M15 6.75a3 3 0 1 1-6 0 3 3 0 0 1 6 0Zm6 3a2.25 2.25 0 1 1-4.5 0 2.25 2.25 0 0 1 4.5 0Zm-13.5 0a2.25 2.25 0 1 1-4.5 0 2.25 2.25 0 0 1 4.5 0Z" />
-                    </svg>
-                    <span
-                        class="text-sm font-medium text-center {{ $dating_goal === 'friends' ? 'text-primary' : 'text-foreground' }}">{{ __('auth.friends') }}</span>
+           <div class="max-w-2xl mx-auto">
+                <!-- 1-й ряд: Друзья, Семья, Путешествия -->
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
+                    <div wire:click="$set('dating_goal', 'friends')"
+                        class="cursor-pointer p-4 border rounded-lg flex flex-col items-center gap-3 transition-all duration-200 {{ $dating_goal === 'friends' ? 'border-primary bg-primary/10 shadow-sm' : 'border-border hover:bg-accent hover:border-muted-foreground/20' }}">
+                        <svg class="w-12 h-12 {{ $dating_goal === 'friends' ? 'text-primary' : 'text-muted-foreground' }}"
+                            xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5"
+                            stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round"
+                                d="M18 18.72a9.094 9.094 0 0 0 3.741-.479 3 3 0 0 0-4.682-2.72m.94 3.198.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0 1 12 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 0 1 6 18.719m12 0a5.971 5.971 0 0 0-.941-3.197m0 0A5.995 5.995 0 0 0 12 12.75a5.995 5.995 0 0 0-5.058 2.772m0 0a3 3 0 0 0-4.681 2.72 8.986 8.986 0 0 0 3.74.477m.94-3.197a5.971 5.971 0 0 0-.94 3.197M15 6.75a3 3 0 1 1-6 0 3 3 0 0 1 6 0Zm6 3a2.25 2.25 0 1 1-4.5 0 2.25 2.25 0 0 1 4.5 0Zm-13.5 0a2.25 2.25 0 1 1-4.5 0 2.25 2.25 0 0 1 4.5 0Z" />
+                        </svg>
+                        <span class="text-sm font-medium text-center {{ $dating_goal === 'friends' ? 'text-primary' : 'text-foreground' }}">{{ __('auth.friends') }}</span>
+                    </div>
+
+                    <div wire:click="$set('dating_goal', 'family')"
+                        class="cursor-pointer p-4 border rounded-lg flex flex-col items-center gap-3 transition-all duration-200 {{ $dating_goal === 'family' ? 'border-primary bg-primary/10 shadow-sm' : 'border-border hover:bg-accent hover:border-muted-foreground/20' }}">
+                        <svg class="w-12 h-12 {{ $dating_goal === 'family' ? 'text-primary' : 'text-muted-foreground' }}"
+                            xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5"
+                            stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round"
+                                d="M12 21v-8.25M15.75 21v-8.25M8.25 21v-8.25M3 21h18M8.25 12h7.5M6 6.75h12M6 12V6.75M18 12V6.75M4.5 3.75h15M4.5 21v-8.25" />
+                        </svg>
+                        <span class="text-sm font-medium text-center {{ $dating_goal === 'family' ? 'text-primary' : 'text-foreground' }}">{{ __('auth.family') }}</span>
+                    </div>
+
+                    <div wire:click="$set('dating_goal', 'travel')"
+                        class="cursor-pointer p-4 border rounded-lg flex flex-col items-center gap-3 transition-all duration-200 {{ $dating_goal === 'travel' ? 'border-primary bg-primary/10 shadow-sm' : 'border-border hover:bg-accent hover:border-muted-foreground/20' }}">
+                        <svg class="w-12 h-12 {{ $dating_goal === 'travel' ? 'text-primary' : 'text-muted-foreground' }}"
+                            xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5"
+                            stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round"
+                                d="M6 12 3.269 3.125A59.769 59.769 0 0 1 21.485 12 59.768 59.768 0 0 1 3.27 20.875L5.999 12Zm0 0h7.5" />
+                        </svg>
+                        <span class="text-sm font-medium text-center {{ $dating_goal === 'travel' ? 'text-primary' : 'text-foreground' }}">{{ __('auth.travel') }}</span>
+                    </div>
                 </div>
-                <!-- Романтика -->
-                <div wire:click="$set('dating_goal', 'romantic')"
-                    class="cursor-pointer p-6 border rounded-lg flex flex-col items-center gap-3 transition-all duration-200 {{ $dating_goal === 'romantic' ? 'border-primary bg-primary/10 shadow-sm' : 'border-border hover:bg-accent hover:border-muted-foreground/20' }}">
-                    <svg class="w-12 h-12 {{ $dating_goal === 'romantic' ? 'text-primary' : 'text-muted-foreground' }}"
-                        xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5"
-                        stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round"
-                            d="M21 8.25c0-2.485-2.099-4.5-4.688-4.5-1.935 0-3.597 1.126-4.312 2.733-.715-1.607-2.377-2.733-4.313-2.733C5.1 3.75 3 5.765 3 8.25c0 7.22 9 12 9 12s9-4.78 9-12Z" />
-                    </svg>
-                    <span
-                        class="text-sm font-medium text-center {{ $dating_goal === 'romantic' ? 'text-primary' : 'text-foreground' }}">{{ __('auth.romantic') }}</span>
-                </div>
-                <!-- Семья -->
-                <div wire:click="$set('dating_goal', 'family')"
-                    class="cursor-pointer p-6 border rounded-lg flex flex-col items-center gap-3 transition-all duration-200 {{ $dating_goal === 'family' ? 'border-primary bg-primary/10 shadow-sm' : 'border-border hover:bg-accent hover:border-muted-foreground/20' }}">
-                    <svg class="w-12 h-12 {{ $dating_goal === 'family' ? 'text-primary' : 'text-muted-foreground' }}"
-                        xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5"
-                        stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round"
-                            d="M12 21v-8.25M15.75 21v-8.25M8.25 21v-8.25M3 21h18M8.25 12h7.5M6 6.75h12M6 12V6.75M18 12V6.75M4.5 3.75h15M4.5 21v-8.25" />
-                    </svg>
-                    <span
-                        class="text-sm font-medium text-center {{ $dating_goal === 'family' ? 'text-primary' : 'text-foreground' }}">{{ __('auth.family') }}</span>
-                </div>
-                <!-- Свободные отношения -->
-                <div wire:click="$set('dating_goal', 'casual')"
-                    class="cursor-pointer p-6 border rounded-lg flex flex-col items-center gap-3 transition-all duration-200 {{ $dating_goal === 'casual' ? 'border-primary bg-primary/10 shadow-sm' : 'border-border hover:bg-accent hover:border-muted-foreground/20' }}">
-                    <svg class="w-12 h-12 {{ $dating_goal === 'casual' ? 'text-primary' : 'text-muted-foreground' }}"
-                        xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5"
-                        stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round"
-                            d="M15.182 15.182a4.5 4.5 0 0 1-6.364 0M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0ZM9.75 9.75c0 .414-.168.75-.375.75S9 10.164 9 9.75 9.168 9 9.375 9s.375.336.375.75Zm-.375 0h.008v.015h-.008V9.75Zm5.625 0c0 .414-.168.75-.375.75s-.375-.336-.375-.75.168-.75.375-.75.375.336.375.75Zm-.375 0h.008v.015h-.008V9.75Z" />
-                    </svg>
-                    <span
-                        class="text-sm font-medium text-center {{ $dating_goal === 'casual' ? 'text-primary' : 'text-foreground' }}">{{ __('auth.casual') }}</span>
+
+                <!-- 2-й ряд: Романтика, Свободные отношения -->
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-md mx-auto">
+                    <div wire:click="$set('dating_goal', 'romantic')"
+                        class="cursor-pointer p-4 border rounded-lg flex flex-col items-center gap-3 transition-all duration-200 {{ $dating_goal === 'romantic' ? 'border-primary bg-primary/10 shadow-sm' : 'border-border hover:bg-accent hover:border-muted-foreground/20' }}">
+                        <svg class="w-12 h-12 {{ $dating_goal === 'romantic' ? 'text-primary' : 'text-muted-foreground' }}"
+                            xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5"
+                            stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round"
+                                d="M21 8.25c0-2.485-2.099-4.5-4.688-4.5-1.935 0-3.597 1.126-4.312 2.733-.715-1.607-2.377-2.733-4.313-2.733C5.1 3.75 3 5.765 3 8.25c0 7.22 9 12 9 12s9-4.78 9-12Z" />
+                        </svg>
+                        <span class="text-sm font-medium text-center {{ $dating_goal === 'romantic' ? 'text-primary' : 'text-foreground' }}">{{ __('auth.romantic') }}</span>
+                    </div>
+
+                    <div wire:click="$set('dating_goal', 'casual')"
+                        class="cursor-pointer p-4 border rounded-lg flex flex-col items-center gap-3 transition-all duration-200 {{ $dating_goal === 'casual' ? 'border-primary bg-primary/10 shadow-sm' : 'border-border hover:bg-accent hover:border-muted-foreground/20' }}">
+                        <svg class="w-12 h-12 {{ $dating_goal === 'casual' ? 'text-primary' : 'text-muted-foreground' }}"
+                            xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5"
+                            stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round"
+                                d="M15.182 15.182a4.5 4.5 0 0 1-6.364 0M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0ZM9.75 9.75c0 .414-.168.75-.375.75S9 10.164 9 9.75 9.168 9 9.375 9s.375.336.375.75Zm-.375 0h.008v.015h-.008V9.75Zm5.625 0c0 .414-.168.75-.375.75s-.375-.336-.375-.75.168-.75.375-.75.375.336.375.75Zm-.375 0h.008v.015h-.008V9.75Z" />
+                        </svg>
+                        <span class="text-sm font-medium text-center {{ $dating_goal === 'casual' ? 'text-primary' : 'text-foreground' }}">{{ __('auth.casual') }}</span>
+                    </div>
                 </div>
             </div>
             @error('dating_goal')

@@ -13,10 +13,10 @@ return new class extends Migration
             
             // Фото, к которому оставлен комментарий. 
             // Убрали cascade, т.к. используем softDeletes у фото. Если фото удалят насовсем, cascade сработает.
-            $table->foreignId('photo_id')->constrained()->nullOnDelete();
+            $table->foreignId('photo_id')->nullable()->constrained()->nullOnDelete();
             
             // Автор комментария. Аналогично, без cascade, чтобы сохранить комментарии забаненных юзеров для истории.
-            $table->foreignId('user_id')->constrained()->nullOnDelete();
+            $table->foreignId('user_id')->nullable()->constrained()->nullOnDelete();
             
             // Текст комментария
             $table->text('content');

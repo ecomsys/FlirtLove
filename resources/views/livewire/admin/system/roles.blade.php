@@ -354,6 +354,7 @@ new #[Layout('layouts.admin')] class extends Component
                                 <div class="flex items-center gap-2">
                                     <x-avatar src="{{ $staff->avatar_url }}" name="{{ $staff->name }}" size="sm" userId="{{ $staff->id }}" showStatus="true" :isOnline="$staff->is_online" />
                                     <a href="{{ route('admin.users.show', $staff->id) }}" wire:navigate class="font-medium text-sm hover:text-primary transition-colors">
+                                        <x-user-status-sign :user="$staff" />
                                         {{ $staff->name }}
                                     </a>
                                     

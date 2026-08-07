@@ -53,8 +53,7 @@ return new class extends Migration
             $table->json('sports')->nullable();
 
             // === РАБОТА И ОБРАЗОВАНИЕ ===
-            $table->string('education')->nullable();
-            $table->string('occupation')->nullable();
+            $table->string('education')->nullable();           
             $table->string('institution')->nullable();
             $table->unsignedSmallInteger('institution_year')->nullable();
             $table->string('activity')->nullable();

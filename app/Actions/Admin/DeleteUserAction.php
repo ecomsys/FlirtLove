@@ -2,47 +2,34 @@
 
 namespace App\Actions\Admin;
 
+use App\Models\AdminLog;
 use App\Models\User;
-use App\Notifications\UserDeleted;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Log;
 
 class DeleteUserAction
 {
     /**
-     * Удалить пользователя со всеми данными
+     * Мягкое удаление (деактивация) пользователя.
+     * Отменяет подписку и пишет лог.
      */
-    public function execute(int $userId): array
+    public function execute(User $user, User $admin): void
     {
-        $user = User::find($userId);
-        
-        if (!$user) {
-            return ['success' => false, 'message' => 'Пользователь не найден'];
+        if ($user->isStaff()) {
+            return; // Защита от удаления админов
         }
 
-        if ($user->is_admin) {
-            return ['success' => false, 'message' => 'Нельзя удалить администратора'];
-        }
+        $before = $user->only(['status', 'is_premium', 'premium_expires_at', 'deleted_at']);
 
-        $userName = $user->name;
-
-        DB::transaction(function () use ($user) {
-            // Отправляем уведомление
-            $user->notify(new UserDeleted());
-            
-            Log::info('Пользователь удален администратором', [
-                'user_id' => $user->id,
-                'email' => $user->email,
-                'admin_id' => auth()->id(),
+        DB::transaction(function () use ($user, $admin, $before) {
+            $user->update([
+                'status' => 'deactivated',
+                'is_premium' => false,
+                'premium_expires_at' => null,
             ]);
+            
+            $user->delete(); // Soft Delete
 
-            // Удаляем пользователя (каскадно удалит все связанные данные)
-            $user->delete();
+            AdminLog::record('user.delete', $user, $admin, $before, ['status' => 'deactivated', 'deleted_at' => now()]);
         });
-
-        return [
-            'success' => true,
-            'message' => "Пользователь {$userName} удален"
-        ];
     }
 }

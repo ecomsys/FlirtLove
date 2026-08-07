@@ -36,17 +36,24 @@ return Application::configure(basePath: dirname(__DIR__))
 
     // Добавляем сюда все задачи планировщика (php artisan schedule:list)
     ->withSchedule(function (Schedule $schedule) {                
-        // Очистка старых комментариев к фоткам каждую ночь в 3:00
-        $schedule->command('comments:clean --days=30')->dailyAt('03:00');
-        
-        // withoutOverlapping(10) - не запускать, если предыдущий запуск еще работает (таймаут 10 мин)
+         // withoutOverlapping(10) - не запускать, если предыдущий запуск еще работает (таймаут 10 мин)
         // onOneServer() - критично для прода, если крон крутится на нескольких серверах
         $schedule->command('broadcasts:send-scheduled')
             ->everyMinute()
             ->withoutOverlapping(10)
             ->onOneServer();
+        
+        // КАРАНТИННЫЕ СЛУЖБЫ    
+
+        // Очистка старых комментариев к фоткам каждую ночь в 3:00        
+        $schedule->command('comments:purge-quarantine --days=30')->dailyAt('03:00');      
 
         // Очистка карантина отклоненных фото каждую ночь в 04:00
         $schedule->command('photos:purge-quarantine')->dailyAt('04:00');    
+        // $schedule->command('photos:purge-quarantine')->everyMinute()->withoutOverlapping();
+         
+        // Очистка архива жалоб 
+        $schedule->command('reports:purge-quarantine --days=30')->dailyAt('05:00');
+        
     })   
     ->create();

@@ -16,7 +16,7 @@ class UserProfile extends Model
         'relationship_status', 'children_status', 'pets', 'housing', 'has_car', 'smoking', 'alcohol',
         'zodiac_sign',
         'body_decorations', 'languages', 'sports',
-        'education', 'occupation', 'institution', 'institution_year', 'activity', 'position',
+        'education', 'institution', 'institution_year', 'activity', 'position',
         'location', 'address',
     ];
 

@@ -1,9 +1,11 @@
 <?php
 
+use App\Actions\Admin\ModerateDatingAction;
+use App\Enums\MatchStatus;
+use App\Enums\SwipeType;
 use App\Models\Swipe;
 use App\Models\UserMatch;
 use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\DB;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Layout;
 use Livewire\Volt\Component;
@@ -20,6 +22,9 @@ new #[Layout('layouts.admin')] class extends Component
     public string $viewMode = 'swipes'; 
     public int $perPage = 10;
 
+    /**
+     * Хуки Livewire: сброс пагинации при изменении фильтров.
+     */
     public function updatingSearch(): void { $this->resetPage(); }
     public function updatingDateFrom(): void { $this->resetPage(); }
     public function updatingDateTo(): void { $this->resetPage(); }
@@ -28,10 +33,8 @@ new #[Layout('layouts.admin')] class extends Component
 
     /**
      * Инициализация. Восстанавливаем фильтры из сессии.
-     * 
-     * @return void
      */
-    public function mount()
+    public function mount(): void
     {
         $saved = session('moderate_dating', []);
         if (isset($saved['viewMode'])) $this->viewMode = $saved['viewMode'];
@@ -40,9 +43,7 @@ new #[Layout('layouts.admin')] class extends Component
 
     /**
      * Переключение режима (Свайпы/Матчи) и сохранение в сессию.
-     * 
      * @param string $mode
-     * @return void
      */
     public function setViewMode(string $mode): void
     {
@@ -53,9 +54,7 @@ new #[Layout('layouts.admin')] class extends Component
 
     /**
      * Установка фильтра типа свайпа и сохранение в сессию.
-     * 
      * @param string $type
-     * @return void
      */
     public function setTypeFilter(string $type): void
     {
@@ -65,9 +64,7 @@ new #[Layout('layouts.admin')] class extends Component
     }
 
     /**
-     * Сброс всех фильтров.
-     * 
-     * @return void
+     * Сброс всех фильтров к значениям по умолчанию.
      */
     public function resetFilters(): void
     {
@@ -77,81 +74,68 @@ new #[Layout('layouts.admin')] class extends Component
     }
 
     // ============================================
-    // ДЕЙСТВИЯ (БЫЛИ В ACTION)
+    // ДЕЙСТВИЯ (ДЕЛЕГИРУЕМ В ACTION)
     // ============================================
 
     /**
-     * Удаление свайпа или матча.
-     * Если удаляется лайк/суперлайк — связанный матч тоже удаляется.
-     * Если удаляется матч — свайпы в обе стороны тоже удаляются.
-     * 
+     * Удаление свайпа (HARD DELETE) или разрыв мэтча (SOFT DELETE через статус unmatched).
+     * Делегирует бизнес-логику и логирование в ModerateDatingAction.
      * @param int $id
-     * @return void
+     * @param ModerateDatingAction $action
      */
-    public function deleteItem(int $id): void
+    public function deleteItem(int $id, ModerateDatingAction $action): void
     {
-        DB::transaction(function () use ($id) {
-            if ($this->viewMode === 'matches') {
-                $match = UserMatch::find($id);
-                if ($match) {
-                    // Удаляем свайпы в обе стороны
-                    Swipe::where(function ($q) use ($match) {
-                        $q->where('user_id', $match->user1_id)
-                          ->where('target_user_id', $match->user2_id);
-                    })->orWhere(function ($q) use ($match) {
-                        $q->where('user_id', $match->user2_id)
-                          ->where('target_user_id', $match->user1_id);
-                    })->delete();
-
-                    // Удаляем сам матч
-                    $match->delete();
-
-                    Cache::forget('dating_admin_stats');
-                    $this->dispatch('show-toast', type: 'success', message: 'Матч и история свайпов удалены');
-                }
-            } else {
-                $swipe = Swipe::find($id);
-                if ($swipe) {
-                    // Если удаляем лайк/суперлайк, нужно удалить и связанный матч
-                    if (in_array($swipe->type, ['like', 'superlike'])) {
-                        UserMatch::where(function ($q) use ($swipe) {
-                            $q->where('user1_id', $swipe->user_id)
-                              ->where('user2_id', $swipe->target_user_id);
-                        })->orWhere(function ($q) use ($swipe) {
-                            $q->where('user1_id', $swipe->target_user_id)
-                              ->where('user2_id', $swipe->user_id);
-                        })->delete();
-                    }
-                    
-                    $swipe->delete();
-
-                    Cache::forget('dating_admin_stats');
-                    $this->dispatch('show-toast', type: 'success', message: 'Свайп (и связанный матч, если был) удалён');
-                }
+        if ($this->viewMode === 'matches') {
+            $match = UserMatch::find($id);
+            if ($match) {
+                $action->destroyMatch($match, auth()->user());
+                $this->dispatch('show-toast', type: 'warning', message: 'Мэтч принудительно разорван. Пользователи больше не увидят друг друга.');
             }
-        });
+        } else {
+            $swipe = Swipe::find($id);
+            if ($swipe) {
+                $action->destroySwipe($swipe, auth()->user());
+                $this->dispatch('show-toast', type: 'success', message: 'Свайп удален');
+            }
+        }
+    }
 
-        $this->dispatch('$refresh');
+    /**
+     * Восстановление мэтча администратором.
+     * @param int $id
+     * @param ModerateDatingAction $action
+     */
+    public function restoreMatch(int $id, ModerateDatingAction $action): void
+    {
+        $match = UserMatch::find($id);
+        if ($match) {
+            $action->restoreMatch($match, auth()->user());
+            $this->dispatch('show-toast', type: 'success', message: 'Мэтч восстановлен. Пользователи снова могут общаться.');
+        }
     }
     
     // ============================================
-    // ВЫВОД ДАННЫХ (Computed)
+    // ВЫВОД ДАННЫХ (ОПТИМИЗИРОВАННЫЕ ЗАПРОСЫ)
     // ============================================
 
     /**
      * Статистика по свайпам и матчам (кешируется на 1 минуту).
-     * 
+     * ФИКС: Исключаем только живых сотрудников, но оставляем удаленных юзеров для статистики.
      * @return array
      */
     #[Computed]
     public function stats(): array
     {
         return Cache::remember('dating_admin_stats', 60, function () {
-            $baseSwipeQuery = Swipe::whereHas('user', fn($q) => $q->where('is_admin', false))
-                ->whereHas('targetUser', fn($q) => $q->where('is_admin', false));
+            $baseSwipeQuery = Swipe::where(function ($q) {
+                $q->whereNull('user_id')->orWhereHas('user', fn($q2) => $q2->excludeStaff());
+            });
                 
-            $baseMatchQuery = UserMatch::whereHas('user1', fn($q) => $q->where('is_admin', false))
-                ->whereHas('user2', fn($q) => $q->where('is_admin', false));
+            $baseMatchQuery = UserMatch::where(function ($q) {
+                $q->whereNull('user1_id')->orWhereHas('user1', fn($q2) => $q2->excludeStaff());
+            })->where(function ($q) {
+                $q->whereNull('user2_id')->orWhereHas('user2', fn($q2) => $q2->excludeStaff());
+            });
 
             return [
                 'total_likes' => (clone $baseSwipeQuery)->where('type', 'like')->count(),
@@ -165,7 +149,6 @@ new #[Layout('layouts.admin')] class extends Component
 
     /**
      * Получение элементов для текущего режима (Свайпы или Матчи).
-     * 
      * @return \Illuminate\Contracts\Pagination\LengthAwarePaginator
      */
     #[Computed]
@@ -174,75 +157,109 @@ new #[Layout('layouts.admin')] class extends Component
         return $this->viewMode === 'matches' ? $this->getMatches() : $this->getSwipes();
     }
 
-        /**
-     * Запрос свайпов с фильтрацией.
-     * 
+    /**
+     * Запрос свайпов с фильтрацией (по имени, ID свайпа или ID юзера).
+     * Использует тай-брейкер по 'id' для предотвращения "прыжков" строк.
      * @return \Illuminate\Contracts\Pagination\LengthAwarePaginator
      */
     private function getSwipes()
     {
         $searchOperator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
+        $avatarQuery = fn($q) => $q->select(['id', 'user_id', 'is_primary', 'status', 'path_thumb', 'path_medium', 'path_large', 'path_original'])->orderByDesc('is_primary')->limit(1);
 
         return Swipe::with([
-                //  Жадно загружаем юзеров и по 1 аватарке для каждого
-                'user.photos' => fn($q) => $q->where('status', 'approved')->orderBy('is_primary', 'desc')->limit(1),
-                'targetUser.photos' => fn($q) => $q->where('status', 'approved')->orderBy('is_primary', 'desc')->limit(1),
+                'user' => fn($q) => $q->select('id', 'name', 'email', 'role', 'status', 'is_premium', 'premium_expires_at', 'last_seen')->with(['photos' => $avatarQuery]),
+                'targetUser' => fn($q) => $q->select('id', 'name', 'email', 'role', 'status', 'is_premium', 'premium_expires_at', 'last_seen')->with(['photos' => $avatarQuery]),
             ])
-            ->whereHas('user', fn($q) => $q->where('is_admin', false))
-            ->whereHas('targetUser', fn($q) => $q->where('is_admin', false))
+            ->where(function ($q) {
+                $q->whereNull('user_id')->orWhereHas('user', fn($q2) => $q2->excludeStaff());
+            })
+            ->where(function ($q) {
+                $q->whereNull('target_user_id')->orWhereHas('targetUser', fn($q2) => $q2->excludeStaff());
+            })
             ->when($this->typeFilter !== 'all', fn($q) => $q->where('type', $this->typeFilter))
             ->when($this->search, function ($q) use ($searchOperator) {
-                $q->where(function ($innerQ) use ($searchOperator) {
-                    $innerQ->whereHas('user', fn($q2) => $q2->where('name', $searchOperator, "%{$this->search}%"))
-                           ->orWhereHas('targetUser', fn($q2) => $q2->where('name', $searchOperator, "%{$this->search}%"));
+                $search = $this->search;
+                $q->where(function ($innerQ) use ($search, $searchOperator) {
+                    // 1. Поиск по ID самого свайпа (приводим к TEXT для ilike в Postgres)
+                    $innerQ->whereRaw("CAST(id AS TEXT) {$searchOperator} ?", ["%{$search}%"])
+                    // 2. Поиск по имени юзера
+                    ->orWhereHas('user', fn($q2) => $q2->where('name', $searchOperator, "%{$search}%"))
+                    // 3. Если ввели цифры — ищем по ID юзера (кто свайпнул)
+                    ->when(is_numeric($search), fn($q3) => $q3->orWhere('user_id', $search));
                 });
             })
             ->when($this->dateFrom, fn($q) => $q->whereDate('created_at', '>=', $this->dateFrom))
             ->when($this->dateTo, fn($q) => $q->whereDate('created_at', '<=', $this->dateTo))
-            ->latest()
+            // Стабильная сортировка (тай-брейкер по ID)
+            ->latest('created_at')
+            ->latest('id')
             ->paginate($this->perPage)->onEachSide(2);
     }
 
     /**
-     * Запрос матчей с фильтрацией.
-     * 
+     * Запрос матчей с фильтрацией (по имени, ID мэтча или ID участников).
+     * Использует тай-брейкер по 'id' для предотвращения "прыжков" строк.
      * @return \Illuminate\Contracts\Pagination\LengthAwarePaginator
      */
     private function getMatches()
     {
         $searchOperator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
+        $avatarQuery = fn($q) => $q->select(['id', 'user_id', 'is_primary', 'status', 'path_thumb', 'path_medium', 'path_large', 'path_original'])->orderByDesc('is_primary')->limit(1);
 
         return UserMatch::with([
-                //  Жадно загружаем юзеров и по 1 аватарке для каждого
-                'user1.photos' => fn($q) => $q->where('status', 'approved')->orderBy('is_primary', 'desc')->limit(1),
-                'user2.photos' => fn($q) => $q->where('status', 'approved')->orderBy('is_primary', 'desc')->limit(1),
+                'user1' => fn($q) => $q->select('id', 'name', 'email', 'role', 'status', 'is_premium', 'premium_expires_at', 'last_seen')->with(['photos' => $avatarQuery]),
+                'user2' => fn($q) => $q->select('id', 'name', 'email', 'role', 'status', 'is_premium', 'premium_expires_at', 'last_seen')->with(['photos' => $avatarQuery]),
             ])
-            ->whereHas('user1', fn($q) => $q->where('is_admin', false))
-            ->whereHas('user2', fn($q) => $q->where('is_admin', false))
+            ->where(function ($q) {
+                $q->whereNull('user1_id')->orWhereHas('user1', fn($q2) => $q2->excludeStaff());
+            })
+            ->where(function ($q) {
+                $q->whereNull('user2_id')->orWhereHas('user2', fn($q2) => $q2->excludeStaff());
+            })
             ->when($this->search, function ($q) use ($searchOperator) {
-                $q->where(function ($innerQ) use ($searchOperator) {
-                    $innerQ->whereHas('user1', fn($q2) => $q2->where('name', $searchOperator, "%{$this->search}%"))
-                           ->orWhereHas('user2', fn($q2) => $q2->where('name', $searchOperator, "%{$this->search}%"));
+                $search = $this->search;
+                $q->where(function ($innerQ) use ($search, $searchOperator) {
+                    // 1. Поиск по ID самого мэтча
+                    $innerQ->whereRaw("CAST(id AS TEXT) {$searchOperator} ?", ["%{$search}%"])
+                    // 2. Поиск по именам участников
+                    ->orWhereHas('user1', fn($q2) => $q2->where('name', $searchOperator, "%{$search}%"))
+                    ->orWhereHas('user2', fn($q2) => $q2->where('name', $searchOperator, "%{$search}%"))
+                    // 3. Если ввели цифры — ищем по ID любого из участников мэтча
+                    ->when(is_numeric($search), function ($q3) use ($search) {
+                        $q3->orWhere('user1_id', $search)->orWhere('user2_id', $search);
+                    });
                 });
             })
             ->when($this->dateFrom, fn($q) => $q->whereDate('created_at', '>=', $this->dateFrom))
             ->when($this->dateTo, fn($q) => $q->whereDate('created_at', '<=', $this->dateTo))
-            ->latest()
+            // Стабильная сортировка (тай-брейкер по ID)
+            ->latest('created_at')
+            ->latest('id')
             ->paginate($this->perPage)->onEachSide(2);
     }
-};
+}; 
 ?>
 
-<!-- ========================================== -->
-<!-- ШАБЛОН                                     -->
-<!-- ========================================== -->
 <div class="flex flex-col gap-6">
     <!-- Шапка -->
-    <div class="flex items-center justify-between flex-wrap gap-4 ">
-        <h1 class="text-2xl font-semibold flex items-center gap-2">
-            <x-lucide-heart class="w-6 h-6 text-pink-500" />
-            Модерация знакомств
-        </h1>
+    <div class="flex items-center justify-between flex-wrap gap-4">
+         <div class="flex items-center gap-4">
+            @php
+                $previousUrl = url()->previous();
+                $backUrl = ($previousUrl && $previousUrl !== url()->current()) 
+                    ? $previousUrl 
+                    : route('admin.dashboard');
+            @endphp
+
+            <a href="{{ $backUrl }}" wire:navigate class="p-2 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors">
+                <x-lucide-arrow-left class="w-5 h-5" />
+            </a>
+            <h1 class="text-2xl font-semibold flex items-center gap-2">
+                <x-lucide-heart class="w-6 h-6 text-pink-500" />
+                Модерация знакомств
+            </h1>
+         </div>
         <div class="flex items-center gap-3 text-sm text-muted-foreground">
             <span>Свайпов: {{ $this->stats['total_swipes'] }}</span>
             <span>•</span>
@@ -250,28 +267,23 @@ new #[Layout('layouts.admin')] class extends Component
         </div>
     </div>
 
-    <!-- Блок фильтров по типу и дате -->
-    <div class="flex justify-between items-center flex-wrap gap-4">
-        @if ($viewMode === 'swipes')
-            <div class="flex gap-1.5" wire:key="type-filter-buttons">
-                <x-ui.button wire:click="setTypeFilter('like')" variant="{{ $typeFilter === 'like' ? 'default' : 'secondary' }}" size="sm" wire:key="type-like">
-                    <x-lucide-thumbs-up class="w-3 h-3 inline mr-1" />
-                    Лайки <x-ui.badge size="xs">{{ $this->stats['total_likes'] }}</x-ui.badge>
-                </x-ui.button>
-                <x-ui.button wire:click="setTypeFilter('dislike')" variant="{{ $typeFilter === 'dislike' ? 'default' : 'secondary' }}" size="sm" wire:key="type-dislike">
-                    <x-lucide-thumbs-down class="w-3 h-3 inline mr-1" />
-                    Дизлайки <x-ui.badge size="xs">{{ $this->stats['total_dislikes'] }}</x-ui.badge>
-                </x-ui.button>
-                <x-ui.button wire:click="setTypeFilter('superlike')" variant="{{ $typeFilter === 'superlike' ? 'default' : 'secondary' }}" size="sm" wire:key="type-superlike">
-                    <x-lucide-star class="w-3 h-3 inline mr-1" />
-                    Суперлайки <x-ui.badge size="xs">{{ $this->stats['total_superlikes'] }}</x-ui.badge>
-                </x-ui.button>
-            </div>
-        @endif       
-    </div>
+    <!-- Блок фильтров по типу (только для свайпов) -->
+    @if ($viewMode === 'swipes')
+        <div class="flex gap-1.5" wire:key="type-filter-buttons">
+            <x-ui.button wire:click="setTypeFilter('like')" variant="{{ $typeFilter === 'like' ? 'default' : 'secondary' }}" size="sm" wire:key="type-like">
+                <x-lucide-thumbs-up class="w-3 h-3 inline mr-1" /> Лайки <x-ui.badge size="xs">{{ $this->stats['total_likes'] }}</x-ui.badge>
+            </x-ui.button>
+            <x-ui.button wire:click="setTypeFilter('dislike')" variant="{{ $typeFilter === 'dislike' ? 'default' : 'secondary' }}" size="sm" wire:key="type-dislike">
+                <x-lucide-thumbs-down class="w-3 h-3 inline mr-1" /> Дизлайки <x-ui.badge size="xs">{{ $this->stats['total_dislikes'] }}</x-ui.badge>
+            </x-ui.button>
+            <x-ui.button wire:click="setTypeFilter('superlike')" variant="{{ $typeFilter === 'superlike' ? 'default' : 'secondary' }}" size="sm" wire:key="type-superlike">
+                <x-lucide-star class="w-3 h-3 inline mr-1" /> Суперлайки <x-ui.badge size="xs">{{ $this->stats['total_superlikes'] }}</x-ui.badge>
+            </x-ui.button>
+        </div>
+    @endif       
 
-    <!-- Переключатель режима (Свайпы/Матчи) -->
-   <div class="flex justify-between items-center flex-wrap gap-3" wire:key="filters-wrapper">
+    <!-- Переключатель режима (Свайпы/Матчи) и Поиск -->
+    <div class="flex justify-between items-center flex-wrap gap-3" wire:key="filters-wrapper">
         <div class="flex gap-1.5" wire:key="mode-buttons">
             <x-ui.button wire:click="setViewMode('swipes')" variant="{{ $viewMode === 'swipes' ? 'default' : 'secondary' }}" size="sm" wire:key="mode-swipes">
                 Свайпы <x-ui.badge size="xs">{{ $this->stats['total_swipes'] }}</x-ui.badge>
@@ -281,15 +293,19 @@ new #[Layout('layouts.admin')] class extends Component
             </x-ui.button>
         </div>
 
-         <div class="flex items-center gap-2 flex-1 justify-end ml-auto">
-            <x-ui.input wire:model.live.debounce.300ms="search" placeholder="Поиск по имени..." class="w-48" />
+        <div class="flex items-center gap-2 flex-1 justify-end ml-auto">
+            <div class="relative w-48">
+                <x-ui.input wire:model.live.debounce.300ms="search" type="search" placeholder="Поиск по имени или ID..." class="pl-9 pr-8" />
+                <x-lucide-search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                @if (!empty($search))
+                    <button wire:click="$set('search', '')" class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"><x-lucide-x class="w-4 h-4" /></button>
+                @endif
+            </div>
             <x-ui.date-picker wire:model.live="dateFrom" placeholder="с" width="w-[10rem]" wire:key="date-from-search" />
             <span class="text-muted-foreground">—</span>
             <x-ui.date-picker wire:model.live="dateTo" placeholder="по" width="w-[10rem]" wire:key="date-to-search" />
-            <!-- Кнопка сброса фильтров -->
             <x-ui.button wire:click="resetFilters" variant="outline" size="sm">
-                <x-lucide-rotate-ccw class="w-4 h-4 inline mr-2" />
-                <span>Сбросить</span>
+                <x-lucide-rotate-ccw class="w-4 h-4 inline mr-2" /><span>Сбросить</span>
             </x-ui.button>
         </div>
     </div>
@@ -306,6 +322,7 @@ new #[Layout('layouts.admin')] class extends Component
                 @else
                     <x-ui.table-head>Пользователь 1</x-ui.table-head>
                     <x-ui.table-head>Пользователь 2</x-ui.table-head>
+                    <x-ui.table-head>Статус</x-ui.table-head>
                 @endif
                 <x-ui.table-head>Дата</x-ui.table-head>
                 <x-ui.table-head class="text-right w-16">Действия</x-ui.table-head>
@@ -313,26 +330,21 @@ new #[Layout('layouts.admin')] class extends Component
         </x-ui.table-header>
         <x-ui.table-body>
             @forelse ($this->items as $item)
-                <x-ui.table-row wire:key="{{ $viewMode }}-{{ $item->id }}">
+                <x-ui.table-row wire:key="{{ $viewMode }}-{{ $item->id }}-{{ $item->status ?? 'trashed' }}">
                     <x-ui.table-cell class="text-muted-foreground text-xs font-mono">{{ $item->id }}</x-ui.table-cell>
 
                     @if ($viewMode === 'swipes')
-                                                <!-- Кто оценил -->
+                        <!-- Кто оценил -->
                         <x-ui.table-cell>
                             @if($item->user)
                                 <a href="{{ route('admin.users.show', $item->user->id) }}" wire:navigate class="group flex items-center gap-3 hover:text-primary transition-colors">
-                                    <x-avatar src="{{ $item->user->avatar_url }}" name="{{ $item->user->name }}" size="sm" userId="{{ $item->user->id }}" showStatus="true" />
+                                    <x-avatar src="{{ $item->user->avatar_url }}" name="{{ $item->user->name }}" size="sm" userId="{{ $item->user->id }}" showStatus="true" :isOnline="$item->user->is_online" />
                                     <div class="flex flex-col">
                                         <div class="flex gap-2 items-center">
+                                            <x-user-status-sign :user="$item->user" />
                                             <span class="text-sm font-medium">{{ $item->user->name }}</span>
-                                            @if($item->user?->has_active_premium)
-                                                <x-ui.badge variant="warning" size="xs" wire:key="premium-badge-swiper-{{ $item->id }}" class="p-1 flex items-center gap-1">
-                                                    <x-lucide-crown class="w-3 h-3" />
-                                                </x-ui.badge>
-                                            @endif 
-                                            @if($item->user?->is_banned)
-                                                <x-ui.badge variant="destructive" size="xs" wire:key="ban-badge-swiper-{{ $item->id }}">Бан</x-ui.badge>
-                                            @endif                                          
+                                            @if($item->user->has_active_premium)<x-lucide-crown class="w-3 h-3 text-yellow-500" />@endif 
+                                            @if($item->user->status === 'banned')<x-ui.badge variant="destructive" size="xs">Бан</x-ui.badge>@endif                                  
                                             <span class="text-xs text-muted-foreground font-normal">(ID: {{ $item->user->id }})</span>                                        
                                         </div>                                        
                                         <span class="text-xs text-muted-foreground group-hover:text-primary/80 transition-colors">{{ $item->user->email }}</span>
@@ -343,22 +355,17 @@ new #[Layout('layouts.admin')] class extends Component
                             @endif
                         </x-ui.table-cell>
 
-                                                <!-- Кого оценили -->
+                        <!-- Кого оценили -->
                         <x-ui.table-cell>
                             @if($item->targetUser)
                                 <a href="{{ route('admin.users.show', $item->targetUser->id) }}" wire:navigate class="group flex items-center gap-3 hover:text-primary transition-colors">
-                                    <x-avatar src="{{ $item->targetUser->avatar_url }}" name="{{ $item->targetUser->name }}" size="sm" userId="{{ $item->targetUser->id }}" showStatus="true" />
+                                    <x-avatar src="{{ $item->targetUser->avatar_url }}" name="{{ $item->targetUser->name }}" size="sm" userId="{{ $item->targetUser->id }}" showStatus="true" :isOnline="$item->targetUser->is_online" />
                                     <div class="flex flex-col">
                                         <div class="flex gap-2 items-center">
-                                            <span class="text-sm font-medium">{{ $item->targetUser->name }} </span>
-                                            @if($item->targetUser?->has_active_premium)
-                                                <x-ui.badge variant="warning" size="xs" wire:key="premium-badge-target-{{ $item->id }}" class="p-1 flex items-center gap-1">
-                                                    <x-lucide-crown class="w-3 h-3" />
-                                                </x-ui.badge>
-                                            @endif   
-                                            @if($item->targetUser?->is_banned)
-                                                <x-ui.badge variant="destructive" size="xs" wire:key="ban-badge-target-{{ $item->id }}">Бан</x-ui.badge>
-                                            @endif           
+                                            <x-user-status-sign :user="$item->targetUser" />
+                                            <span class="text-sm font-medium">{{ $item->targetUser->name }}</span>
+                                            @if($item->targetUser->has_active_premium)<x-lucide-crown class="w-3 h-3 text-yellow-500" />@endif   
+                                            @if($item->targetUser->status === 'banned')<x-ui.badge variant="destructive" size="xs">Бан</x-ui.badge>@endif           
                                             <span class="text-xs text-muted-foreground font-normal">(ID: {{ $item->targetUser->id }})</span>
                                         </div>
                                         <span class="text-xs text-muted-foreground group-hover:text-primary/80 transition-colors">{{ $item->targetUser->email }}</span>
@@ -369,39 +376,30 @@ new #[Layout('layouts.admin')] class extends Component
                             @endif
                         </x-ui.table-cell>
 
-                        <!-- Тип свайпа -->
+                        <!-- Тип свайпа (через Enum) -->
                         <x-ui.table-cell>
-                            @if ($item->type === 'like')
-                                <x-ui.badge variant="success" size="xs" class="inline-flex items-center gap-1">
-                                    <x-lucide-heart class="w-3.5 h-3.5 fill-current" /> Лайк
-                                </x-ui.badge>
-                            @elseif($item->type === 'superlike')
-                                <x-ui.badge variant="warning" size="xs" class="inline-flex items-center gap-1">
-                                    <x-lucide-star class="w-3.5 h-3.5 fill-current" /> Суперлайк
-                                </x-ui.badge>
-                            @else
-                                <x-ui.badge variant="destructive" size="xs" class="inline-flex items-center gap-1">
-                                    <x-lucide-thumbs-down class="w-3.5 h-3.5" /> Дизлайк
-                                </x-ui.badge>
+                            @php $swipeType = \App\Enums\SwipeType::tryFrom($item->type); @endphp
+                            @if($swipeType)
+                                <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium {{ $swipeType->color() }}">
+                                    @if($swipeType === \App\Enums\SwipeType::Like)<x-lucide-heart class="w-3 h-3 fill-current" />@endif
+                                    @if($swipeType === \App\Enums\SwipeType::Superlike)<x-lucide-star class="w-3 h-3 fill-current" />@endif
+                                    @if($swipeType === \App\Enums\SwipeType::Dislike)<x-lucide-thumbs-down class="w-3 h-3" />@endif
+                                    {{ $swipeType->label() }}
+                                </span>
                             @endif
                         </x-ui.table-cell>
                     @else
-                                                <!-- Матч: Пользователь 1 -->
+                        <!-- Матч: Пользователь 1 -->
                         <x-ui.table-cell>
                             @if($item->user1)
                                 <a href="{{ route('admin.users.show', $item->user1->id) }}" wire:navigate class="group flex items-center gap-3 hover:text-primary transition-colors">
-                                    <x-avatar src="{{ $item->user1->avatar_url }}" name="{{ $item->user1->name }}" size="sm" userId="{{ $item->user1->id }}" showStatus="true" />
+                                    <x-avatar src="{{ $item->user1->avatar_url }}" name="{{ $item->user1->name }}" size="sm" userId="{{ $item->user1->id }}" showStatus="true" :isOnline="$item->user1->is_online" />
                                     <div class="flex flex-col">
                                         <div class="flex gap-2 items-center">
-                                            <span class="text-sm font-medium">{{ $item->user1->name }} </span>
-                                            @if($item->user1?->has_active_premium)
-                                                <x-ui.badge variant="warning" size="xs" wire:key="premium-badge-user1-{{ $item->id }}" class="p-1 flex items-center gap-1">
-                                                    <x-lucide-crown class="w-3 h-3" />
-                                                </x-ui.badge>
-                                            @endif  
-                                            @if($item->user1?->is_banned)
-                                                <x-ui.badge variant="destructive" size="xs" wire:key="ban-badge-user1-{{ $item->id }}">Бан</x-ui.badge>
-                                            @endif       
+                                            <x-user-status-sign :user="$item->user1" />
+                                            <span class="text-sm font-medium">{{ $item->user1->name }}</span>
+                                            @if($item->user1->has_active_premium)<x-lucide-crown class="w-3 h-3 text-yellow-500" />@endif  
+                                            @if($item->user1->status === 'banned')<x-ui.badge variant="destructive" size="xs">Бан</x-ui.badge>@endif       
                                             <span class="text-xs text-muted-foreground font-normal">(ID: {{ $item->user1->id }})</span>
                                         </div>                                        
                                         <span class="text-xs text-muted-foreground group-hover:text-primary/80 transition-colors">{{ $item->user1->email }}</span>
@@ -416,18 +414,13 @@ new #[Layout('layouts.admin')] class extends Component
                         <x-ui.table-cell>
                             @if($item->user2)
                                 <a href="{{ route('admin.users.show', $item->user2->id) }}" wire:navigate class="group flex items-center gap-3 hover:text-primary transition-colors">
-                                    <x-avatar src="{{ $item->user2->avatar_url }}" name="{{ $item->user2->name }}" size="sm" userId="{{ $item->user2->id }}" showStatus="true" />
+                                    <x-avatar src="{{ $item->user2->avatar_url }}" name="{{ $item->user2->name }}" size="sm" userId="{{ $item->user2->id }}" showStatus="true" :isOnline="$item->user2->is_online" />
                                     <div class="flex flex-col">
                                         <div class="flex gap-2 items-center">
-                                            <span class="text-sm font-medium">{{ $item->user2->name }} </span>
-                                            @if($item->user2?->has_active_premium)
-                                                <x-ui.badge variant="warning" size="xs" wire:key="premium-badge-user2-{{ $item->id }}" class="p-1 flex items-center gap-1">
-                                                    <x-lucide-crown class="w-3 h-3" />
-                                                </x-ui.badge>
-                                            @endif  
-                                            @if($item->user2?->is_banned)
-                                                <x-ui.badge variant="destructive" size="xs" wire:key="ban-badge-user2-{{ $item->id }}">Бан</x-ui.badge>
-                                            @endif       
+                                            <x-user-status-sign :user="$item->user2" />
+                                            <span class="text-sm font-medium">{{ $item->user2->name }}</span>
+                                            @if($item->user2->has_active_premium)<x-lucide-crown class="w-3 h-3 text-yellow-500" />@endif  
+                                            @if($item->user2->status === 'banned')<x-ui.badge variant="destructive" size="xs">Бан</x-ui.badge>@endif       
                                             <span class="text-xs text-muted-foreground font-normal">(ID: {{ $item->user2->id }})</span>
                                         </div>                                              
                                         <span class="text-xs text-muted-foreground group-hover:text-primary/80 transition-colors">{{ $item->user2->email }}</span>
@@ -435,6 +428,16 @@ new #[Layout('layouts.admin')] class extends Component
                                 </a>
                             @else
                                 <span class="text-sm text-muted-foreground italic">Пользователь удален</span>
+                            @endif
+                        </x-ui.table-cell>
+
+                        <!-- Статус мэтча (через Enum) -->
+                        <x-ui.table-cell>
+                            @php $matchStatus = \App\Enums\MatchStatus::tryFrom($item->status); @endphp
+                            @if($matchStatus)
+                                <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium {{ $matchStatus->color() }}">
+                                    {{ $matchStatus->label() }}
+                                </span>
                             @endif
                         </x-ui.table-cell>
                     @endif
@@ -453,26 +456,50 @@ new #[Layout('layouts.admin')] class extends Component
                                 </x-ui.button>
                             </x-ui.dropdown-menu-trigger>
                             <x-ui.dropdown-menu-content align="end">
-                                <!-- wire:confirm защищает от случайного клика -->
-                                <x-ui.dropdown-menu-item variant="destructive" wire:click="deleteItem({{ $item->id }})" wire:confirm="Удалить этот элемент? Связанные данные также будут удалены.">
-                                    <x-lucide-trash-2 class="w-4 h-4 mr-2" />
-                                    Удалить
-                                </x-ui.dropdown-menu-item>
+                                @if ($viewMode === 'matches')
+                                    @if ($item->status === 'active')
+                                        <!-- Кнопка разрыва мэтча -->
+                                        <x-ui.dropdown-menu-item 
+                                            variant="destructive" 
+                                            wire:click="deleteItem({{ $item->id }})" 
+                                            wire:confirm="Принудительно разорвать мэтч? Пользователи больше не смогут общаться."
+                                        >
+                                            <x-lucide-trash-2 class="w-4 h-4 mr-2" />
+                                            Разорвать мэтч
+                                        </x-ui.dropdown-menu-item>
+                                    @else
+                                        <!-- Кнопка восстановления мэтча -->
+                                        <x-ui.dropdown-menu-item 
+                                            variant="success" 
+                                            wire:click="restoreMatch({{ $item->id }})" 
+                                            wire:confirm="Восстановить мэтч? Пользователи снова смогут общаться."
+                                        >
+                                            <x-lucide-rotate-ccw class="w-4 h-4 mr-2" />
+                                            Восстановить мэтч
+                                        </x-ui.dropdown-menu-item>
+                                    @endif
+                                @else
+                                    <!-- Кнопка удаления свайпа -->
+                                    <x-ui.dropdown-menu-item 
+                                        variant="destructive" 
+                                        wire:click="deleteItem({{ $item->id }})" 
+                                        wire:confirm="Удалить этот свайп?"
+                                    >
+                                        <x-lucide-trash-2 class="w-4 h-4 mr-2" />
+                                        Удалить
+                                    </x-ui.dropdown-menu-item>
+                                @endif
                             </x-ui.dropdown-menu-content>
                         </x-ui.dropdown-menu>
                     </x-ui.table-cell>
                 </x-ui.table-row>
             @empty
-                <!-- Пустое состояние -->
                 <x-ui.table-row wire:key="empty-state">
-                    <!-- Динамический colspan в зависимости от количества колонок -->
-                    <x-ui.table-cell colspan="{{ $viewMode === 'swipes' ? 6 : 5 }}" class="py-12 text-center text-muted-foreground">
+                    <x-ui.table-cell colspan="6" class="py-12 text-center text-muted-foreground">
                         <x-lucide-heart class="w-12 h-12 mx-auto mb-3 opacity-20" />
                         <p class="text-sm">Нет данных для отображения</p>
                         @if($search || $dateFrom || $dateTo || $typeFilter !== 'all')
-                            <x-ui.button wire:click="resetFilters" variant="link" class="mt-2">
-                                Сбросить фильтры
-                            </x-ui.button>
+                            <x-ui.button wire:click="resetFilters" variant="link" class="mt-2">Сбросить фильтры</x-ui.button>
                         @endif
                     </x-ui.table-cell>
                 </x-ui.table-row>

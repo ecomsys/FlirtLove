@@ -21,8 +21,7 @@ class StaffSeeder extends Seeder
                 'role' => 'moderator',
                 'gender' => 'male',
                 'headline' => 'Служба безопасности',
-                'bio' => 'Слежу за порядком на сайте. Нарушители будут забанены!',
-                'occupation' => 'Модератор',
+                'bio' => 'Слежу за порядком на сайте. Нарушители будут забанены!',               
             ],
             [
                 'name' => 'Поддержка Анна',
@@ -30,8 +29,7 @@ class StaffSeeder extends Seeder
                 'role' => 'support',
                 'gender' => 'female',
                 'headline' => 'Служба заботы о пользователях',
-                'bio' => 'Всегда рада помочь! Обращайтесь по любым вопросам.',
-                'occupation' => 'Специалист поддержки',
+                'bio' => 'Всегда рада помочь! Обращайтесь по любым вопросам.',     
             ],
         ];
 
@@ -72,9 +70,7 @@ class StaffSeeder extends Seeder
                     'interests' => ['работа', 'общение', 'кино'],
                     'height' => $member['gender'] === 'male' ? 180 : 165,
                     'weight' => $member['gender'] === 'male' ? 80 : 55,
-                    'zodiac_sign' => 5, // Просто рандомное число
-                    'education' => 'Высшее',
-                    'occupation' => $member['occupation'],
+                    'zodiac_sign' => 5, // Просто рандомное число                                    
                 ]
             );
 

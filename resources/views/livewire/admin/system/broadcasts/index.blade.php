@@ -518,15 +518,7 @@ new #[Layout('layouts.admin')] class extends Component
                                 />
                                 <div class="flex flex-col">
                                     <span class="text-sm font-medium group-hover:text-primary transition-colors flex items-center gap-1">
-                                        @if($broadcast->targetUser->status === 'banned')
-                                            <span class="text-destructive font-bold text-base leading-none" title="Статус: Забанен. Причина: {{ $broadcast->targetUser->ban_reason ?? 'не указана' }}">
-                                                !
-                                            </span>
-                                        @elseif($broadcast->targetUser->status === 'shadowbanned')
-                                            <span class="text-yellow-500 font-bold text-base leading-none" title="Статус: Теневой бан. Причина: {{ $broadcast->targetUser->ban_reason ?? 'не указана' }}">
-                                                !
-                                            </span>
-                                        @endif
+                                        <x-user-status-sign :user="$broadcast->targetUser" />
                                         {{ $broadcast->targetUser->name }}
                                     </span>
                                     <span class="text-xs text-muted-foreground">
@@ -591,8 +583,11 @@ new #[Layout('layouts.admin')] class extends Component
                                     :isOnline="$broadcast->admin->is_online" 
                                 />
                                 <div class="flex flex-col">
-                                    <span class="text-sm font-medium group-hover:text-primary transition-colors">
-                                        {{ $broadcast->admin->name }}
+                                    <span> 
+                                        <x-user-status-sign :user="$broadcast->admin" />
+                                        <span class="text-sm font-medium group-hover:text-primary transition-colors">
+                                            {{ $broadcast->admin->name }}
+                                        </span>
                                     </span>
                                     <span class="text-xs text-muted-foreground">
                                         {{ $broadcast->admin->email }}

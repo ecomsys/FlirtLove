@@ -14,7 +14,7 @@ use Intervention\Image\ImageManager;
 use Intervention\Image\Drivers\Gd\Driver;
 use Illuminate\Support\Facades\DB;
 
-// php artisan queue:work --queue=heav
+//php artisan queue:work --queue=heavy 
 
 class ProcessApprovedPhoto implements ShouldQueue
 {

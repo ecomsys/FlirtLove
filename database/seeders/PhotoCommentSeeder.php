@@ -2,6 +2,7 @@
 
 namespace Database\Seeders;
 
+use App\Enums\CommentRejectReason; // Подключаем наш Enum
 use App\Models\Photo;
 use App\Models\User;
 use App\Models\PhotoComment;
@@ -50,6 +51,9 @@ class PhotoCommentSeeder extends Seeder
 
         // Хелпер для генерации полей модерации
         $getModerationFields = function(string $status) use ($moderators) {
+            $moderatedBy = $moderators->isNotEmpty() ? $moderators->random()->id : null;
+            $moderatedAt = now()->subDays(rand(0, 5));
+
             if ($status === 'pending') {
                 return [
                     'moderated_by' => null,
@@ -57,10 +61,22 @@ class PhotoCommentSeeder extends Seeder
                     'reject_reason' => null,
                 ];
             }
+
+            if ($status === 'approved' || $status === 'spam') {
+                // Для одобренных и спама причины отклонения НЕТ
+                return [
+                    'moderated_by' => $moderatedBy,
+                    'moderated_at' => $moderatedAt,
+                    'reject_reason' => null,
+                ];
+            }
+
+            // Если статус 'rejected' — берем случайную причину ИЗ ENUM
+            $reasons = array_column(CommentRejectReason::cases(), 'value');
             return [
-                'moderated_by' => $moderators->isNotEmpty() ? $moderators->random()->id : null,
-                'moderated_at' => now()->subDays(rand(0, 5)),
-                'reject_reason' => in_array($status, ['rejected', 'spam']) ? ['mat', 'insult', 'spam'][array_rand(['mat', 'insult', 'spam'])] : null,
+                'moderated_by' => $moderatedBy,
+                'moderated_at' => $moderatedAt,
+                'reject_reason' => $reasons[array_rand($reasons)],
             ];
         };
 

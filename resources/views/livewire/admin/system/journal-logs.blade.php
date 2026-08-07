@@ -151,6 +151,21 @@ new #[Layout('layouts.admin')] class extends Component
                 'album', 
                 'user' => fn($q) => $q->with(['photos' => $avatarQuery])
             ], 
+            \App\Models\PhotoComment::class => [
+                'user' => fn($q) => $q->with(['photos' => $avatarQuery])
+            ],
+            \App\Models\Report::class => [
+                'reporter' => fn($q) => $q->with(['photos' => $avatarQuery]),
+                'reported' => fn($q) => $q->with(['photos' => $avatarQuery]),
+            ],
+            \App\Models\Swipe::class => [
+                'user' => fn($q) => $q->with(['photos' => $avatarQuery]),
+                'targetUser' => fn($q) => $q->with(['photos' => $avatarQuery]),
+            ],
+            \App\Models\UserMatch::class => [
+                'user1' => fn($q) => $q->with(['photos' => $avatarQuery]),
+                'user2' => fn($q) => $q->with(['photos' => $avatarQuery]),
+            ],
             \App\Models\Page::class => [],
         ]);
 
@@ -378,7 +393,10 @@ new #[Layout('layouts.admin')] class extends Component
                             <a href="{{ route('admin.users.show', $log->admin_id) }}" wire:navigate class="flex items-center gap-2 group">
                                 <x-avatar src="{{ $log->admin->avatar_url }}" name="{{ $log->admin->name }}" size="sm" userId="{{ $log->admin->id }}" showStatus="true" :isOnline="$log->admin->is_online" />
                                 <div class="flex flex-col">
-                                    <span class="text-sm font-medium group-hover:text-primary transition-colors">{{ $log->admin->name }}</span>
+                                    <span>
+                                       <x-user-status-sign :user="$log->admin" />
+                                       <span class="text-sm font-medium group-hover:text-primary transition-colors">{{ $log->admin->name }}</span>
+                                    </span>
                                     <span class="text-xs text-muted-foreground">{{ $log->admin->email }}</span>
                                 </div>
                             </a>
@@ -405,10 +423,13 @@ new #[Layout('layouts.admin')] class extends Component
                         @if($log->loggable)
                             @if($log->loggable_type === \App\Models\User::class)
                                 <!-- Вывод пользователя -->
-                                <a href="{{ route('admin.users.show', $log->loggable->id) }}" wire:navigate class="flex items-center gap-2 group">
+                                <a href="{{ route('admin.users.show', $log->loggable->id) }}" wire:navigate class="flex items-center gap-2 group">                                    
                                     <x-avatar src="{{ $log->loggable->avatar_url }}" name="{{ $log->loggable->name }}" size="md" userId="{{ $log->loggable->id }}" showStatus="true" :isOnline="$log->loggable->is_online" />
                                     <div class="flex flex-col">
-                                        <span class="text-sm font-medium group-hover:text-primary transition-colors">{{ $log->loggable->name }}</span>
+                                        <span>
+                                            <x-user-status-sign :user="$log->loggable" />
+                                            <span class="text-sm font-medium group-hover:text-primary transition-colors">{{ $log->loggable->name }}</span>
+                                        </span>
                                         <span class="text-xs text-muted-foreground">{{ $log->loggable->email }}</span>
                                         <span class="text-xs text-muted-foreground/70">Юзер ID: {{ $log->loggable->id }}</span>
                                     </div>
@@ -458,8 +479,9 @@ new #[Layout('layouts.admin')] class extends Component
                                         <img src="{{ $log->loggable->path_thumb ?? $log->loggable->path_medium }}" alt="Photo" class="w-full h-full object-cover">
                                     </a>
                                     <div class="flex flex-col text-xs min-w-0">
-                                        @if($log->loggable->user)
+                                        @if($log->loggable->user)                                            
                                             <a href="{{ route('admin.users.show', $log->loggable->user_id) }}" wire:navigate class="font-medium text-foreground hover:text-primary transition-colors truncate">
+                                                <x-user-status-sign :user="$log->loggable->user" />
                                                 {{ $log->loggable->user->name }}
                                             </a>
                                         @endif
@@ -469,6 +491,138 @@ new #[Layout('layouts.admin')] class extends Component
                                         <span class="text-muted-foreground/70">Фото ID:  {{ $log->loggable_id }}</span>
                                     </div>
                                 </div>
+                                
+                            @elseif($log->loggable_type === \App\Models\PhotoComment::class)
+                                @php 
+                                    $c = $log->loggable;
+                                    $isMassAction = str_starts_with($log->action, 'comment.mass_');
+                                    
+                                    if ($isMassAction) {
+                                        $massCount = $log->after['count'] ?? 0;
+                                        $massIds = $log->after['ids'] ?? [];
+                                        $massLabel = match($log->action) {
+                                            'comment.mass_approve' => 'Массовое одобрение',
+                                            'comment.mass_reject' => 'Массовое отклонение',
+                                            default => 'Массовое действие'
+                                        };
+                                        $massColor = $log->action === 'comment.mass_approve' 
+                                            ? 'bg-green-500/10 text-green-500' 
+                                            : 'bg-red-500/10 text-red-500';
+                                    } else {
+                                        $cStatuses = [
+                                            'pending'  => ['Ожидает', 'bg-yellow-500/10 text-yellow-500'],
+                                            'approved' => ['Одобрен', 'bg-green-500/10 text-green-500'],
+                                            'rejected' => ['Отклонен', 'bg-red-500/10 text-red-500'],
+                                            'spam'     => ['Спам', 'bg-red-500/10 text-red-500'],
+                                        ];
+                                        [$cLabel, $cColor] = $cStatuses[$c->status ?? ''] ?? ['—', 'bg-muted text-muted-foreground'];
+                                    }
+                                @endphp
+
+                                @if ($isMassAction)
+                                    <!-- Вывод МАССОВОГО действия -->
+                                    <div class="flex flex-col gap-1 pt-1 max-w-[240px]">
+                                        <div class="flex items-center gap-2">
+                                            <div class="w-8 h-8 rounded-full bg-muted flex items-center justify-center shrink-0">
+                                                <svg class="w-4 h-4 text-muted-foreground" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                                    <path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z" />
+                                                </svg>
+                                            </div>
+                                            <div class="flex-1 min-w-0">
+                                                <span class="text-sm font-medium text-foreground">Комментарии</span>
+                                                <div class="flex items-center gap-1.5 flex-wrap mt-0.5">
+                                                    <span class="px-1.5 py-0.5 rounded text-[10px] font-medium {{ $massColor }}">{{ $massLabel }}</span>
+                                                    <span class="px-1.5 py-0.5 rounded text-[10px] font-medium bg-secondary text-secondary-foreground">{{ $massCount }} шт.</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="text-[10px] text-muted-foreground/70 mt-1 truncate">
+                                            @if(!empty($massIds))
+                                                <span class="font-medium">ID:</span> {{ \Illuminate\Support\Str::limit(implode(', ', $massIds), 35) }}
+                                            @endif
+                                        </div>
+                                    </div>
+                                @else
+                                    <!-- Вывод одиночного комментария (Автор + Статус + Текст + ID) -->
+                                    <div class="flex flex-col gap-1 pt-1 max-w-[220px]">
+                                        <div class="flex items-center gap-2">
+                                            <x-avatar src="{{ $c->user?->avatar_url }}" name="{{ $c->user?->name ?? 'Удален' }}" size="sm" userId="{{ $c->user?->id }}" showStatus="true" :isOnline="$c->user?->is_online" />
+                                            <div class="flex-1 min-w-0">
+                                                <div class="flex items-center gap-1.5 flex-wrap">
+                                                    @if($c->user)
+                                                        <a href="{{ route('admin.users.show', $c->user->id) }}" wire:navigate class="font-medium text-xs hover:text-primary transition-colors flex items-center gap-1">
+                                                            <x-user-status-sign :user="$c->user" />
+                                                            {{ $c->user->name }}
+                                                        </a>
+                                                    @else
+                                                        <span class="font-medium text-xs text-muted-foreground">Удален</span>
+                                                    @endif
+                                                    <span class="px-1.5 py-0.5 rounded text-[10px] font-medium {{ $cColor }}">{{ $cLabel }}</span>
+                                                </div>
+                                                <p class="text-xs text-muted-foreground italic truncate mt-0.5">"{{ \Illuminate\Support\Str::limit($c->content, 40) }}"</p>
+                                            </div>
+                                        </div>
+                                        <div class="flex items-center gap-2 text-[10px] text-muted-foreground/70 mt-1">
+                                            <span>Коммент ID: {{ $log->loggable_id }}</span>
+                                            @if($c->photo_id)
+                                                <span>•</span>
+                                                <span>К фото #{{ $c->photo_id }}</span>
+                                            @endif
+                                        </div>
+                                    </div>
+                                @endif
+
+                            @elseif($log->loggable_type === \App\Models\Report::class)
+                                @php 
+                                    $report = $log->loggable; // Может быть null, если жалоба была жестко удалена
+                                    $isMassAction = str_starts_with($log->action, 'report.mass_');
+                                                                    
+                                    // Получаем значение reason из модели или из диффа лога (если жалоба удалена)
+                                    $reasonValue = $report?->reason ?? $log->before['reason'] ?? null;
+                                    $reasonEnum = \App\Enums\ReportReason::tryFrom($reasonValue ?? '');
+                                @endphp
+
+                                @if ($isMassAction)
+                                    <!-- Вывод МАССОВОГО действия с жалобами -->
+                                    <div class="flex items-center gap-2 max-w-[250px]">
+                                        <div class="w-8 h-8 rounded-full bg-muted flex items-center justify-center shrink-0">
+                                            <x-lucide-layers class="w-4 h-4 text-muted-foreground" />
+                                        </div>
+                                        <div class="flex-1 min-w-0">
+                                            <span class="text-sm font-medium text-foreground block truncate">
+                                                {{ $log->after['label'] ?? 'Массовое действие с жалобами' }}
+                                            </span>
+                                            <div class="flex items-center gap-1.5 flex-wrap mt-0.5">
+                                                @if(!empty($log->after['count']))
+                                                    <x-ui.badge variant="secondary" size="xs">{{ $log->after['count'] }} шт.</x-ui.badge>
+                                                @endif
+                                            </div>
+                                        </div>
+                                    </div>
+                                @else
+                                    <!-- Вывод одиночной жалобы -->
+                                    <div class="flex items-center gap-2 max-w-[250px]">
+                                        <div class="w-8 h-8 rounded-full bg-muted flex items-center justify-center shrink-0">
+                                            <x-lucide-flag class="w-4 h-4 text-orange-500" />
+                                        </div>
+                                        <div class="flex-1 min-w-0">                                            
+                                            <span class="text-sm font-medium text-foreground">Жалоба ID: {{ $log->loggable_id }}</span>                                                                                        
+                                            
+                                            @if($reasonEnum)
+                                                <div class="flex items-center gap-1.5 flex-wrap mt-1">
+                                                    <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium {{ $reasonEnum->color() }}">
+                                                        {{ $reasonEnum->label() }}
+                                                    </span>
+                                                </div>
+                                            @elseif($reasonValue)
+                                                <!-- Фоллбэк, если причина не в Enum (например, кастный текст) -->
+                                                <p class="text-xs text-muted-foreground truncate mt-1">
+                                                    "{{ \Illuminate\Support\Str::limit(ucfirst($reasonValue), 35) }}"
+                                                </p>
+                                            @endif
+                                        </div>
+                                    </div>
+                                @endif              
 
                             @elseif($log->loggable_type === \App\Models\Page::class)
                                 <!-- Вывод страницы (ID + Тайтл + Бейдж статуса) -->
@@ -508,6 +662,122 @@ new #[Layout('layouts.admin')] class extends Component
                                         </span>
                                     </div>
                                 </div>
+
+                           @elseif($log->loggable_type === \App\Models\Swipe::class)
+                                @php 
+                                    $swipe = $log->loggable; 
+                                    // Берем тип из диффа, так как свайп могли изменить (например, при Rewind)
+                                    $swipeTypeValue = $log->after['type'] ?? $log->before['type'] ?? $swipe->type ?? '';
+                                    $swipeType = \App\Enums\SwipeType::tryFrom($swipeTypeValue);
+                                @endphp
+                                <!-- Вывод Свайпа: Юзер 1 -> Иконка действия -> Юзер 2 -->
+                                <div class="flex items-center gap-3 pt-1 max-w-[300px]">
+                                    <!-- Кто свайпнул -->
+                                    <div class="flex flex-col items-center gap-1 min-w-[40px]">
+                                        @if($swipe && $swipe->user)
+                                            <a href="{{ route('admin.users.show', $swipe->user->id) }}" wire:navigate class="hover:opacity-80 transition-opacity">
+                                                <x-avatar src="{{ $swipe->user->avatar_url }}" name="{{ $swipe->user->name }}" size="xs" userId="{{ $swipe->user->id }}" showStatus="true" :isOnline="$swipe->user->is_online" />
+                                            </a>
+                                            <a href="{{ route('admin.users.show', $swipe->user->id) }}" wire:navigate class="text-[10px] truncate w-14 text-center hover:text-primary flex items-center gap-0.5 justify-center">
+                                                <x-user-status-sign :user="$swipe->user" />
+                                                <span class="truncate">{{ \Illuminate\Support\Str::limit($swipe->user->name, 8) }}</span>
+                                            </a>
+                                        @else
+                                            <x-avatar name="Del" size="xs" />
+                                            <span class="text-[10px] text-muted-foreground">Удален</span>
+                                        @endif
+                                    </div>
+
+                                    <!-- Тип свайпа (Иконка + Бейдж) -->
+                                    <div class="shrink-0 flex flex-col items-center gap-1">
+                                        @if($swipeType === \App\Enums\SwipeType::Like)
+                                            <x-lucide-heart class="w-5 h-5 text-green-500 fill-current" />
+                                        @elseif($swipeType === \App\Enums\SwipeType::Superlike)
+                                            <x-lucide-star class="w-5 h-5 text-yellow-500 fill-current" />
+                                        @elseif($swipeType === \App\Enums\SwipeType::Dislike)
+                                            <x-lucide-thumbs-down class="w-5 h-5 text-red-500" />
+                                        @endif
+                                        @if($swipeType)
+                                            <span class="px-1.5 py-0.5 rounded text-[9px] font-medium {{ $swipeType->color() }}">{{ $swipeType->label() }}</span>
+                                        @endif
+                                    </div>
+
+                                    <!-- Кого свайпнули -->
+                                    <div class="flex flex-col items-center gap-1 min-w-[40px]">
+                                        @if($swipe && $swipe->targetUser)
+                                            <a href="{{ route('admin.users.show', $swipe->targetUser->id) }}" wire:navigate class="hover:opacity-80 transition-opacity">
+                                                <x-avatar src="{{ $swipe->targetUser->avatar_url }}" name="{{ $swipe->targetUser->name }}" size="xs" userId="{{ $swipe->targetUser->id }}" showStatus="true" :isOnline="$swipe->targetUser->is_online" />
+                                            </a>
+                                            <a href="{{ route('admin.users.show', $swipe->targetUser->id) }}" wire:navigate class="text-[10px] truncate w-14 text-center hover:text-primary flex items-center gap-0.5 justify-center">
+                                                <x-user-status-sign :user="$swipe->targetUser" />
+                                                <span class="truncate">{{ \Illuminate\Support\Str::limit($swipe->targetUser->name, 8) }}</span>
+                                            </a>
+                                        @else
+                                            <x-avatar name="Del" size="xs" />
+                                            <span class="text-[10px] text-muted-foreground">Удален</span>
+                                        @endif
+                                    </div>
+                                </div>
+                                <div class="text-[10px] text-muted-foreground/70 mt-2">
+                                    Свайп ID: {{ $log->loggable_id }}
+                                </div>
+
+                       @elseif($log->loggable_type === \App\Models\UserMatch::class)
+                            @php 
+                                $match = $log->loggable; 
+                                // Берем статус ИЗ ДИФФА (после действия), а не текущий статус модели
+                                $matchStatusValue = $log->after['status'] ?? $log->before['status'] ?? $match->status ?? '';
+                                $matchStatus = \App\Enums\MatchStatus::tryFrom($matchStatusValue);
+                            @endphp
+                            <!-- Вывод Мэтча: Юзер 1 ❤️ Юзер 2 -->
+                            <div class="flex items-center gap-3 pt-1 max-w-[300px]">
+                                <!-- Пользователь 1 -->
+                                <div class="flex flex-col items-center gap-1 min-w-[40px]">
+                                    @if($match && $match->user1)
+                                        <a href="{{ route('admin.users.show', $match->user1->id) }}" wire:navigate class="hover:opacity-80 transition-opacity">
+                                            <x-avatar src="{{ $match->user1->avatar_url }}" name="{{ $match->user1->name }}" size="xs" userId="{{ $match->user1->id }}" showStatus="true" :isOnline="$match->user1->is_online" />
+                                        </a>
+                                        <a href="{{ route('admin.users.show', $match->user1->id) }}" wire:navigate class="text-[10px] truncate w-14 text-center hover:text-primary flex items-center gap-0.5 justify-center">
+                                            <x-user-status-sign :user="$match->user1" />
+                                            <span class="truncate">{{ \Illuminate\Support\Str::limit($match->user1->name, 8) }}</span>
+                                        </a>
+                                    @else
+                                        <x-avatar name="Del" size="xs" />
+                                        <span class="text-[10px] text-muted-foreground">Удален</span>
+                                    @endif
+                                </div>
+
+                                <!-- Иконка и статус мэтча -->
+                                <div class="shrink-0 flex flex-col items-center gap-1">
+                                    @if($matchStatus === \App\Enums\MatchStatus::Active)
+                                        <x-lucide-heart class="w-5 h-5 text-pink-500 fill-current" />
+                                    @else
+                                        <x-lucide-heart-crack class="w-5 h-5 text-muted-foreground" />
+                                    @endif
+                                    @if($matchStatus)
+                                        <span class="px-1.5 py-0.5 rounded text-[9px] font-medium {{ $matchStatus->color() }}">{{ $matchStatus->label() }}</span>
+                                    @endif
+                                </div>
+
+                                <!-- Пользователь 2 -->
+                                <div class="flex flex-col items-center gap-1 min-w-[40px]">
+                                    @if($match && $match->user2)
+                                        <a href="{{ route('admin.users.show', $match->user2->id) }}" wire:navigate class="hover:opacity-80 transition-opacity">
+                                            <x-avatar src="{{ $match->user2->avatar_url }}" name="{{ $match->user2->name }}" size="xs" userId="{{ $match->user2->id }}" showStatus="true" :isOnline="$match->user2->is_online" />
+                                        </a>
+                                        <a href="{{ route('admin.users.show', $match->user2->id) }}" wire:navigate class="text-[10px] truncate w-14 text-center hover:text-primary flex items-center gap-0.5 justify-center">
+                                            <x-user-status-sign :user="$match->user2" />
+                                            <span class="truncate">{{ \Illuminate\Support\Str::limit($match->user2->name, 8) }}</span>
+                                        </a>
+                                    @else
+                                        <x-avatar name="Del" size="xs" />
+                                        <span class="text-[10px] text-muted-foreground">Удален</span>
+                                    @endif
+                                </div>
+                            </div>
+                            <div class="text-[0.625rem] text-muted-foreground/70 mt-2">
+                                Мэтч ID: {{ $log->loggable_id }}
+                            </div>
                             @else
                                 <!-- Для всех остальных моделей - текстовая ссылка -->
                                 @php $objUrl = $this->getObjectUrl($log); @endphp
@@ -522,10 +792,13 @@ new #[Layout('layouts.admin')] class extends Component
                                 @endif
                             @endif
                         @else
-                            <span class="text-xs text-muted-foreground line-through pt-1 inline-block">
-                                {{ class_basename($log->loggable_type) }} #{{ $log->loggable_id }}
-                            </span>
-                            <span class="text-xs text-destructive block">(удален)</span>
+                            <div class="flex flex-col gap-1 pt-1">
+                                <span class="text-sm text-muted-foreground flex items-center gap-2">
+                                    <x-lucide-trash-2 class="w-4 h-4 text-destructive/50" />
+                                    {{ class_basename($log->loggable_type) }} #{{ $log->loggable_id }}
+                                </span>
+                                <span class="text-[10px] text-destructive font-medium">Объект удален</span>
+                            </div>
                         @endif
                     </x-ui.table-cell>
 

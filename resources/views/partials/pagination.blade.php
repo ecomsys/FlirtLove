@@ -7,7 +7,7 @@
                     <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" /></svg>
                 </span>
             @else
-                <button wire:click="previousPage" wire:loading.attr="disabled" class="inline-flex items-center justify-center w-9 h-9 rounded-md border border-border bg-background hover:bg-accent text-foreground transition-colors">
+                <button wire:click="previousPage('{{ $paginator->getPageName() }}')" wire:loading.attr="disabled" class="inline-flex items-center justify-center w-9 h-9 rounded-md border border-border bg-background hover:bg-accent text-foreground transition-colors">
                     <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" /></svg>
                 </button>
             @endif
@@ -27,7 +27,7 @@
                                 {{ $page }}
                             </span>
                         @else
-                            <button wire:click="gotoPage({{ $page }})" class="inline-flex items-center justify-center w-9 h-9 rounded-md border border-border bg-background hover:bg-accent text-foreground text-sm font-medium transition-colors">
+                            <button wire:click="gotoPage({{ $page }}, '{{ $paginator->getPageName() }}')" class="inline-flex items-center justify-center w-9 h-9 rounded-md border border-border bg-background hover:bg-accent text-foreground text-sm font-medium transition-colors">
                                 {{ $page }}
                             </button>
                         @endif
@@ -37,7 +37,7 @@
 
             <!-- Кнопка "Вперед" -->
             @if ($paginator->hasMorePages())
-                <button wire:click="nextPage" wire:loading.attr="disabled" class="inline-flex items-center justify-center w-9 h-9 rounded-md border border-border bg-background hover:bg-accent text-foreground transition-colors">
+                <button wire:click="nextPage('{{ $paginator->getPageName() }}')" wire:loading.attr="disabled" class="inline-flex items-center justify-center w-9 h-9 rounded-md border border-border bg-background hover:bg-accent text-foreground transition-colors">
                     <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" /></svg>
                 </button>
             @else

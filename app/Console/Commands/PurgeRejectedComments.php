@@ -6,9 +6,9 @@ use App\Models\PhotoComment;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
 
-class CleanOldPhotoComments extends Command
+class PurgeRejectedComments extends Command
 {
-    protected $signature = 'comments:clean {--days=30 : Количество дней для хранения}';
+    protected $signature = 'comments:purge-quarantine {--days=30 : Количество дней для хранения}';
     protected $description = 'Физически удаляет старые отклоненные и спам-комментарии из БД';
 
     public function handle(): void
@@ -16,32 +16,30 @@ class CleanOldPhotoComments extends Command
         $days = (int) $this->option('days');
         $date = now()->subDays($days);
 
-        // Удаляем чанками по 1000 записей, чтобы не блокировать таблицу надолго
-        // Используем forceDelete(), так как SoftDeletes не удалит строки физически
-        $totalDeleted = 0;
-        
-        // Создаем базовый запрос
-        $query = PhotoComment::query()
-            ->onlyTrashed() // Берем только те, что уже в корзине (опционально, но логично)
+        // Создаем базовый запрос: ищем отклоненные/спам комменты старше X дней.
+        $query = PhotoComment::withTrashed()
             ->whereIn('status', ['rejected', 'spam'])
             ->where('created_at', '<', $date);
 
-        // Клонируем запрос для подсчета (чтобы не сбить курсор)
+        // Клонируем запрос для подсчета
         $count = (clone $query)->count();
 
         if ($count === 0) {
-            $this->info('Нет комментариев для удаления.');
+            $this->info('Нет отклоненных/спам комментариев для удаления.');
             return;
         }
 
         $this->info("Найдено {$count} комментариев. Начинаю очистку...");
 
-        // Удаляем порциями по 1000
+        $totalDeleted = 0;
+
+        // Удаляем чанками по 1000
         $query->chunkById(1000, function ($comments) use (&$totalDeleted, $count) { 
-             foreach ($comments as $comment) {
-                $comment->forceDelete(); // Жесткое удаление!
-            }
-            $totalDeleted += $comments->count();
+            // ИСПРАВЛЕНО: Пакетное удаление. 1 SQL-запрос DELETE на чанк (вместо 1000 запросов в цикле)
+            $ids = $comments->pluck('id');
+            PhotoComment::withTrashed()->whereIn('id', $ids)->forceDelete();
+            
+            $totalDeleted += $ids->count();
             $this->info("Удалено {$totalDeleted} из {$count}...");
         });
 

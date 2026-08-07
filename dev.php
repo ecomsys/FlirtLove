@@ -6,17 +6,19 @@
 * Сборщик фронтенда — npm run dev (Vite, запускается в отдельном окне)
 * Планировщик задач — php artisan schedule:work (отдельное окно)
 * Очередь заданий — php artisan queue:work (отдельное окно)
+* Тяжелая очередь — php artisan queue:work --queue=heavy (отдельное окно)
+* Очередь трансляций — php artisan queue:work --queue=broadcasts (отдельное окно)
 * После успешного старта автоматически открывается браузер с админкой.
 */
 
- $checkHost = '127.0.0.1'; // Используем IP вместо localhost, чтобы избежать зависания на IPv6
- $port = 8000;
- $url = "http://localhost:$port/admin"; // Для браузера оставляем localhost
+$checkHost = '127.0.0.1'; // Используем IP вместо localhost, чтобы избежать зависания на IPv6
+$port = 8000;
+$url = "http://localhost:$port/admin"; // Для браузера оставляем localhost
 
- $isWindows = (PHP_OS_FAMILY === 'Windows');
+$isWindows = (PHP_OS_FAMILY === 'Windows');
 
 // Проверка порта перед стартом
- $fp = @fsockopen($checkHost, $port, $errno, $errstr, 0.5);
+$fp = @fsockopen($checkHost, $port, $errno, $errstr, 0.5);
 if ($fp) {
     fclose($fp);
     echo "⚠️ Порт $port уже занят. Возможно, сервер уже запущен.\n";
@@ -59,9 +61,12 @@ function openTerminal($command, $title = '')
 
 echo "  Запуск фоновых сервисов...\n";
 
+// Запускаем все сервисы в отдельных окнах
 openTerminal('npm run dev', 'Vite');
 openTerminal('php artisan schedule:work', 'Schedule');
-openTerminal('php artisan queue:work', 'Queue');
+openTerminal('php artisan queue:work --queue=default', 'Queue Default');
+openTerminal('php artisan queue:work --queue=heavy', 'Queue Heavy');
+openTerminal('php artisan queue:work --queue=broadcasts', 'Queue Broadcasts');
 
 sleep(2);
 
@@ -69,8 +74,8 @@ echo "  Фоновые сервисы запущены в отдельных о�
 echo "  Ожидание готовности основного сервера...\n";
 
 // Запускаем основной сервер в текущем терминале
- $descriptorSpec = [0 => STDIN, 1 => STDOUT, 2 => STDERR];
- $process = proc_open('php artisan serve', $descriptorSpec, $pipes);
+$descriptorSpec = [0 => STDIN, 1 => STDOUT, 2 => STDERR];
+$process = proc_open('php artisan serve', $descriptorSpec, $pipes);
 
 if (!is_resource($process)) {
     echo "❌ Не удалось запустить сервер.\n";
@@ -78,8 +83,8 @@ if (!is_resource($process)) {
 }
 
 // Ждём готовности порта БЕСКОНЕЧНО, но проверяем, не упал ли процесс
- $attempt = 0;
- $ready = false;
+$attempt = 0;
+$ready = false;
 
 while (true) {
     $attempt++;
@@ -125,7 +130,8 @@ if ($isWindows) {
 echo "----------------------------------------\n";
 echo "   Логи сервера выводятся здесь.\n";
 echo "   Нажмите Ctrl+C для остановки сервера.\n";
-echo "   Окна Vite, Schedule и Queue закройте вручную.\n";
+echo "   Окна Vite, Schedule и очередей закройте вручную.\n";
+echo "   Запущены очереди: default, heavy, broadcasts\n";
 echo "----------------------------------------\n";
 
 // Ожидаем завершения сервера (держим скрипт активным)
