@@ -24,10 +24,33 @@ new class extends Component {
                 <a href="{{ route('home') }}" wire:navigate class="flex items-center gap-2.5 group shrink-0">
                     <x-application-logo
                         class="w-8 h-8 fill-current text-foreground group-hover:text-primary transition-colors" />
-                    <span
-                        class="font-semibold text-lg text-foreground group-hover:text-primary transition-colors inline">
-                        {{ __('common.admin') }}
-                    </span>
+                    
+                    @php
+                        // Проверяем, является ли текущий юзер владельцем проекта
+                        $isOwner = in_array(auth()->id(), config('app.founders', []));
+                        
+                        // Меняем заголовок в зависимости от роли сотрудника
+                        $adminTitle = match(auth()->user()?->role) {
+                            'admin' => 'Суперадмин',
+                            'moderator' => 'Модератор',
+                            'support' => 'Саппорт',
+                            default => 'Админка'
+                        };
+                    @endphp
+
+                    <div class="flex items-center gap-2">
+                        <span class="font-semibold text-lg text-foreground group-hover:text-primary transition-colors inline">
+                            {{ $adminTitle }}
+                        </span>
+
+                        {{-- Бейдж владельца (виден только на экранах >= 640px) --}}
+                        @if($isOwner)
+                            <span class="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold border border-yellow-500/30 bg-yellow-500/10 text-yellow-500">
+                                <x-lucide-crown class="w-3 h-3" />
+                                Владелец
+                            </span>
+                        @endif
+                    </div>
                 </a>
             </div>
 

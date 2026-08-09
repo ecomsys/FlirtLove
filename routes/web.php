@@ -14,7 +14,7 @@ Route::get('/', function () {
 })->name('home');
 
 // Маршруты для авторизованных юзеров
-Route::middleware(['auth', 'verified', 'redirect.admin', 'onboarding'])->group(function () {
+Route::middleware(['auth', 'verified', 'role:user', 'onboarding'])->group(function () {
     Route::view('dashboard', 'dashboard')->name('dashboard');
     Route::view('profile', 'profile')->name('profile');
 });
@@ -27,47 +27,73 @@ Volt::route('/photo-setup', 'register-photo-setup')
 // ============================================
 // АДМИНКА (ВСЁ НА VOLT)
 // ============================================
-Route::middleware(['auth', 'admin'])->prefix('admin')->name('admin.')->group(function () {
 
-    // Дашборд
-    Volt::route('/', 'admin.dashboard')->name('dashboard');
+Route::middleware(['auth', 'verified'])->prefix('admin')->name('admin.')->group(function () {
 
-    // Пользователи
-    Volt::route('/users', 'admin.users-index')->name('users.index');
-    
-    Volt::route('/users/{user}', 'admin.users-show')->name('users.show');
+    // ============================================
+    // ЗОНА 1: Доступно ВСЕМ сотрудникам (Admin, Moderator, Support)
+    // ============================================
+    Route::middleware('role:admin,moderator,support')->group(function () {
+        Volt::route('/', 'admin.dashboard.index')->name('dashboard');
+        
+        // Базовый просмотр юзеров (саппорт должен видеть профиль, чтобы помочь)
+        Volt::route('/users', 'admin.users.index')->name('users.index');
+        Volt::route('/users/{user}', 'admin.users.show')->name('users.show');
 
-    // Чаты
-    Volt::route('/chats', 'admin.chats-index')->name('chats.index');
+        // Саппорт-чат
+        Volt::route('/communication/support', 'admin.communication.support')->name('communication.support');
+    });
 
-    // Чаты поддержки
-    Volt::route('/support', 'admin.chats-support')->name('support.index');
-    Volt::route('/support/{user_id}', 'admin.chats-support')->name('support.show');
+    // ============================================
+    // ЗОНА 2: Доступно Модераторам и Админам (Управление контентом и безопасностью)
+    // ============================================
+    Route::middleware('role:admin,moderator')->group(function () {
+        // Модерация
+        Volt::route('/media', 'admin.media.index')->name('media.index');
 
-    // Жалобы
-    Volt::route('/reports', 'admin.reports')->name('reports');
+        Volt::route('/moderation/photos', 'admin.moderation.photos')->name('moderation.photos');
+        Volt::route('/moderation/comments', 'admin.moderation.comments')->name('moderation.comments');
+        Volt::route('/moderation/dating', 'admin.moderation.dating')->name('moderation.dating');
+        Volt::route('/moderation/reports', 'admin.moderation.reports')->name('moderation.reports');
 
-    // Финансы
-    Volt::route('/finances', 'admin.finances')->name('finances');
+        // Коммуникация (Модеры проверяют дневники и чаты на спам)
+        Volt::route('/communication/chats', 'admin.communication.chats')->name('communication.chats');
+        Volt::route('/communication/diaries', 'admin.communication.diaries')->name('communication.diaries');
+        Volt::route('/communication/stop-words', 'admin.communication.stop-words')->name('communication.stop-words');
 
-    // Оповещения пользователей
-    Volt::route('/broadcasts', 'admin.broadcasts')->name('broadcasts');
+        // Безопасность
+        Volt::route('/security/blocks', 'admin.security.blocks')->name('security.blocks');
+        Volt::route('/security/fraud-alerts', 'admin.security.fraud-alerts')->name('security.fraud-alerts');
+    });
 
-    // Системные логи
-    Volt::route('/logs', 'admin.logs')->name('logs');
+    // ============================================
+    // ЗОНА 3: Доступно ТОЛЬКО Админам (Бог-режим)
+    // ============================================
+    Route::middleware('role:admin')->group(function () {
+        // Финансы
+        Volt::route('/finances/transactions', 'admin.finances.transactions')->name('finances.transactions');
+        Volt::route('/finances/plans', 'admin.finances.plans')->name('finances.plans');
+        Volt::route('/finances/gifts', 'admin.finances.gifts')->name('finances.gifts');
 
-    // Модерация фото 
-    Volt::route('/photos', 'admin.moderate-photos')->name('moderate-photos.index');
+        // Система
+        Volt::route('/system/settings', 'admin.system.settings')->name('system.settings');
 
-    // Модерация комментарии к фото
-    Volt::route('/photo-comments', 'admin.moderate-photo-comments')->name('moderate-photo-comments');
-    
-    // Модерация знакомств
-    Volt::route('/admin/moderate-dating', 'admin.moderate-dating')->name('moderate-dating');
-
-    // Настройки
-    Volt::route('/settings', 'admin.settings')->name('settings');    
-  
+        // Страницы
+        // Volt::route('/system/pages', 'admin.system.pages')->name('system.pages');
+        Volt::route('/system/pages', 'admin.system.pages.index')->name('system.pages.index');
+        Volt::route('/system/pages/create', 'admin.system.pages.form')->name('system.pages.create');
+        Volt::route('/system/pages/{page}/edit', 'admin.system.pages.form')->name('system.pages.edit');
+        
+        Volt::route('/system/broadcasts', 'admin.system.broadcasts.index')->name('system.broadcasts.index');
+        Volt::route('/system/broadcasts/create', 'admin.system.broadcasts.form')->name('system.broadcasts.create');
+        Volt::route('/system/broadcasts/{broadcast}/edit', 'admin.system.broadcasts.form')->name('system.broadcasts.edit');
+       
+        Volt::route('/system/journal-logs', 'admin.system.journal-logs')->name('system.journal-logs');
+        Volt::route('/system/laravel-logs', 'admin.system.laravel-logs')->name('system.laravel-logs');
+        
+        // НОВАЯ СТРАНИЦА: Управление персоналом
+        Volt::route('/system/roles', 'admin.system.roles')->name('system.roles');
+    });
 });
 
 require __DIR__ . '/auth.php';

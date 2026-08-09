@@ -3,7 +3,16 @@
 
 <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1"  x-data
+      @theme-toggled.window="
+          const newTheme = $event.detail.theme;
+          if (newTheme === 'dark') {
+              document.documentElement.classList.add('dark');
+          } else {
+              document.documentElement.classList.remove('dark');
+          }
+          localStorage.setItem('theme', newTheme);
+      ">
     <meta name="csrf-token" content="{{ csrf_token() }}">
 
     <title>{{ config('app.name', 'Laravel') }}</title>
@@ -13,12 +22,24 @@
 
     <script>
         (function() {
-            const theme = localStorage.getItem('theme') || 'light';
+            // 1. Определяем, что говорит БД (через PHP). Если гость - dbTheme пустой.
+            const dbTheme = '{{ Auth::check() ? (Auth::user()->preferences?->theme ?? "light") : "" }}';
+            
+            // 2. Определяем, что говорит localStorage
+            const localTheme = localStorage.getItem('theme') || 'light';
+            
+            // 3. Выбираем источник истины: БД приоритетнее для авторизованных!
+            const theme = dbTheme || localTheme;
+
+            // 4. Применяем класс
             if (theme === 'dark') {
                 document.documentElement.classList.add('dark');
             } else {
                 document.documentElement.classList.remove('dark');
             }
+            
+            // 5. Синхроним localStorage с выбранным состоянием (для будущих перезагрузок)
+            localStorage.setItem('theme', theme);
         })();
     </script>
 

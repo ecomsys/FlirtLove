@@ -31,7 +31,7 @@ new #[Layout('layouts.guest')] class extends Component
     }
 }; ?>
 
-<div class="w-full max-w-md mx-auto py-10 px-4 bg-background text-foreground">
+<div class="w-full max-w-md mx-auto p-4 bg-background text-foreground h-[calc(100vh-4rem)] flex flex-col justify-center">
 
     <!-- Заголовок -->
     <div class="text-center mb-4">

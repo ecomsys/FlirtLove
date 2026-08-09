@@ -7,20 +7,13 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Notifications\Notification;
 use Illuminate\Notifications\Messages\MailMessage;
 use Illuminate\Notifications\Messages\BroadcastMessage;
-
+use Illuminate\Support\Facades\Log;
 
 // ТАБЛИЦА - КАК ОТСЫЛАЮТЬСЯ УВЕДОМЛЕНИЯ ?
 // Действие	    В кабинете БД   Email	      Push	       Почему
 // Одобрение	   ✅	       ✅        	✅	        Пользователь должен знать
 // Отклонение	   ✅	       ✅	        ✅	        Пользователь должен знать
 // Удаление        ✅	       ✅        	❌        	Важно, но не критично
-
-
-// ЗАУПУСК ВОРКЕРА ОЧЕРЕДИ
-// php artisan queue:work - обычный запуск
-// php artisan queue:restart - рестар сигнал
-// php artisan queue:listen - с автоматическим перезапуском при изменеии в проекте
-// php artisan queue:flush - очистка очереди
 
 class PhotoModerated extends Notification implements ShouldQueue
 {
@@ -34,14 +27,16 @@ class PhotoModerated extends Notification implements ShouldQueue
     ) {}
 
     /**
-     *  Обновляем каналы доставки с учетом настроек юзера
+     *  Каналы доставки с учетом глобальных тумблеров и категорий
      */
     public function via($notifiable): array
     {
         $channels = ['database']; // В базу (колокольчик) пишем ВСЕГДА
 
-        // Проверяем настройку Email для модерации фото (?? true — дефолт для старых юзеров)
-        if (($notifiable->email_settings['on_photo_moderated'] ?? true) && in_array($this->status, ['approved', 'rejected', 'deleted'])) {
+        // Проверяем глобальный тумблер Email И категорию "Новые события" (on_event)
+        if ($notifiable->email_enabled 
+            && ($notifiable->email_settings['on_event'] ?? true) 
+            && in_array($this->status, ['approved', 'rejected', 'deleted'])) {
             $channels[] = 'mail';
         }
 
@@ -77,12 +72,15 @@ class PhotoModerated extends Notification implements ShouldQueue
         
         return [
             'type' => 'photo_moderated',
-            'photo_id' => $this->photoId,
-            'user_id' => $this->userId,
-            'status' => $this->status,
-            'count' => $this->count,
             'title' => $messages['title'],
             'message' => $messages['message'],
+            'action_url' => url('/profile'),
+            'data' => [
+                'photo_id' => $this->photoId,
+                'user_id' => $this->userId,
+                'status' => $this->status,
+                'count' => $this->count,
+            ]
         ];
     }
 
@@ -92,13 +90,16 @@ class PhotoModerated extends Notification implements ShouldQueue
         
         return new BroadcastMessage([
             'type' => 'photo_moderated',
-            'photo_id' => $this->photoId,
-            'user_id' => $this->userId,
-            'status' => $this->status,
-            'count' => $this->count,
             'title' => $messages['title'],
             'message' => $messages['message'],
+            'action_url' => url('/profile'),
             'timestamp' => now()->toDateTimeString(),
+            'data' => [
+                'photo_id' => $this->photoId,
+                'user_id' => $this->userId,
+                'status' => $this->status,
+                'count' => $this->count,
+            ]
         ]);
     }
 
@@ -132,5 +133,13 @@ class PhotoModerated extends Notification implements ShouldQueue
                 'message' => 'Статус вашей фотографии был изменен модератором.',
             ],
         };
+    }
+
+    /**
+     * ЗАЩИТА ОЧЕРЕДИ
+     */
+    public function failed(\Throwable $exception): void
+    {
+        Log::error("Не удалось отправить PhotoModerated (User: {$this->userId}, Photo: {$this->photoId}): " . $exception->getMessage());
     }
 }

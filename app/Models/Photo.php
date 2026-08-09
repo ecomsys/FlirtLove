@@ -1,256 +1,209 @@
-<?php
+<?php 
 
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Illuminate\Support\Facades\Storage;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Support\Facades\Storage;
 
 class Photo extends Model
-{    
+{
+    use SoftDeletes; // Обязательно для сохранения улик!
 
     protected $fillable = [
         'user_id',
         'album_id', 
-        'path',          // дефолтный 
-        'path_original', // путь original
-        'path_large',    // путь large w = 1600px
-        'path_medium',   // путь medium w = 820px
-        'path_thumb',    // путь тумбнейла 200*200
-        'is_primary',    // на аватар (boolean)
-        'is_intimate',   // 18+ (boolean)
-        'status'         // pending, approved, rejected
+        'type',              // Новое: profile или verification
+        'path_original',
+        'path_large',
+        'path_medium',
+        'path_thumb',
+        'status',            // pending, approved, rejected
+        'reject_reason',     // Новое: причина отклонения
+        'moderated_by',      // Новое: ID админа
+        'moderated_at',      // Новое: Время проверки
+        'is_primary',
+        'is_intimate',
+        'position'
     ];
 
     protected $casts = [
         'is_primary' => 'boolean',
         'is_intimate' => 'boolean',
-    ];
-
-    protected $appends = [
-        'url',
-        'original_url',
-        'large_url',
-        'medium_url',
-        'thumb_url',
+        'position' => 'integer',
+        'moderated_at' => 'datetime',
     ];
 
     // ============================================
     // СВЯЗИ
     // ============================================
     
-       // Отношение к альбому
     public function album(): BelongsTo
     {
         return $this->belongsTo(Album::class);
     }
 
-    // Скоуп для получения фото по альбому
-    public function scopeInAlbum($query, $albumId)
-    {
-        return $query->where('album_id', $albumId);
-    }
-
-    /**
-     * Юзер
-     */
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
     }
 
-    /**
-     * Комментарии к фото
-     */
+    // Модератор, проверивший фото
+    public function moderator(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'moderated_by');
+    }
+
     public function comments(): HasMany
     {
         return $this->hasMany(PhotoComment::class);
     }
 
-    /**
-     * Одобренные комментарии
-     */
     public function approvedComments(): HasMany
     {
         return $this->hasMany(PhotoComment::class)->where('status', 'approved');
     }
 
-    /**
-     * Комментарии на модерации
-     */
     public function pendingComments(): HasMany
     {
         return $this->hasMany(PhotoComment::class)->where('status', 'pending');
     }
 
+    // ============================================
+    // ХЕЛПЕР ДЛЯ URL (Твой код - оставляем без изменений)
+    // ============================================
+
     /**
-     * Количество комментариев на модерации
+     *  Универсальный метод: возвращает URL или полную ссылку
      */
-    public function getPendingCommentsCountAttribute(): int
+    private function getUrl(?string $path): string
     {
-        return $this->pendingComments()->count();
+        if (empty($path)) {
+            return '';
+        }
+
+        // Если это уже полный URL (http/https) - возвращаем как есть
+        if (filter_var($path, FILTER_VALIDATE_URL)) {
+            return $path;
+        }
+
+        // Иначе - генерируем Storage URL
+        return Storage::url($path);
+    }
+
+    public function getUrlAttribute(): string
+    {
+        return $this->medium_url; 
+    }
+
+    public function getOriginalUrlAttribute(): string
+    {
+        return $this->getUrl($this->path_original);
+    }
+
+    public function getLargeUrlAttribute(): string
+    {
+        return $this->getUrl($this->path_large);
+    }
+
+    public function getMediumUrlAttribute(): string
+    {
+        return $this->getUrl($this->path_medium);
+    }
+
+    public function getThumbUrlAttribute(): string
+    {
+        return $this->getUrl($this->path_thumb);
     }
 
     // ============================================
     // РАБОТА С ПУТЯМИ (ХЭШ-ПАПКИ)
     // ============================================
 
-    /**
-     * Сгенерировать путь для фото с хэш-папками
-     */
     public static function generatePath(int $userId, string $fileId, string $type): string
     {
-        $hash = substr(md5($userId), 0, 2); // 00-ff
-        return "photos/approved/{$hash}/{$userId}/{$type}_{$fileId}.webp";
-    }
-
-    /**
-     * Получить хэш-путь для текущего пользователя
-     */
-    public function getUserHashPath(): string
-    {
-        $hash = substr(md5($this->user_id), 0, 2);
-        return "photos/approved/{$hash}/{$this->user_id}/";
-    }
-
-    /**
-     * Найти все фото пользователя
-     */
-    public static function getUserPhotos(int $userId): array
-    {
-        $hash = substr(md5($userId), 0, 2);
-        $path = "photos/approved/{$hash}/{$userId}/";
-
-        if (!Storage::disk('public')->exists($path)) {
-            return [];
-        }
-
-        return Storage::disk('public')->files($path);
-    }
-
-    /**
-     * Удалить все фото пользователя
-     */
-    public static function deleteUserPhotos(int $userId): bool
-    {
-        $hash = substr(md5($userId), 0, 2);
-        $path = "photos/approved/{$hash}/{$userId}/";
-
-        if (Storage::disk('public')->exists($path)) {
-            return Storage::disk('public')->deleteDirectory($path);
-        }
-
-        return true;
+        // Берем 3 символа хэша (от 000 до fff = 4096 папок).
+        // Это идеальный баланс для масштабирования до миллионов юзеров без тормозов ФС.
+        $hash = substr(md5($userId), 0, 3);
+        
+        // Пример пути: photos/profile/a3f/105/large_12345.webp
+        return "photos/{$type}/{$hash}/{$userId}/{$fileId}.webp";
     }
 
     // ============================================
-    // АКСЕССОРЫ ДЛЯ URL
+    // СКОПЫ
     // ============================================
 
-    /**
-     * Основной URL (для совместимости)
-     */
-    public function getUrlAttribute(): string
+    public function scopeApproved($query)
     {
-        if (filter_var($this->path, FILTER_VALIDATE_URL)) {
-            return $this->path;
-        }
-
-        return $this->path ? asset('storage/' . $this->path) : '';
+        return $query->where('status', 'approved');
     }
 
-    /**
-     * URL оригинала (максимальное качество)
-     */
-    public function getOriginalUrlAttribute(): string
+    public function scopePending($query)
     {
-        if (filter_var($this->path_original, FILTER_VALIDATE_URL)) {
-            return $this->path_original;
-        }
-
-        return $this->path_original ? asset('storage/' . $this->path_original) : $this->url;
+        return $query->where('status', 'pending');
     }
 
-    /**
-     * URL Large (1600px для больших экранов)
-     */
-    public function getLargeUrlAttribute(): string
+    public function scopePrimary($query)
     {
-        if (filter_var($this->path_large, FILTER_VALIDATE_URL)) {
-            return $this->path_large;
-        }
-
-        return $this->path_large ? asset('storage/' . $this->path_large) : $this->url;
+        return $query->where('is_primary', true);
     }
 
-    /**
-     * URL Medium (820px стандарт)
-     */
-    public function getMediumUrlAttribute(): string
+    public function scopePublic($query)
     {
-        if (filter_var($this->path_medium, FILTER_VALIDATE_URL)) {
-            return $this->path_medium;
-        }
-
-        return $this->path_medium ? asset('storage/' . $this->path_medium) : $this->url;
+        return $query->where('is_intimate', false);
     }
 
-    /**
-     * URL Thumb (200x200 для превью)
-     */
-    public function getThumbUrlAttribute(): string
+    public function scopeOfType($query, string $type)
     {
-        if (filter_var($this->path_thumb, FILTER_VALIDATE_URL)) {
-            return $this->path_thumb;
-        }
-
-        return $this->path_thumb ? asset('storage/' . $this->path_thumb) : $this->url;
+        return $query->where('type', $type);
     }
 
     // ============================================
-    // ПОЛУЧЕНИЕ ОПТИМАЛЬНОЙ ВЕРСИИ
+    // ХЕЛПЕРЫ МОДЕРАЦИИ
     // ============================================
 
-    /**
-     * Получить оптимальный URL для контекста
-     */
-    public function getOptimalUrl(string $context = 'default'): string
+    public function markAsApproved(int $adminId): bool
     {
-        return match ($context) {
-            'gallery' => $this->medium_url,
-            'profile' => $this->medium_url,
-            'zoom' => $this->large_url,
-            'thumbnail' => $this->thumb_url,
-            'download' => $this->original_url,
-            default => $this->medium_url,
-        };
+        return $this->update([
+            'status' => 'approved',
+            'moderated_by' => $adminId,
+            'moderated_at' => now(),
+            'reject_reason' => null,
+        ]);
     }
 
-    /**
-     * Получить все версии фото в массиве
-     */
-    public function getVersionsAttribute(): array
+    public function markAsRejected(int $adminId, string $reason): bool
     {
-        return [
-            'original' => $this->original_url,
-            'large' => $this->large_url,
-            'medium' => $this->medium_url,
-            'thumb' => $this->thumb_url,
-        ];
+        return $this->update([
+            'status' => 'rejected',
+            'moderated_by' => $adminId,
+            'moderated_at' => now(),
+            'reject_reason' => $reason,
+        ]);
     }
 
     // ============================================
-    // РАБОТА С ФАЙЛАМИ
+    // СОБЫТИЯ МОДЕЛИ (ИСПРАВЛЕНО ПОД SOFT DELETES)
     // ============================================
 
+    protected static function booted()
+    {
+        // Файлы удаляем ТОЛЬКО при жестком удалении (forceDelete)!
+        // При мягком удалении (delete) файлы остаются на диске для СБ.
+        static::forceDeleting(function ($photo) {
+            $photo->deleteFiles();
+        });      
+    }
+
     /**
-     * Удалить все файлы фото
+     * Удалить все файлы фото с диска (Твой код)
      */
     public function deleteFiles(): bool
     {
-        $files = [
-            $this->path,
+        $paths = [
             $this->path_original,
             $this->path_large,
             $this->path_medium,
@@ -258,146 +211,12 @@ class Photo extends Model
         ];
 
         $deleted = true;
-        foreach (array_filter($files) as $file) {
-            if (Storage::disk('public')->exists($file)) {
-                $deleted = $deleted && Storage::disk('public')->delete($file);
+        foreach (array_filter($paths) as $path) {
+            if (!filter_var($path, FILTER_VALIDATE_URL) && Storage::exists($path)) {
+                $deleted = $deleted && Storage::delete($path);
             }
         }
 
         return $deleted;
     }
-
-    /**
-     * Проверить, существуют ли все файлы
-     */
-    public function filesExist(): bool
-    {
-        $files = [
-            $this->path,
-            $this->path_medium,
-            $this->path_thumb,
-        ];
-
-        foreach (array_filter($files) as $file) {
-            if (!Storage::disk('public')->exists($file)) {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    // ============================================
-    // СКОПЫ
-    // ============================================
-
-        /**
-     * Локальный скоуп: Исключает фотографии, загруженные администраторами.
-     */
-    public function scopeExcludeAdmins($query)
-    {
-        return $query->whereHas('user', fn($q) => $q->where('is_admin', false));
-    }
-    
-    /**
-     * Только одобренные фото
-     */
-    public function scopeApproved($query)
-    {
-        return $query->where('status', 'approved');
-    }
-
-    /**
-     * Только на модерации
-     */
-    public function scopePending($query)
-    {
-        return $query->where('status', 'pending');
-    }
-
-    /**
-     * Только отклоненные
-     */
-    public function scopeRejected($query)
-    {
-        return $query->where('status', 'rejected');
-    }
-
-    /**
-     * Только основные фото
-     */
-    public function scopePrimary($query)
-    {
-        return $query->where('is_primary', true);
-    }
-
-    /**
-     * Только не интимные (для публичного показа)
-     */
-    public function scopePublic($query)
-    {
-        return $query->where('is_intimate', false);
-    }
-
-    // ============================================
-    // СОБЫТИЯ МОДЕЛИ
-    // ============================================
-
-    protected static function booted()
-    {
-        // При удалении модели удаляем файлы
-        static::deleting(function ($photo) {
-            $photo->deleteFiles();
-        });
-    }
 }
-
-
-// ====================================================================================================================
-// КАК ИСПОЬЗОВАТЬ В Blade?
-// ====================================================================================================================
-
-// Превью (Thumb)
-
-// <img src="{{ $photo->thumb_url }}" 
-//      alt="Фото" 
-//      class="w-16 h-16 object-cover rounded-full" />
-
-// Анкета (Medium)
-
-// <img src="{{ $photo->medium_url }}" 
-//      alt="Фото пользователя" 
-//      class="w-full max-w-2xl rounded-lg shadow-lg" 
-//      loading="lazy" />
-
-// С увеличение по клику (Large)
-
-// <a href="{{ $photo->large_url }}" 
-//    target="_blank" 
-//    class="block cursor-zoom-in">
-//     <img src="{{ $photo->medium_url }}" 
-//          alt="Фото" 
-//          class="w-full rounded-lg hover:opacity-95 transition" />
-// </a>
-
-// srcset (самый крутой способ)
-
-// <img src="{{ $photo->medium_url }}" 
-//      srcset="{{ $photo->thumb_url }} 200w,
-//              {{ $photo->medium_url }} 820w,
-//              {{ $photo->large_url }} 1600w"
-//      sizes="(max-width: 640px) 200px,
-//             (max-width: 1024px) 820px,
-//             1600px"
-//      alt="Фото" 
-//      class="w-full rounded-lg" 
-//      loading="lazy" />
-
-// Все версии
-
-// <div class="space-y-2">
-//     <p>Оригинал: <a href="{{ $photo->original_url }}" target="_blank">Скачать</a></p>
-//     <p>Large: <a href="{{ $photo->large_url }}" target="_blank">Открыть</a></p>
-//     <p>Medium: <a href="{{ $photo->medium_url }}" target="_blank">Открыть</a></p>
-//     <p>Thumb: <a href="{{ $photo->thumb_url }}" target="_blank">Открыть</a></p>
-// </div>

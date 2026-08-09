@@ -1,6 +1,6 @@
 <x-guest-layout>
     <!-- HERO СЕКЦИЯ -->
-    <section class="relative overflow-hidden">
+    <section class="relative overflow-hidden h-[calc(100vh-4rem)]">
         <!-- Фоновые свечения (декор) -->
         <div
             class="absolute top-0 left-1/2 -translate-x-1/2 w-[600px] h-[600px] bg-primary/20 rounded-full blur-[120px] -z-10 pointer-events-none">

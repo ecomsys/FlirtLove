@@ -1,4 +1,4 @@
-<?php
+<?php 
 
 namespace App\Jobs;
 
@@ -14,31 +14,28 @@ use Intervention\Image\ImageManager;
 use Intervention\Image\Drivers\Gd\Driver;
 use Illuminate\Support\Facades\DB;
 
-/**
- * Job для обработки одобренных фотографий.
- * Создает 4 версии (original, large, medium, thumb) в формате WebP,
- * сохраняет пути в БД и удаляет исходный загруженный файл.
- */
+//php artisan queue:work --queue=heavy 
+
 class ProcessApprovedPhoto implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    /** @var int Максимальное количество попыток выполнения */
     public int $tries = 3;
-    
-    /** @var int Таймаут выполнения в секундах */
     public int $timeout = 120;
 
-    public function __construct(public int $photoId) {}
+    public function __construct(public int $photoId)
+    {
+        // Тяжелые джобы ресайза лучше гнать в отдельную очередь, чтобы не блокировать почту/пуши
+        $this->onQueue('heavy');
+    }
 
     /**
      * Генерация пути к файлу на основе хэша ID пользователя.
-     * Позволяет распределить файлы по папкам для оптимизации ФС.
      */
-    private function getStoragePath(int $userId, string $fileId, string $type): string
+    private function getStoragePath(int $userId, string $photoType, string $size, string $fileId): string
     {
         $hash = substr(md5((string) $userId), 0, 3);
-        return "photos/approved/{$hash}/{$userId}/{$type}_{$fileId}.webp";
+        return "photos/{$photoType}/{$hash}/{$userId}/{$size}_{$fileId}.webp";
     }
 
     /**
@@ -46,12 +43,11 @@ class ProcessApprovedPhoto implements ShouldQueue
      */
     public function handle(): void
     {
-        // Увеличиваем лимит памяти для Intervention Image
+        // Увеличиваем лимит памяти для Intervention Image (GD драйвер прожорлив)
         ini_set('memory_limit', '256M');
 
-        // Выносим массив путей наружу, чтобы иметь доступ к нему в catch
-        // для очистки недособранных файлов в случае ошибки.
         $paths = [];
+        $originalDbPath = null;
 
         try {
             $photo = Photo::find($this->photoId);
@@ -61,19 +57,21 @@ class ProcessApprovedPhoto implements ShouldQueue
             }
 
             // Защита от двойной обработки
-            if ($photo->status !== 'pending') {
+            if ($photo->path_large) {
                 Log::info('Фото уже обработано', ['photo_id' => $this->photoId, 'status' => $photo->status]);
                 return;
             }
 
             $userId = $photo->user_id;
-            $originalDbPath = $photo->path;
+            $photoType = $photo->type; // 'profile' или 'verification'
+            
+            $originalDbPath = $photo->path_original;
             $originalPath = storage_path('app/public/' . $originalDbPath);
             
             if (!file_exists($originalPath)) {
                 Log::warning('Оригинальный файл не найден', ['path' => $originalPath]);
-                // Если файла нет, просто меняем статус, чтобы не висел в pending
-                $photo->update(['status' => 'approved']);
+                // ИСПРАВЛЕНО: null вместо 0, чтобы не нарушить Foreign Key
+                $photo->markAsRejected(null, 'file_missing'); 
                 return;
             }
 
@@ -81,16 +79,15 @@ class ProcessApprovedPhoto implements ShouldQueue
             $manager = new ImageManager(new Driver());
             $image = $manager->read($originalPath);
 
-            // Конфигурация размеров и качества сжатия
             $sizes = [
                 'original' => ['width' => null, 'quality' => 90],
-                'large' => ['width' => 1600, 'quality' => 85],
-                'medium' => ['width' => 820, 'quality' => 80],
-                'thumb' => ['width' => 200, 'quality' => 70, 'cover' => true], // cover - обрезка в квадрат
+                'large'    => ['width' => 1600, 'quality' => 85],
+                'medium'   => ['width' => 820, 'quality' => 80],
+                'thumb'    => ['width' => 200, 'quality' => 70, 'cover' => true],
             ];
             
-            foreach ($sizes as $type => $config) {
-                $fullPath = $this->getStoragePath($userId, $fileId, $type);
+            foreach ($sizes as $sizeName => $config) {
+                $fullPath = $this->getStoragePath($userId, $photoType, $sizeName, $fileId);
                 
                 if (isset($config['cover']) && $config['cover']) {
                     $resized = $image->cover(200, 200);
@@ -105,10 +102,9 @@ class ProcessApprovedPhoto implements ShouldQueue
                     (string) $resized->toWebp($config['quality'])
                 );
                 
-                $paths[$type] = $fullPath;
+                $paths[$sizeName] = $fullPath;
                 
-                // Очищаем память от ресурса Intervention Image
-                if ($type !== 'original') {
+                if ($sizeName !== 'original') {
                     unset($resized);
                 }
             }
@@ -116,49 +112,50 @@ class ProcessApprovedPhoto implements ShouldQueue
             unset($image);
             gc_collect_cycles();
 
-            // Обновляем БД и удаляем оригинал в транзакции
-            DB::transaction(function () use ($photo, $paths, $originalDbPath) {
+            // Обновляем БД в транзакции (файловые операции не внутри!)
+            DB::transaction(function () use ($photo, $paths) {
                 $photo->update([
-                    'path' => $paths['medium'],
                     'path_original' => $paths['original'],
-                    'path_large' => $paths['large'],
-                    'path_medium' => $paths['medium'],
-                    'path_thumb' => $paths['thumb'],
-                    'status' => 'approved',
+                    'path_large'    => $paths['large'],
+                    'path_medium'   => $paths['medium'],
+                    'path_thumb'    => $paths['thumb'],
+                    // Статус уже 'approved', но мы обновляем moderated_at для фиксации времени готовности
+                    'moderated_at'  => now(),
                 ]);
-
-                Storage::disk('public')->delete($originalDbPath);
             });
+
+            // Удаляем исходный загруженный файл ТОЛЬКО после успешного коммита в БД
+            if ($originalDbPath) {
+                Storage::disk('public')->delete($originalDbPath);
+            }
 
             Log::info('Фото успешно обработано', [
                 'photo_id' => $this->photoId,
-                'user_id' => $userId,
+                'user_id'  => $userId,
             ]);
 
         } catch (\Exception $e) {
             Log::error('Ошибка обработки фото', [
                 'photo_id' => $this->photoId,
-                'error' => $e->getMessage(),
+                'error'    => $e->getMessage(),
             ]);
 
-            // Чистим недособранные webp-файлы, если произошла ошибка на середине цикла
+            // Чистим недособранные webp-файлы
             foreach ($paths as $failedPath) {
                 Storage::disk('public')->delete($failedPath);
             }
 
-            // Откатываем статус фото, чтобы его можно было попробовать снова
-            DB::transaction(function () {
-                $photo = Photo::find($this->photoId);
-                if ($photo && $photo->status === 'pending') {
-                    $photo->update(['status' => 'rejected']);
-                }
-            });
+            // ИСПРАВЛЕНО: Откатываем статус фото. 
+            // Проверяем на 'approved', так как экшен уже поменял статус до диспатча.
+            $photo = Photo::find($this->photoId);
+            if ($photo && $photo->status === 'approved') {
+                $photo->markAsRejected(null, 'processing_error');
+            }
 
-            // Логика ретраев: если попытки не исчерпаны, откладываем на 5 минут
             if ($this->attempts() < $this->tries) {
+                // Повторяем через 5 минут
                 $this->release(60 * 5);
             } else {
-                // Если попытки кончились, полностью фейлим Job
                 $this->fail($e);
             }
         }

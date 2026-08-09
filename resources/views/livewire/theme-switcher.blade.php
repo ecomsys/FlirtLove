@@ -1,4 +1,5 @@
 <?php
+
 use Livewire\Volt\Component;
 use Illuminate\Support\Facades\Auth;
 
@@ -7,30 +8,42 @@ new class extends Component {
 
     public function mount(): void
     {
-        if (Auth::check() && Auth::user()->theme) {
-            $this->theme = Auth::user()->theme;
+        if (Auth::check()) {
+            // Для авторизованных БЕЗУСЛОВНО верим БД
+            $this->theme = Auth::user()->preferences?->theme ?? 'light';
         } else {
-            $this->theme = session()->get('theme', 'light');
+            // Для гостей верим localStorage (который синкался в <head>)
+            // В PHP мы не можем читать LS напрямую, поэтому берем дефолт, 
+            // а реальным переключением для гостей пусть занимается только JS
+            $this->theme = request()->cookie('theme', 'light'); 
         }
     }
 
-    public function saveThemeToDb(): void
+    public function toggleTheme(): void
     {
         $this->theme = $this->theme === 'light' ? 'dark' : 'light';
-        session()->put('theme', $this->theme);
 
         if (Auth::check()) {
-            Auth::user()->update(['theme' => $this->theme]);
+            $user = Auth::user();
+            // Сохраняем в БД
+            if ($user->preferences) {
+                $user->preferences->update(['theme' => $this->theme]);
+            } else {
+                $user->preferences()->create(['theme' => $this->theme]);
+            }
         }
+        
+        // Кидаем событие в браузер, чтобы Alpine.update класс на <html> И обновил localStorage!
+        $this->dispatch('theme-toggled', theme: $this->theme);
     }
 }; ?>
 
 
-<button x-on:click="window.toggleTheme(); $wire.saveThemeToDb()" type="button"
+<button wire:click="toggleTheme" type="button"
     class="flex items-center gap-1 p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     aria-label="Toggle theme">
+    
     <!-- Иконка Солнца (показывается в светлой теме) -->
-    <!-- Используем классы dark:hidden и hidden dark:block для идеальной смены иконки -->
     <svg class="w-5 h-5 block dark:hidden" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
         stroke-width="1.5" stroke="currentColor">
         <path stroke-linecap="round" stroke-linejoin="round"

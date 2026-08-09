@@ -2,85 +2,65 @@
 
 namespace App\Console\Commands;
 
-use App\Models\User;
+use App\Jobs\SendBroadcastJob;
 use App\Models\Broadcast;
-use App\Notifications\BroadcastNotification;
-use Illuminate\Support\Facades\Notification;
-use Illuminate\Console\Attributes\Description;
-use Illuminate\Console\Attributes\Signature;
+use App\Models\AdminLog;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
 
-// Запусти обаботчик очередей 
-// php artisan schedule:work
+// запускаем 2 терминала обработки очередей чтобы действия на сайте не задерживали отправку уведомлений
 
-// Настроить cron на сервере
-// На продакшене (или локальном сервере с Linux) нужно добавить cron-задачу:
+// php artisan queue:work --queue=default
+// php artisan queue:work --queue=broadcasts
 
-// bash
-// * * * * * cd /путь-к-проекту && php artisan schedule:run >> /dev/null 2>&1
-
-#[Signature('broadcasts:send-scheduled')]
-#[Description('Отправляет запланированные оповещения')]
 class SendScheduledBroadcasts extends Command
 {
-public function handle()
-{
-    $now = now();
+    protected $signature = 'broadcasts:send-scheduled';
+    protected $description = 'Отправляет запланированные оповещения (рассылки)';
 
-    $broadcasts = Broadcast::where('status', 'scheduled')
-        ->where('scheduled_at', '<=', $now)
-        ->get();
-
-    if ($broadcasts->isEmpty()) {
-        $this->info('Нет запланированных оповещений для отправки.');
-        return 0;
-    }
-
-    $sentCount = 0;
-
-    foreach ($broadcasts as $broadcast) {
-        try {
-            // 1. Сначала отправляем
-            $this->sendBroadcastToUsers($broadcast);
-
-            // 2. Только если успешно, меняем статус
-            $broadcast->update([
-                'status' => 'sent',
-                'sent_at' => $now,
-            ]);
-
-            $sentCount++;
-            $this->info("Оповещение #{$broadcast->id} успешно отправлено.");
-        } catch (\Exception $e) {
-            $this->error("Ошибка при отправке #{$broadcast->id}: " . $e->getMessage());
-            Log::error("Сбой отправки запланированного оповещения #{$broadcast->id}: " . $e->getMessage());
-        }
-    }
-
-    $this->info("Отправлено {$sentCount} запланированных оповещений.");
-    return 0;
-}
-
-    /**
-     * Отправка оповещения пользователям (копия sendRealBroadcast)
-     */
-    private function sendBroadcastToUsers($broadcast): void
+       public function handle(): int
     {
-        $users = $broadcast->user_id === null 
-            ? User::where('is_banned', false)->get(['id', 'name', 'email'])
-            : User::where('id', $broadcast->user_id)->get(['id', 'name', 'email']);
+        $broadcasts = Broadcast::dueForDispatch()->get();
 
-        if ($users->isEmpty()) {
-            return;
+        if ($broadcasts->isEmpty()) {
+            $this->info('Нет запланированных оповещений для отправки.');
+            return 0;
         }
 
-        Notification::send($users, new BroadcastNotification($broadcast));
+        foreach ($broadcasts as $broadcast) {
+            try {
+                // Сохраняем состояние ДО (для диффа в логах)
+                $before = $broadcast->only(['status', 'started_at']);
 
-        Log::info('Запланированное оповещение отправлено', [
-            'broadcast_id' => $broadcast->id,
-            'type' => $broadcast->type,
-            'sent_count' => $users->count(),
-        ]);
+                $updated = Broadcast::where('id', $broadcast->id)
+                    ->where('status', 'scheduled')
+                    ->update([
+                        'status' => 'sending', 
+                        'started_at' => now()
+                    ]);
+                
+                if ($updated) {
+                    // Обновляем модель в памяти, чтобы получить точное время started_at
+                    $broadcast->refresh();
+                    $after = $broadcast->only(['status', 'started_at']);
+
+                    // ПИШЕМ В ЖУРНАЛ! (Передаем null вместо админа, так как это система)
+                    AdminLog::record('broadcast.send_scheduled', $broadcast, null, $before, $after);
+                    Log::info("Крон запустил рассылку по расписанию", ['broadcast_id' => $broadcast->id]);
+
+                    SendBroadcastJob::dispatch($broadcast->id, $broadcast->target_audience)->onQueue('broadcasts');
+                    
+                    $this->info("Оповещение #{$broadcast->id} передано в очередь на отправку.");
+                } else {
+                    $this->warn("Оповещение #{$broadcast->id} уже запущено или изменено, пропуск.");
+                }
+            } catch (\Exception $e) {
+                $this->error("Критическая ошибка при запуске #{$broadcast->id}: " . $e->getMessage());
+                Log::error("Сбой отправки оповещения #{$broadcast->id}: " . $e->getMessage());
+                $broadcast->markAsFailed();
+            }
+        }
+
+        return 0;
     }
 }

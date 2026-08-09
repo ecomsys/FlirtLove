@@ -314,3 +314,426 @@
 
 
 Брат вот я полностью выдернул все опции личной информации для расширенного поиска прямо со страницы работающего сайта, нам нужно повторить наши опции в точности для "Личная информация"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<?php
+
+use App\Models\User;
+use App\Models\Photo;
+use App\Models\PhotoComment;
+use Livewire\Volt\Component;
+use Livewire\Attributes\Layout;
+use Illuminate\Support\Facades\Auth;
+use App\Notifications\UserBanned;
+use App\Notifications\PhotoModerated;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Cache;
+
+new #[Layout('layouts.admin')] class extends Component 
+{
+    public User $user;
+
+    public $address = null;
+    public $editLat = null;
+    public $editLng = null;
+    
+    // Свойство для хранения фото на модерации
+    public $pendingPhotos;
+
+    public function mount(User $user): void
+    {
+        // 1. Загружаем альбомы с фото и жалобы (только pending для модерации)
+        $this->user = $user->load([
+            'albums' => function ($query) {
+                $query->with(['photos' => function ($q) {
+                    $q->orderBy('is_primary', 'desc')->orderBy('created_at', 'desc');
+                }])->orderBy('is_default', 'desc')->orderBy('name');
+            },
+            'receivedReports' => fn($q) => $q->where('status', 'pending')->with('user'),
+            'sentReports' => fn($q) => $q->where('status', 'pending')->with('reportedUser'),
+            'photoComments' => fn($q) => $q->where('status', 'pending')->with('photo'),
+        ]);
+        
+        // 2. Оптимизация: Считаем фото на модерации одним запросом в БД
+        $this->user->loadCount(['photos as pending_photos_count' => function ($q) {
+            $q->where('status', 'pending');
+        }]);
+
+        // 3. Загружаем фото на модерации для быстрого доступа
+        $this->pendingPhotos = $user->photos()->where('status', 'pending')->get();
+
+        // 4. Берем адрес из БД, если его нет — запрашиваем по координатам
+        if ($user->latitude && $user->longitude) {
+            $this->address = $user->address ?? $this->getAddressFromCoords($user->latitude, $user->longitude);
+        }
+
+        $this->editLat = $user->latitude;
+        $this->editLng = $user->longitude;
+    }
+
+    /**
+     * Полное физическое удаление всех версий фото с диска.
+     */
+    private function deletePhotoFiles(Photo $photo): void
+    {
+        $paths = [$photo->path, $photo->path_original, $photo->path_large, $photo->path_medium, $photo->path_thumb];
+        foreach ($paths as $path) {
+            if ($path && !filter_var($path, FILTER_VALIDATE_URL)) {
+                Storage::disk('public')->delete($path);
+            }
+        }
+    }
+
+    private function getAddressFromCoords(float $lat, float $lng): ?string
+    {
+        $cacheKey = "address_{$lat}_{$lng}";
+        return Cache::remember($cacheKey, 86400, function () use ($lat, $lng) {
+            try {
+                $response = Http::withHeaders([
+                    'User-Agent' => 'LoveClone/1.0',
+                    'Accept-Language' => 'ru-RU,ru;q=0.9',
+                ])->get('https://nominatim.openstreetmap.org/reverse', [
+                    'lat' => $lat, 'lon' => $lng, 'format' => 'json', 'zoom' => 18,
+                ]);
+
+                if ($response->successful()) {
+                    return $response->json()['display_name'] ?? null;
+                }
+                return null;
+            } catch (\Exception $e) {
+                return null;
+            }
+        });
+    }
+
+    public function updateAddressFromCoords(float $lat, float $lng): ?string
+    {
+        $this->address = $this->getAddressFromCoords($lat, $lng);
+        return $this->address;
+    }
+
+    public function updateLocation(): void
+    {
+        $this->validate([
+            'editLat' => 'required|numeric|between:-90,90',
+            'editLng' => 'required|numeric|between:-180,180',
+        ]);
+
+        $actualAddress = $this->getAddressFromCoords((float) $this->editLat, (float) $this->editLng);
+
+        $this->user->latitude = $this->editLat;
+        $this->user->longitude = $this->editLng;
+        $this->user->address = $actualAddress;
+        $this->user->save();
+
+        DB::table('users')->where('id', $this->user->id)->update([
+            'location' => DB::raw("ST_SetSRID(ST_MakePoint({$this->editLng}, {$this->editLat}), 4326)"),
+        ]);
+
+        $this->address = $actualAddress;
+        $this->dispatch('show-toast', type: 'success', message: 'Координаты и адрес обновлены');
+    }
+
+    public function toggleBan(): void
+    {
+        if ($this->user->id === Auth::id()) {
+            $this->dispatch('show-toast', type: 'error', message: 'Нельзя забанить самого себя!');
+            return;
+        }
+
+        $newStatus = !$this->user->is_banned;
+        DB::transaction(function () use ($newStatus) {
+            $this->user->update(['is_banned' => $newStatus]);
+        });
+
+        $this->user->notify(new UserBanned($newStatus));
+        $this->dispatch('show-toast', type: 'success', message: $newStatus ? "Пользователь {$this->user->name} забанен" : "Пользователь {$this->user->name} разбанен");
+        $this->dispatch('$refresh');
+    }
+
+    public function deletePhoto(int $photoId): void
+    {
+        $photo = $this->user->photos()->find($photoId);
+        if ($photo) {
+            DB::transaction(function () use ($photo) {
+                $this->deletePhotoFiles($photo);
+                $photo->delete();
+            });
+
+            $this->user->notify(new PhotoModerated($photoId, $this->user->id, 'deleted', 1));
+            $this->user->load(['albums' => function ($query) {
+                $query->with(['photos' => function ($q) {
+                    $q->orderBy('is_primary', 'desc')->orderBy('created_at', 'desc');
+                }])->orderBy('is_default', 'desc')->orderBy('name');
+            }]);
+            $this->dispatch('show-toast', type: 'success', message: 'Фото удалено.');
+            
+            // Обновляем данные для вкладки модерации
+            $this->pendingPhotos = $this->user->photos()->where('status', 'pending')->get();
+        }
+    }
+
+    public function setPrimaryPhoto(int $photoId): void
+    {
+        DB::transaction(function () use ($photoId) {
+            $this->user->photos()->update(['is_primary' => false]);
+            $this->user->photos()->where('id', $photoId)->update(['is_primary' => true]);
+        });
+
+        $this->user->load(['albums' => function ($query) {
+            $query->with(['photos' => function ($q) {
+                $q->orderBy('is_primary', 'desc')->orderBy('created_at', 'desc');
+            }])->orderBy('is_default', 'desc')->orderBy('name');
+        }]);
+
+        $this->dispatch('show-toast', type: 'success', message: 'Фото установлено как основное');
+    }
+}; 
+?>
+
+<!-- Инициализируем Alpine с памятью вкладок (localStorage) -->
+<div x-data='{
+    tab: localStorage.getItem("admin_user_tab") || "profile",
+    initMapTab() {
+        if (this.tab === "map") {
+            this.$nextTick(() => {
+                window.setupMap(
+                    @json($user->latitude),
+                    @json($user->longitude),
+                    @json($address),
+                    @json($user)
+                );
+            });
+        }
+    },
+    init() {
+        this.$watch("tab", value => {
+            localStorage.setItem("admin_user_tab", value);
+            this.initMapTab();
+        });
+        this.initMapTab();
+    }
+}' class="space-y-6">
+    <!-- Шапка профиля -->
+    <div class="flex items-center justify-between flex-wrap gap-4">
+        <div class="flex items-center gap-4">
+            <a href="{{ route('admin.users.index') }}" class="p-2 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors">
+                <x-lucide-arrow-left class="w-5 h-5" />
+            </a>
+            <div>
+                <h1 class="text-2xl font-semibold flex items-center gap-2 flex-wrap">
+                    {{ $user->name }}
+                    <span class="text-xs text-muted-foreground font-normal">(ID: {{ $user->id }})</span>
+                    @if ($user->is_admin) <x-ui.badge variant="default" size="sm">Admin</x-ui.badge> @endif
+                    @if ($user->is_banned) <x-ui.badge variant="destructive" size="sm">Забанен</x-ui.badge> @endif
+                </h1>
+                <p class="text-sm text-muted-foreground">{{ $user->email }}</p>
+            </div>
+        </div>
+
+        <div class="flex items-center gap-2">
+            @if (!$user->is_admin)
+                <x-ui.button wire:click="toggleBan" wire:loading.attr="disabled" wire:confirm="Изменить статус блокировки пользователя?" variant="{{ $user->is_banned ? 'success' : 'destructive' }}">
+                    <span wire:loading.remove wire:target="toggleBan">{{ $user->is_banned ? 'Разбанить' : 'Забанить' }}</span>
+                    <span wire:loading wire:target="toggleBan">Обработка...</span>
+                </x-ui.button>
+            @endif
+
+            <a href="{{ route('admin.support.show', ['user_id' => $user->id]) }}" wire:navigate>
+                <x-ui.button variant="default">
+                    <x-lucide-headphones class="w-4 h-4" /> Чат поддержки
+                </x-ui.button>
+            </a>
+
+            <x-ui.button variant="outline" onclick="window.location.href='mailto:{{ $user->email }}'">
+                <x-lucide-mail class="w-4 h-4" /> Email
+            </x-ui.button>           
+        </div>
+    </div>
+
+    <!-- Меню вкладок -->
+    <div class="border-b border-border">
+        <nav class="flex gap-4 flex-wrap">
+            <button @click="tab = 'profile'" :class="tab === 'profile' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors">
+                <x-lucide-user class="w-4 h-4 inline mr-1" /> Профиль
+            </button>
+            <button @click="tab = 'photos'" :class="tab === 'photos' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors">
+                <x-lucide-image class="w-4 h-4 inline mr-1" /> Фотографии ({{ $user->photos->count() }})
+            </button>
+            <button @click="tab = 'sessions'" :class="tab === 'sessions' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors">
+                <x-lucide-clock class="w-4 h-4 inline mr-1" /> Активность
+            </button>
+            <button @click="tab = 'moderation'" :class="tab === 'moderation' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors">
+                <x-lucide-shield class="w-4 h-4 inline mr-1" /> Модерация
+                @if($this->pendingPhotos->count() > 0 || $user->photoComments->count() > 0 || $user->receivedReports->count() > 0)
+                    <span class="ml-1 w-2 h-2 rounded-full bg-destructive inline-block"></span>
+                @endif
+            </button>
+            <button @click="tab = 'map'" :class="tab === 'map' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors">
+                <x-lucide-map class="w-4 h-4 inline mr-1" /> Адрес
+            </button>
+        </nav>
+    </div>
+
+    <!-- Контент вкладок -->
+    <div class="bg-card border border-border rounded-lg p-6">
+
+		...
+		...
+		...
+		....
+
+        <!-- Вкладка 5: КАРТА -->
+        <div x-show="tab === 'map'" style="display: none;" class="space-y-4">   
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                <div class="lg:col-span-2" wire:ignore>
+                    <div id="user-map" style="height: 450px; width: 100%; border-radius: 0.5rem; overflow: hidden;"></div>
+                </div>
+                <div class="space-y-4">
+                    <div class="p-4 bg-muted/20 rounded-lg border border-border">
+                        <p class="text-sm font-medium">📍 Адрес</p>
+                        <p class="text-sm mt-1" id="user-address">{{ $address ?? 'Не определён' }}</p>
+                    </div>
+                    <div class="p-4 bg-muted/20 rounded-lg border border-border">
+                        <p class="text-sm font-medium">Координаты</p>
+                        <div class="mt-2 space-y-2">
+                            <x-ui.input wire:model="editLat" label="Широта" type="number" step="any" oninput="updateMarkerFromInputs()" />
+                            <x-ui.input wire:model="editLng" label="Долгота" type="number" step="any" oninput="updateMarkerFromInputs()" />
+                            <x-ui.button wire:click="updateLocation" wire:loading.attr="disabled" class="w-full">
+                                <span wire:loading.remove wire:target="updateLocation">Сохранить</span>
+                                <span wire:loading wire:target="updateLocation" class="flex items-center justify-center gap-3">
+                                    <x-ui.spinner class="w-4 h-4 inline" /> Сохранение...
+                                </span>
+                            </x-ui.button>
+                        </div>
+                    </div>
+                    <div class="p-4 bg-muted/20 rounded-lg border border-border">
+                        <p class="text-xs text-muted-foreground">🔁 Перетащите маркер, чтобы изменить позицию, или введите координаты вручную.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@push('scripts')
+<script>
+    if (typeof Fancybox !== 'undefined') {
+        Fancybox.defaults.Hash = false;
+    }
+
+    window.leafletMap = null;
+    window.leafletMarker = null;
+
+    window.setupMap = function(initialLat, initialLng, initialAddress, user) {
+        const container = document.getElementById('user-map');
+        if (!container) return;
+
+        if (window.leafletMap) {
+            setTimeout(() => {
+                window.leafletMap.invalidateSize();
+                if (window.leafletMarker) window.leafletMarker.openPopup();
+            }, 50);
+            return;
+        }
+
+        const lat = initialLat || 55.7558;
+        const lng = initialLng || 37.6173;
+
+        window.leafletMap = L.map('user-map').setView([lat, lng], 13);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; OpenStreetMap contributors'
+        }).addTo(window.leafletMap);
+
+        const createPopupContent = (u, addr) => {
+            const avatar = u.avatar_url || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(u.name) + '&background=random&size=50';
+            const age = u.birth_date ? new Date().getFullYear() - new Date(u.birth_date).getFullYear() : '?';
+            return `
+                <div class="min-w-[12rem] font-sans select-none">
+                    <div class="flex items-center gap-3 mb-1.5">
+                        <img src="${avatar}" class="w-10 h-10 rounded-full object-cover" alt="Avatar">
+                        <div>
+                            <strong class="text-base">${u.name}</strong><br>
+                            <span class="text-sm text-muted-foreground">Возраст: ${age}</span>
+                        </div>
+                    </div>
+                    <div class="text-sm text-muted-foreground border-t border-border pt-1.5">
+                        ${addr || 'Адрес не определён'}
+                    </div>
+                </div>
+            `;
+        };
+
+        window.leafletMarker = L.marker([lat, lng], { draggable: true })
+            .addTo(window.leafletMap)
+            .bindPopup(createPopupContent(user, initialAddress))
+            .openPopup();
+
+        window.leafletMarker.on('dragend', async function(e) {
+            const pos = window.leafletMarker.getLatLng();
+            @this.set('editLat', pos.lat);
+            @this.set('editLng', pos.lng);
+
+            const addressElement = document.getElementById('user-address');
+            if (addressElement) addressElement.innerText = 'Определение адреса...';
+
+            const newAddress = await @this.call('updateAddressFromCoords', pos.lat, pos.lng);
+            
+            if (newAddress) {
+                if (addressElement) addressElement.innerText = newAddress;
+                const popup = window.leafletMarker.getPopup();
+                if (popup) popup.setContent(createPopupContent(user, newAddress));
+            } else {
+                if (addressElement) addressElement.innerText = 'Адрес не определён';
+            }
+        });
+
+        window.updateMarkerFromInputs = function() {
+            const inputLat = document.querySelector('input[wire\\:model="editLat"]');
+            const inputLng = document.querySelector('input[wire\\:model="editLng"]');
+            if (!inputLat || !inputLng || !window.leafletMarker) return;
+
+            const newLat = parseFloat(inputLat.value);
+            const newLng = parseFloat(inputLng.value);
+
+            if (!isNaN(newLat) && !isNaN(newLng)) {
+                window.leafletMarker.setLatLng([newLat, newLng]);
+                window.leafletMap.setView([newLat, newLng], 13);
+            }
+        };
+
+        setTimeout(() => {
+            if (window.leafletMap) window.leafletMap.invalidateSize();
+        }, 100);
+    };
+</script>
+@endpush

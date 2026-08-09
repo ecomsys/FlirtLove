@@ -26,6 +26,7 @@ return [
     'romantic' => 'Romantic',
     'family' => 'Family',
     'casual' => 'Casual',
+    'travel' => 'Travel',
     'final_step' => 'Final Step',
     'city' => 'City',
     'email' => 'Email',

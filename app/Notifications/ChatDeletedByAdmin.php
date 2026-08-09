@@ -1,5 +1,4 @@
 <?php
-
 namespace App\Notifications;
 
 use Illuminate\Bus\Queueable;
@@ -20,7 +19,7 @@ class ChatDeletedByAdmin extends Notification implements ShouldQueue
     }
 
     /**
-     *  Обновляем каналы доставки с учетом настроек юзера
+     *  Каналы доставки с учетом глобальных тумблеров и категорий
      */
     public function via($notifiable): array
     {
@@ -31,8 +30,8 @@ class ChatDeletedByAdmin extends Notification implements ShouldQueue
             $channels[] = 'broadcast';
         }
 
-        // Проверяем настройку Email для модерации (используем on_report ?? true)
-        if ($notifiable->email_settings['on_report'] ?? true) {
+        // Проверяем глобальный тумблер Email И категорию "Новые события" (on_event)
+        if ($notifiable->email_enabled && ($notifiable->email_settings['on_event'] ?? true)) {
             $channels[] = 'mail';
         }
 
@@ -40,7 +39,7 @@ class ChatDeletedByAdmin extends Notification implements ShouldQueue
     }
 
     /**
-     *  Раскомментировали и обновили метод toMail
+     *  Отправка Email
      */
     public function toMail($notifiable): MailMessage
     {
@@ -54,22 +53,36 @@ class ChatDeletedByAdmin extends Notification implements ShouldQueue
             ->line('Спасибо за понимание!');
     }
 
+    /**
+     *  Запись в БД (Колокольчик)
+     */
     public function toDatabase($notifiable): array
     {
         return [
             'type' => 'chat_deleted',
             'title' => '🗑️ Чат удален',
             'message' => "Ваша переписка была удалена модератором. Причина: {$this->reason}.",
+            'action_url' => url('/'),
+            'data' => [
+                'reason' => $this->reason,
+            ]
         ];
     }
 
+    /**
+     *  Realtime push через WebSockets
+     */
     public function toBroadcast($notifiable): BroadcastMessage
     {
         return new BroadcastMessage([
             'type' => 'chat_deleted',
             'title' => '🗑️ Чат удален',
             'message' => "Ваша переписка была удалена модератором. Причина: {$this->reason}.",
+            'action_url' => url('/'),
             'timestamp' => now()->toDateTimeString(),
+            'data' => [
+                'reason' => $this->reason,
+            ]
         ]);
     }
 }

@@ -12,36 +12,52 @@ class SwipeSeeder extends Seeder
 {
     public function run(): void
     {
-        // ✅ Исключаем админов из свайпов
-        $users = User::excludeAdmins()->pluck('id')->toArray();
+        // Берем только обычных пользователей с заполненными профилями
+        $users = User::where('role', 'user')
+            ->where('has_completed_onboarding', true)
+            ->pluck('id')
+            ->toArray();
+            
         $userCount = count($users);
 
         if ($userCount < 2) {
-            $this->command->warn('Нужно минимум 2 обычных пользователя для создания свайпов.');
+            $this->command->warn('⚠️ Нужно минимум 2 обычных пользователя для создания свайпов.');
             return;
         }
 
-        $this->command->info("Создаём свайпы и матчи для {$userCount} пользователей...");
+        $this->command->info("👥 Найдено {$userCount} пользователей для свайпов...");
 
-        $swipesPerUser = 5;
-        $maxSwipes = 15;
+        // Очищаем старые свайпы и матчи
+        $oldSwipes = Swipe::count();
+        $oldMatches = UserMatch::count();
+        
+        if ($oldSwipes > 0 || $oldMatches > 0) {
+            $this->command->info("🗑️ Удаляем старые данные: {$oldSwipes} свайпов, {$oldMatches} матчей");
+            Swipe::query()->delete();
+            UserMatch::query()->delete();
+        }
+
         $totalSwipes = 0;
         $totalMatches = 0;
 
-        DB::transaction(function () use ($users, $swipesPerUser, $maxSwipes, &$totalSwipes, &$totalMatches) {
-            foreach ($users as $userId) {
-                $existingSwipes = Swipe::where('user_id', $userId)->count();
-                if ($existingSwipes >= 20) {
-                    continue;
-                }
+        // Массив в памяти для быстрого поиска взаимных лайков (без запросов к БД)
+        $positiveSwipes = [];
 
-                $count = rand($swipesPerUser, $maxSwipes);
-                $alreadySwiped = Swipe::where('user_id', $userId)->pluck('target_user_id')->toArray();
-                $available = array_diff($users, [$userId], $alreadySwiped);
+        $this->command->info('🔄 Создаем свайпы и матчи...');
+        $bar = $this->command->getOutput()->createProgressBar($userCount);
+
+        DB::transaction(function () use ($users, &$totalSwipes, &$totalMatches, &$positiveSwipes, $bar) {
+            foreach ($users as $userId) {
+                // Доступные цели (исключаем себя)
+                $available = array_diff($users, [$userId]);
                 shuffle($available);
+                
+                // Каждый юзер свайпнет от 3 до 8 человек
+                $count = rand(3, min(8, count($available)));
                 $targets = array_slice($available, 0, $count);
 
                 foreach ($targets as $targetId) {
+                    // Рандомный тип свайпа (60% like, 30% dislike, 10% superlike)
                     $rand = rand(1, 100);
                     if ($rand <= 60) {
                         $type = 'like';
@@ -51,44 +67,81 @@ class SwipeSeeder extends Seeder
                         $type = 'superlike';
                     }
 
-                    if (Swipe::where('user_id', $userId)->where('target_user_id', $targetId)->exists()) {
-                        continue;
-                    }
-
+                    // Создаем свайп (rewinded_at по умолчанию null)
                     Swipe::create([
                         'user_id' => $userId,
                         'target_user_id' => $targetId,
                         'type' => $type,
+                        'created_at' => now()->subDays(rand(0, 30)),
                     ]);
                     $totalSwipes++;
 
+                    // ПРОВЕРКА НА МАТЧ (только для like и superlike)
                     if (in_array($type, ['like', 'superlike'])) {
-                        $mutual = Swipe::where('user_id', $targetId)
-                            ->where('target_user_id', $userId)
-                            ->whereIn('type', ['like', 'superlike'])
-                            ->exists();
+                        // Записываем положительный свайп в память
+                        $positiveSwipes[$userId][] = $targetId;
 
-                        if ($mutual) {
-                            $matchExists = UserMatch::where(function ($q) use ($userId, $targetId) {
-                                $q->where('user1_id', $userId)->where('user2_id', $targetId);
-                            })->orWhere(function ($q) use ($userId, $targetId) {
-                                $q->where('user1_id', $targetId)->where('user2_id', $userId);
-                            })->exists();
-
-                            if (!$matchExists) {
-                                UserMatch::create([
-                                    'user1_id' => min($userId, $targetId),
-                                    'user2_id' => max($userId, $targetId),
-                                ]);
+                        // Проверяем, есть ли встречный лайк от target к user (в памяти, без БД!)
+                        if (isset($positiveSwipes[$targetId]) && in_array($userId, $positiveSwipes[$targetId])) {
+                            
+                            // Используем наш крутой хелпер из модели UserMatch!
+                            // Он сам найдет или создаст запись, соблюдая правило (user1 < user2).
+                            $match = UserMatch::createMatch($userId, $targetId);
+                            
+                            // Если мэтч только что создался (а не просто найден старый)
+                            if ($match->wasRecentlyCreated) {
                                 $totalMatches++;
                             }
                         }
                     }
                 }
+
+                $bar->advance();
             }
         });
 
-        $this->command->info("✅ Создано свайпов: {$totalSwipes}");
-        $this->command->info("✅ Создано матчей: {$totalMatches}");
+        $bar->finish();
+        $this->command->newLine(2);
+
+        // ============================================
+        // СТАТИСТИКА
+        // ============================================
+        $stats = [
+            'total_swipes' => Swipe::count(),
+            'total_matches' => UserMatch::count(),
+            'likes' => Swipe::where('type', 'like')->count(),
+            'dislikes' => Swipe::where('type', 'dislike')->count(),
+            'superlikes' => Swipe::where('type', 'superlike')->count(),
+            'users_with_swipes' => Swipe::distinct('user_id')->count(),
+        ];
+
+        $this->command->info('✅ Создано свайпов: ' . $stats['total_swipes']);
+        $this->command->info('✅ Создано матчей: ' . $stats['total_matches']);
+        $this->command->info('');
+        $this->command->info('📊 Статистика:');
+        $this->command->info("   ┌─────────────────────┬──────────┐");
+        $this->command->info("   │ Тип                 │ Кол-во   │");
+        $this->command->info("   ├─────────────────────┼──────────┤");
+        $this->command->info("   │ Всего свайпов       │ {$stats['total_swipes']}        │");
+        $this->command->info("   │ Лайки               │ {$stats['likes']}        │");
+        $this->command->info("   │ Дизлайки            │ {$stats['dislikes']}        │");
+        $this->command->info("   │ Суперлайки          │ {$stats['superlikes']}        │");
+        $this->command->info("   ├─────────────────────┼──────────┤");
+        $this->command->info("   │ Всего матчей        │ {$stats['total_matches']}        │");
+        $this->command->info("   │ Пользователей       │ {$stats['users_with_swipes']}        │");
+        $this->command->info("   └─────────────────────┴──────────┘");
+
+        // Выводим примеры матчей
+        if ($stats['total_matches'] > 0) {
+            $exampleMatches = UserMatch::with(['user1', 'user2'])->limit(3)->get();
+
+            if ($exampleMatches->isNotEmpty()) {
+                $this->command->info('');
+                $this->command->info('💑 Примеры матчей:');
+                foreach ($exampleMatches as $match) {
+                    $this->command->info("   - {$match->user1->name} ↔ {$match->user2->name}");
+                }
+            }
+        }
     }
 }

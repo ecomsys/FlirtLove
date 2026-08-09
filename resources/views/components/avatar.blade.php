@@ -39,7 +39,7 @@
     'class' => '',
     'userId' => null,
     'showStatus' => false,
-    'isOnline' => false,
+    'isOnline' => null, 
 ])
 
 @php
@@ -102,17 +102,25 @@
         $textColor = '';
     }
     
-    // ВЫЧИСЛЯЕМ ОНЛАЙН
+    // ОПРЕДЕЛЯЕМ ОНЛАЙН СТАТУС
     $onlineStatus = false;
-    if ($userId && $showStatus) {
-        $onlineStatus = \DB::table('sessions')
-            ->where('user_id', $userId)
-            ->where('last_activity', '>=', now()->subMinutes(5)->timestamp)
-            ->exists();
+    if ($showStatus) {
+        // ПРИОРИТЕТ 1: Если isOnline передан явно - используем его (самый быстрый путь)
+        if ($isOnline !== null) {
+            $onlineStatus = $isOnline;
+        } 
+        // ПРИОРИТЕТ 2: Если передан userId, но нет isOnline - идем в кеш/БД
+        elseif ($userId) {
+            $onlineStatus = \Illuminate\Support\Facades\Cache::remember("user_online_{$userId}", 60, function () use ($userId) {
+                return \DB::table('sessions')
+                    ->where('user_id', $userId)
+                    ->where('last_activity', '>=', now()->subMinutes(5)->timestamp)
+                    ->exists();
+            });
+        }
     }
     
-    // Если isOnline передан явно — используем его, иначе вычисленный статус
-    $finalStatus = $isOnline ?: $onlineStatus;
+    $finalStatus = $onlineStatus;
 @endphp
 
 <div class="relative shrink-0 {{ $sizeClass }} {{ $class }}">
@@ -141,8 +149,8 @@
     <!-- Статус онлайн -->
     @if($showStatus)
         <div 
-            class="absolute bottom-0 right-0 {{ $statusSize }} rounded-full {{ $finalStatus ? 'bg-green-500' : 'bg-transparent' }} translate-x-[15%] translate-y-[15%]"
-            title="{{ $finalStatus ? 'Online' : 'Offline' }}"
+            class="absolute bottom-0 right-0 {{ $statusSize }} rounded-full {{ $finalStatus ? 'bg-green-500' : 'bg-gray-300 dark:bg-gray-600' }} translate-x-[15%] translate-y-[15%]"
+            title="{{ $finalStatus ? 'Онлайн' : 'Офлайн' }}"
         ></div>
     @endif
 </div>

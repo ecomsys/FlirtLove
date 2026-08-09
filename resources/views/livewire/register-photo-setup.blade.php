@@ -5,6 +5,7 @@ use Livewire\Volt\Component;
 use Livewire\WithFileUploads;
 use Livewire\Attributes\Layout;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Validator;
 use Livewire\Features\SupportFileUploads\TemporaryUploadedFile;
 
 new #[Layout('layouts.onboarding')] class extends Component 
@@ -16,11 +17,13 @@ new #[Layout('layouts.onboarding')] class extends Component
     public array $intimateFlags = [];
     public bool $showModal = false;
     
-    public $existingPhotos = [];
+    // Храним как Eloquent Collection (Livewire 3 сам сериализует это)
+    public $existingPhotos;
 
     public function mount(): void
     {
-        $this->existingPhotos = Auth::user()->photos()->orderBy('is_primary', 'desc')->get()->toArray();
+        // Загружаем коллекцию моделей
+        $this->existingPhotos = Auth::user()->photos()->orderBy('is_primary', 'desc')->get();
     }
 
     protected function rules(): array
@@ -52,7 +55,7 @@ new #[Layout('layouts.onboarding')] class extends Component
                 continue;
             }
 
-            $validator = \Illuminate\Support\Facades\Validator::make(
+            $validator = Validator::make(
                 ['file' => $file],
                 ['file' => 'image|mimes:jpg,jpeg,png,webp|min:10|max:5120'],
                 [
@@ -119,43 +122,21 @@ new #[Layout('layouts.onboarding')] class extends Component
             $this->intimateFlags = array_values($this->intimateFlags);
         }
         
-        if (empty($this->photos) && empty($this->existingPhotos)) {
+        if (empty($this->photos) && $this->existingPhotos->isEmpty()) {
             $this->showModal = false;
         }
     }
     
-    // public function removeExistingPhoto(int $photoId): void
-    // {
-    //     $photo = Photo::find($photoId);
-    //     if ($photo && $photo->user_id === Auth::id()) {
-    //         \Illuminate\Support\Facades\Storage::disk('public')->delete($photo->path);
-    //         $photo->delete();
-            
-    //         $this->existingPhotos = collect($this->existingPhotos)
-    //             ->filter(function ($p) use ($photoId) {
-    //                 return is_array($p) && isset($p['id']) && $p['id'] !== $photoId;
-    //             })
-    //             ->values()
-    //             ->toArray();
-            
-    //         $this->dispatch('show-toast', type: 'success', message: __('common.photo_deleted'));
-            
-    //         if (empty($this->existingPhotos) && empty($this->photos)) {
-    //             $this->showModal = false;
-    //         }
-    //     }
-    // }
-
     public function removeExistingPhoto(int $photoId): void
     {
         $photo = Photo::find($photoId);
         if ($photo && $photo->user_id === Auth::id()) {
-            $wasPrimary = $photo->is_primary; // Запоминаем, было ли оно главным
+            $wasPrimary = $photo->is_primary;
             
-            \Illuminate\Support\Facades\Storage::disk('public')->delete($photo->path);
-            $photo->delete();
+            // ИСПОЛЬЗУЕМ ХЕЛПЕР МОДЕЛИ: Он удалит ВСЕ размеры (original, large, medium, thumb) с диска!
+            $photo->deleteFiles(); 
+            $photo->delete(); // Soft Delete
             
-            // Если удалили главную, делаем главное другое фото
             if ($wasPrimary) {
                 $nextPhoto = Auth::user()->photos()->first();
                 if ($nextPhoto) {
@@ -163,17 +144,16 @@ new #[Layout('layouts.onboarding')] class extends Component
                 }
             }
             
-            // Обновляем массив в интерфейсе
-            $this->existingPhotos = Auth::user()->photos()->orderBy('is_primary', 'desc')->get()->toArray();
+            // Обновляем коллекцию в интерфейсе
+            $this->existingPhotos = Auth::user()->photos()->orderBy('is_primary', 'desc')->get();
             
             $this->dispatch('show-toast', type: 'success', message: __('common.photo_deleted'));
             
-            if (empty($this->existingPhotos) && empty($this->photos)) {
+            if ($this->existingPhotos->isEmpty() && empty($this->photos)) {
                 $this->showModal = false;
             }
         }
     }
-    
 
     public function getTotalSizeProperty(): string
     {
@@ -186,10 +166,9 @@ new #[Layout('layouts.onboarding')] class extends Component
         return max(0, round($bytes / 1024, 2)) . ' KB';
     }
 
-
     public function save(): void
     {
-        $validator = \Illuminate\Support\Facades\Validator::make(
+        $validator = Validator::make(
             ['photos' => $this->photos],
             ['photos.*' => 'image|mimes:jpg,jpeg,png,webp|min:10|max:5120'],
             [
@@ -206,24 +185,23 @@ new #[Layout('layouts.onboarding')] class extends Component
             return;
         }
 
-        if (empty($this->photos) && empty($this->existingPhotos)) {
+        if (empty($this->photos) && $this->existingPhotos->isEmpty()) {
             $this->dispatch('show-toast', type: 'error', message: __('common.add_at_least_one_photo'));
             return;
         }
 
+        // 1. Сохраняем изменения (флаги 18+) для УЖЕ существующих фото
         foreach ($this->existingPhotos as $existingPhoto) {
-            $photo = Photo::find($existingPhoto['id']);
-            if ($photo && $photo->user_id === Auth::id()) {
-                $photo->update([
-                    'is_intimate' => filter_var($existingPhoto['is_intimate'] ?? false, FILTER_VALIDATE_BOOLEAN)
-                ]);
-            }
+            $existingPhoto->save();
         }
 
-        $hasPrimary = collect($this->existingPhotos)->contains(fn ($p) => filter_var($p['is_primary'] ?? false, FILTER_VALIDATE_BOOLEAN));
+        // 2. Создаем новые фото
+        $hasPrimary = $this->existingPhotos->contains(fn ($p) => $p->is_primary);
         $isFirstPhoto = !$hasPrimary;
+        
+        // Находим дефолтный альбом (через хелпер из модели User)
+        $defaultAlbum = Auth::user()->defaultAlbum;
 
-        // Внутри save()
         foreach ($this->photos as $index => $photo) {
             if ($photo instanceof TemporaryUploadedFile) {
                 // Сохраняем оригинал во временную папку модерации
@@ -231,7 +209,9 @@ new #[Layout('layouts.onboarding')] class extends Component
 
                 Photo::create([
                     'user_id' => Auth::id(),
-                    'path' => $path, // Пока это оригинал
+                    'album_id' => $defaultAlbum?->id, // Привязываем к дефолтному альбому
+                    'type' => 'profile', 
+                    'path_original' => $path, // ИСПРАВЛЕНО: поле path_original вместо path
                     'is_primary' => $isFirstPhoto && $index === 0,
                     'is_intimate' => filter_var($this->intimateFlags[$index] ?? false, FILTER_VALIDATE_BOOLEAN),
                     'status' => 'pending', // Ждет модерации
@@ -252,7 +232,8 @@ new #[Layout('layouts.onboarding')] class extends Component
         Auth::user()->update(['has_completed_onboarding' => true]);
         $this->redirect(route('verification.notice'), navigate: true);
     }
-}; ?>
+}; 
+?>
 
 <div class="max-w-5xl mx-auto px-4 py-12 md:py-20">
 

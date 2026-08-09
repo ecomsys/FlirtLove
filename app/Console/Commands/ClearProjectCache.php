@@ -5,53 +5,41 @@ namespace App\Console\Commands;
 use Illuminate\Console\Attributes\Description;
 use Illuminate\Console\Attributes\Signature;
 use Illuminate\Console\Command;
-use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Artisan;
 
 #[Signature('cache:project-clear')]
-#[Description('Очистка всех кешей проекта')]
-
+#[Description('Очистка всех кешей проекта безопасным способом')]
 class ClearProjectCache extends Command
 {
-    /**
-     * Execute the console command.
-     */
     public function handle(): int
     {
         $this->info('Начинаем очистку кеша...');
 
         try {
-            // Очистка стандартных кешей Laravel
+            // 1. Очистка всех стандартных кешей Laravel (config, routes, views, events, compiled)
+            // Это безопасная команда, которая удаляет только сгенерированные кеш-файлы.
+            Artisan::call('optimize:clear');
+            $this->info('Кеши Laravel (optimize) очищены');
+
+            // 2. Очистка application cache (Redis/БД), т.к. optimize:clear не всегда чистит его
             Artisan::call('cache:clear');
-            $this->info('✅ Cache очищен');
+            $this->info('Application cache (Redis/DB) очищен');
 
-            Artisan::call('config:clear');
-            $this->info('✅ Config очищен');
+            // 3. Очистка кеша скомпилированных файлов (иногда зависает после обновления композера)
+            Artisan::call('clear-compiled');
+            $this->info('Скомпилированные файлы очищены');
 
-            Artisan::call('view:clear');
-            $this->info('✅ View очищен');
-
-            Artisan::call('route:clear');
-            $this->info('✅ Route очищен');
-
-            // Очистка opcache (если включен)
+            // 4. Очистка opcache (если включен на сервере)
             if (function_exists('opcache_reset')) {
                 opcache_reset();
-                $this->info('✅ Opcache очищен');
+                $this->info('OPcache очищен');
             }
 
-            // Удаление папки bootstrap/cache
-            $bootstrapCachePath = base_path('bootstrap/cache');
-            if (File::exists($bootstrapCachePath)) {
-                File::cleanDirectory($bootstrapCachePath);
-                $this->info('✅ Bootstrap cache очищен');
-            }
-
-            $this->info('✅ Все кеши успешно очищены!');
+            $this->info('Все кеши успешно очищены!');
 
             return Command::SUCCESS;
         } catch (\Exception $e) {
-            $this->error('Ошибка при очистке кеша: ' . $e->getMessage());
+            $this->error('❌ Ошибка при очистке кеша: ' . $e->getMessage());
             return Command::FAILURE;
         }
     }

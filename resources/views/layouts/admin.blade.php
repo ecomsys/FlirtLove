@@ -1,5 +1,14 @@
 <!DOCTYPE html>
-<html lang="{{ str_replace('_', '-', app()->getLocale()) }}" class="scroll-smooth">
+<html lang="{{ str_replace('_', '-', app()->getLocale()) }}" class="scroll-smooth"  x-data
+      @theme-toggled.window="
+          const newTheme = $event.detail.theme;
+          if (newTheme === 'dark') {
+              document.documentElement.classList.add('dark');
+          } else {
+              document.documentElement.classList.remove('dark');
+          }
+          localStorage.setItem('theme', newTheme);
+      ">
 
 <head>
     <meta charset="utf-8">
@@ -10,14 +19,27 @@
     <link href="https://fonts.bunny.net/css?family=instrument-sans:400,500,600,700&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fancyapps/ui@5.0/dist/fancybox/fancybox.css" />
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <script>
+    @stack('styles')
+   <script>
         (function() {
-            const theme = localStorage.getItem('theme') || 'light';
+            // 1. Определяем, что говорит БД (через PHP). Если гость - dbTheme пустой.
+            const dbTheme = '{{ Auth::check() ? (Auth::user()->preferences?->theme ?? "light") : "" }}';
+            
+            // 2. Определяем, что говорит localStorage
+            const localTheme = localStorage.getItem('theme') || 'light';
+            
+            // 3. Выбираем источник истины: БД приоритетнее для авторизованных!
+            const theme = dbTheme || localTheme;
+
+            // 4. Применяем класс
             if (theme === 'dark') {
                 document.documentElement.classList.add('dark');
             } else {
                 document.documentElement.classList.remove('dark');
             }
+            
+            // 5. Синхроним localStorage с выбранным состоянием (для будущих перезагрузок)
+            localStorage.setItem('theme', theme);
         })();
     </script>
     @vite(['resources/css/app.css', 'resources/js/app.js'])
@@ -30,7 +52,7 @@
         <livewire:layout.admin-navigation />
 
         <div class="flex flex-1 relative">
-            <!-- Сайдбар через Livewire компонент -->
+            <!-- Сайдбар -->
             <aside class="fixed little-scroll top-[4rem] left-0 z-40 w-64 h-[calc(100vh-4rem)] bg-card border-r border-border flex flex-col px-4 pt-4 pb-10 overflow-y-auto">
                 <livewire:layout.admin-sidebar />
             </aside>
@@ -46,16 +68,18 @@
 
     <x-ui.sonner expand="true" />
     <x-ui.confirm-modal />
+    <livewire:admin.ban-user-modal />
+    <livewire:admin.delete-user-modal />
 
+    <!-- Подключаем скрипт Trix -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@fancyapps/ui@5.0/dist/fancybox/fancybox.umd.js"></script>   
-  
+   
     <script>       
-            Fancybox.bind('[data-fancybox]', {
-                // Настройки
-            });       
+        Fancybox.bind('[data-fancybox]', {
+            // Настройки
+        });       
     </script>
-
 
     @stack('scripts')  
 </body>

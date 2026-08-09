@@ -1,7 +1,16 @@
 @props(['breadcrumbs' => []])
 
 <!DOCTYPE html>
-<html lang="{{ str_replace('_', '-', app()->getLocale()) }}" class="scroll-smooth">
+<html lang="{{ str_replace('_', '-', app()->getLocale()) }}" class="scroll-smooth"  x-data
+      @theme-toggled.window="
+          const newTheme = $event.detail.theme;
+          if (newTheme === 'dark') {
+              document.documentElement.classList.add('dark');
+          } else {
+              document.documentElement.classList.remove('dark');
+          }
+          localStorage.setItem('theme', newTheme);
+      ">
 
 <head>
     <meta charset="utf-8">
@@ -15,14 +24,26 @@
     <link href="https://fonts.bunny.net/css?family=instrument-sans:400,500,600,700&display=swap" rel="stylesheet" />
 
     <!-- Скрипт для мгновенного применения темы -->
-    <script>
+       <script>
         (function() {
-            const theme = localStorage.getItem('theme') || 'light';
+            // 1. Определяем, что говорит БД (через PHP). Если гость - dbTheme пустой.
+            const dbTheme = '{{ Auth::check() ? (Auth::user()->preferences?->theme ?? "light") : "" }}';
+            
+            // 2. Определяем, что говорит localStorage
+            const localTheme = localStorage.getItem('theme') || 'light';
+            
+            // 3. Выбираем источник истины: БД приоритетнее для авторизованных!
+            const theme = dbTheme || localTheme;
+
+            // 4. Применяем класс
             if (theme === 'dark') {
                 document.documentElement.classList.add('dark');
             } else {
                 document.documentElement.classList.remove('dark');
             }
+            
+            // 5. Синхроним localStorage с выбранным состоянием (для будущих перезагрузок)
+            localStorage.setItem('theme', theme);
         })();
     </script>
 
