@@ -36,8 +36,7 @@ class SubscriptionPlanSeeder extends Seeder
             [
                 'name' => 'VIP на 1 месяц',
                 'price' => 499.00,
-                'duration_days' => 30,
-                'trial_days' => 0,
+                'duration_days' => 30,               
                 'features' => [
                     'invisible' => false, // Невидимка только на 3+ мес
                     'likes_per_day' => 50,
@@ -51,8 +50,7 @@ class SubscriptionPlanSeeder extends Seeder
             [
                 'name' => 'VIP на 3 месяца',
                 'price' => 1299.00,
-                'duration_days' => 90,
-                'trial_days' => 0,
+                'duration_days' => 90,               
                 'features' => [
                     'invisible' => true,
                     'likes_per_day' => 100,
@@ -66,8 +64,7 @@ class SubscriptionPlanSeeder extends Seeder
             [
                 'name' => 'VIP на 6 месяцев',
                 'price' => 2399.00,
-                'duration_days' => 180,
-                'trial_days' => 7, // Даем неделю триала
+                'duration_days' => 180,               
                 'features' => [
                     'invisible' => true,
                     'likes_per_day' => 150,
@@ -81,8 +78,7 @@ class SubscriptionPlanSeeder extends Seeder
             [
                 'name' => 'VIP на 1 год (Выгодный)',
                 'price' => 3990.00,
-                'duration_days' => 365,
-                'trial_days' => 7,
+                'duration_days' => 365,               
                 'features' => [
                     'invisible' => true,
                     'likes_per_day' => 999, // Безлимит
@@ -96,8 +92,7 @@ class SubscriptionPlanSeeder extends Seeder
             [
                 'name' => 'VIP OLD (Архив)',
                 'price' => 999.00,
-                'duration_days' => 60,
-                'trial_days' => 0,
+                'duration_days' => 60,              
                 'features' => [
                     'invisible' => false,
                     'likes_per_day' => 20,
@@ -119,11 +114,10 @@ class SubscriptionPlanSeeder extends Seeder
                 'slug' => Str::slug($plan['name']),
                 'price' => $plan['price'],
                 'currency' => 'RUB',
-                'duration_days' => $plan['duration_days'],
-                'trial_days' => $plan['trial_days'],
+                'duration_days' => $plan['duration_days'],                
                 'features' => $plan['features'],
                 // Имитируем ID продуктов для мобильных приложений
-                'apple_product_id' => 'com.loveplanet.vip.' . $plan['duration_days'],
+                'apple_product_id' => 'com.flirtlove.vip.' . $plan['duration_days'],
                 'google_product_id' => 'vip_' . $plan['duration_days'] . '_days',
                 'is_active' => $plan['is_active'],
                 'sort_order' => $plan['sort_order'],

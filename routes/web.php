@@ -34,7 +34,7 @@ Route::middleware(['auth', 'verified'])->prefix('admin')->name('admin.')->group(
     // ЗОНА 1: Доступно ВСЕМ сотрудникам (Admin, Moderator, Support)
     // ============================================
     Route::middleware('role:admin,moderator,support')->group(function () {
-        Volt::route('/', 'admin.dashboard')->name('dashboard');
+        Volt::route('/', 'admin.dashboard.index')->name('dashboard');
         
         // Базовый просмотр юзеров (саппорт должен видеть профиль, чтобы помочь)
         Volt::route('/users', 'admin.users.index')->name('users.index');
@@ -49,6 +49,8 @@ Route::middleware(['auth', 'verified'])->prefix('admin')->name('admin.')->group(
     // ============================================
     Route::middleware('role:admin,moderator')->group(function () {
         // Модерация
+        Volt::route('/media', 'admin.media.index')->name('media.index');
+
         Volt::route('/moderation/photos', 'admin.moderation.photos')->name('moderation.photos');
         Volt::route('/moderation/comments', 'admin.moderation.comments')->name('moderation.comments');
         Volt::route('/moderation/dating', 'admin.moderation.dating')->name('moderation.dating');

@@ -48,19 +48,17 @@ class UserPreference extends Model
     }
 
     // ============================================
-    // АКСЕССОРЫ ДЛЯ JSON С ДЕФОЛТАМИ (Из твоей старой модели)
+    // АКСЕССОРЫ С ДЕФОЛТАМИ 
     // ============================================
 
-    /**
-     * Расширенные фильтры поиска.
-     * Если в БД пусто, подставляем дефолты.
+        /**
+     * Расширенные фильтры поиска (с дефолтами).
      */
     public function getSearchFiltersAttribute(): array
     {
-        $filters = $this->attributes['search_filters'] ?? null;
-        if (is_string($filters)) {
-            $filters = json_decode($filters, true);
-        }
+        // Читаем напрямую из сырых атрибутов, минуя аксессоры и касты (защита от рекурсии)
+        $raw = $this->attributes['search_filters'] ?? null;
+        $filters = is_string($raw) ? json_decode($raw, true) : (is_array($raw) ? $raw : []);
 
         return array_merge([
             'body_type' => null, 
@@ -76,14 +74,13 @@ class UserPreference extends Model
     }
 
     /**
-     * Настройки фильтра чата (кто может писать).
+     * Настройки фильтра чата (с дефолтами).
+     * ВНИМАНИЕ: Имя метода строго getChatFilterSettingsAttribute (так как в БД поле chat_filter_settings)
      */
-    public function getChatFiltersAttribute(): array
+    public function getChatFilterSettingsAttribute(): array
     {
-        $filters = $this->attributes['chat_filter_settings'] ?? null;
-        if (is_string($filters)) {
-            $filters = json_decode($filters, true);
-        }
+        $raw = $this->attributes['chat_filter_settings'] ?? null;
+        $filters = is_string($raw) ? json_decode($raw, true) : (is_array($raw) ? $raw : []);
 
         return array_merge([
             'gender' => 'any', 
@@ -94,29 +91,23 @@ class UserPreference extends Model
         ], is_array($filters) ? $filters : []);
     }
 
-       /**
-     * Настройки email-уведомлений по категориям.
-     * Структура строго соответствует чекбоксам в UI (как на LovePlanet).
+    /**
+     * Настройки email-уведомлений (с дефолтами).
      */
     public function getEmailSettingsAttribute(): array
     {
-        $settings = $this->attributes['email_settings'] ?? null;
-        if (is_string($settings)) {
-            $settings = json_decode($settings, true);
-        }
+        $raw = $this->attributes['email_settings'] ?? null;
+        $settings = is_string($raw) ? json_decode($raw, true) : (is_array($raw) ? $raw : []);
 
         return array_merge([
-            // === МГНОВЕННЫЕ УВЕДОМЛЕНИЯ ===
-            'on_message'    => true,  // Чекбокс: Новые сообщения
-            'on_like'       => true,  // Чекбокс: Новые симпатии (лайки и мэтчи)
-            'on_view'       => false, // Чекбокс: Новые просмотры (выкл по умолчанию, чтобы не спамить)
-            'on_gift'       => true,  // Чекбокс: Новые подарки
-            'on_event'      => true,  // Чекбокс: Новые события (Жалобы рассмотрены, чат удален модерацией, фото отклонено)
-            'on_broadcast'  => true,  // Чекбокс: Подписка «Новости» (Массовые рассылки от админа)
-            
-            // === ДАЙДЖЕСТЫ (Отправляются крон-задачей раз в день/неделю) ===
-            'sub_new_faces' => true,  // Чекбокс: Подписка «Новые лица»
-            'sub_popular'   => false, // Чекбокс: Подписка «Популярные пользователи»
+            'on_message'    => true,  
+            'on_like'       => true,  
+            'on_view'       => false, 
+            'on_gift'       => true,  
+            'on_event'      => true,  
+            'on_broadcast'  => true,  
+            'sub_new_faces' => true,  
+            'sub_popular'   => false, 
         ], is_array($settings) ? $settings : []);
     }
 

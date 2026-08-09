@@ -12,8 +12,7 @@ class SubscriptionPlan extends Model
         'slug',
         'price',
         'currency',
-        'duration_days',
-        'trial_days',
+        'duration_days',       
         'features',            // JSON: {"invisible": true, "likes_per_day": 100, "hide_ads": true}
         'apple_product_id',    // Для App Store
         'google_product_id',   // Для Google Play
@@ -23,8 +22,7 @@ class SubscriptionPlan extends Model
 
     protected $casts = [
         'price' => 'decimal:2',
-        'duration_days' => 'integer',
-        'trial_days' => 'integer',
+        'duration_days' => 'integer',       
         'features' => 'array',
         'is_active' => 'boolean',
         'sort_order' => 'integer',

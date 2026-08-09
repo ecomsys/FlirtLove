@@ -28,41 +28,36 @@ class UserGiftSeeder extends Seeder
 
         $deletedCount = UserGift::count();
         if ($deletedCount > 0) {
-            UserGift::query()->delete();
+            UserGift::query()->forceDelete();
             $this->command->info("🗑️ Удалено {$deletedCount} старых записей о подарках");
         }
 
         $messages = [
-            'Симпатия от чистого сердца!', 'С небольшим намеком...', ' просто так!',
+            'Симпатия от чистого сердца!', 'С небольшим намеком...', 'Просто так!',
             'За прекрасный вечер!', 'Ты мне очень нравишься 🥰', 'Давай познакомимся?',
-            null, // Иногда без сообщения
+            'Это между нами...', 'Никому не говори!', null,
         ];
 
-        $totalToCreate = 40; // Создадим 40 случайных фактов отправки
+        $totalToCreate = 50;
         $bar = $this->command->getOutput()->createProgressBar($totalToCreate);
-        $createdCount = 0;
 
         for ($i = 0; $i < $totalToCreate; $i++) {
             $sender = $users->random();
             $receiver = $users->where('id', '!=', $sender->id)->random();
             $gift = $gifts->random();
 
-            // 70% подарков прочитаны, 30% - нет (для теста счетчика непрочитанных)
-            $isRead = (bool) rand(0, 100) >= 30;
+            // 70% подарков прочитаны, 30% - нет (используем mt_rand без приведения к bool)
+            $isRead = mt_rand(1, 100) > 30;
             $readAt = $isRead ? now()->subDays(rand(0, 5)) : null;
 
-            // 20% подарков приватные (18+ или скрытые от других)
-            $isPrivate = $gift->category === 'intimate' ? true : (bool) rand(0, 4) === 0;
+            // 30% подарков приватные. Если категория интимная - 100% приватный.
+            $isPrivate = $gift->category === 'intimate' ? true : (mt_rand(1, 100) <= 30);
 
-            // 10% подарков "удалены" получателем (Soft Delete для теста корзины)
-            $deletedAt = (bool) rand(0, 9) === 0 ? now()->subDays(rand(1, 3)) : null;
-
-            UserGift::create([
+            $userGift = UserGift::create([
                 'sender_id' => $sender->id,
                 'receiver_id' => $receiver->id,
                 'gift_id' => $gift->id,
                 
-                // === СНЭПШОТ (Копируем данные каталога на момент отправки) ===
                 'snapshot_name' => $gift->name,
                 'snapshot_image_url' => $gift->image_url,
                 'snapshot_price' => $gift->price,
@@ -73,10 +68,13 @@ class UserGiftSeeder extends Seeder
                 'read_at' => $readAt,
                 'created_at' => now()->subDays(rand(0, 20)),
                 'updated_at' => now()->subDays(rand(0, 5)),
-                'deleted_at' => $deletedAt, // Soft Delete
             ]);
 
-            $createdCount++;
+            // 15% подарков "удалены" получателем (исправлена логика рандома)
+            if (mt_rand(1, 100) <= 15) {
+                $userGift->delete();
+            }
+
             $bar->advance();
         }
 
@@ -86,11 +84,11 @@ class UserGiftSeeder extends Seeder
         // ============================================
         // СТАТИСТИКА
         // ============================================
-        // Используем withTrashed, чтобы посчитать даже удаленные
+        // Везде используем withTrashed, чтобы посчитать даже мягко удаленные
         $stats = [
             'total' => UserGift::withTrashed()->count(),
-            'unread' => UserGift::where('is_read', false)->count(),
-            'private' => UserGift::where('is_private', true)->count(),
+            'unread' => UserGift::withTrashed()->where('is_read', false)->count(),
+            'private' => UserGift::withTrashed()->where('is_private', true)->count(),
             'deleted' => UserGift::onlyTrashed()->count(),
             'total_credits_spent' => UserGift::withTrashed()->sum('snapshot_price'),
         ];

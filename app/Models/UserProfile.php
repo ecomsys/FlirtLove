@@ -58,38 +58,16 @@ class UserProfile extends Model
     }
 
     /**
-     * Достаем Latitude из PostGIS точки.
-     * PDO обычно возвращает geography как строку в формате WKB (hex) или "POINT(lng lat)".
-     * Если использовать пакет вроде mstaack/laravel-postgis, он сам распарсит в объект.
-     * Но для нативного Laravel парсим строку.
+     * САФИ СПОСОБ: Получить координаты через SQL-селект.
+     * Использование: $profile = UserProfile::withCoordinates()->find($id);
+     * $profile->latitude; $profile->longitude;
      */
-    public function getLatitudeAttribute(): ?float
+    public function scopeWithCoordinates($query)
     {
-        if (empty($this->location)) return null;
-        
-        $locationStr = (string) $this->location;
-        if (str_starts_with($locationStr, 'POINT(')) {
-            $coords = sscanf($locationStr, "POINT(%f %f)");
-            return $coords[1] ?? null; // Lat идет вторым
-        }
-        
-        return null; 
-    }
-
-    /**
-     * Достаем Longitude из PostGIS точки
-     */
-    public function getLongitudeAttribute(): ?float
-    {
-        if (empty($this->location)) return null;
-        
-        $locationStr = (string) $this->location;
-        if (str_starts_with($locationStr, 'POINT(')) {
-            $coords = sscanf($locationStr, "POINT(%f %f)");
-            return $coords[0] ?? null; // Lng идет первым
-        }
-        
-        return null; 
+        return $query->addSelect([
+            'latitude' => DB::raw('ST_Y(location::geometry)'),
+            'longitude' => DB::raw('ST_X(location::geometry)')
+        ]);
     }
 
     /**
@@ -119,15 +97,22 @@ class UserProfile extends Model
         return $query->where('gender', $gender);
     }
 
-    /**
-     * Фильтр по возрасту (от и до)
+       /**
+     * Фильтр по возрасту (от и до). Защита от null.
      */
     public function scopeBetweenAges($query, ?int $minAge = 18, ?int $maxAge = 99)
     {
-        $minDate = now()->subYears($maxAge)->format('Y-m-d');
-        $maxDate = now()->subYears($minAge)->format('Y-m-d');
+        // Защита от null и переворота (если мин больше макса)
+        $minAge = $minAge ?? 18;
+        $maxAge = $maxAge ?? 99;
         
-        // Ищем тех, чья дата рождения попадает в диапазон
+        if ($minAge > $maxAge) {
+            [$minAge, $maxAge] = [$maxAge, $minAge]; // Свапаем местами
+        }
+
+        $minDate = now()->subYears($maxAge)->startOfDay()->format('Y-m-d');
+        $maxDate = now()->subYears($minAge)->endOfDay()->format('Y-m-d');
+        
         return $query->whereBetween('birth_date', [$minDate, $maxDate]);
     }
 

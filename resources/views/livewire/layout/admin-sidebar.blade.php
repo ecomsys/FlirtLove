@@ -45,6 +45,14 @@ new class extends Component {
         Дашборд
     </a>
 
+     @php $route = 'admin.media.index'; $exists = Route::has($route); @endphp
+    <a href="{{ $exists ? route($route) : '#' }}" {{ $exists ? 'wire:navigate' : '' }}
+        class="flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium {{ request()->routeIs($route) ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-accent hover:text-foreground' }}">
+        <x-lucide-layout-dashboard class="w-4 h-4" />
+        Медиа
+    </a>
+
+
     <!-- 👥 Пользователи (Доступно всем staff) -->
     <p class="px-3 text-xs uppercase text-muted-foreground/60 mt-4 mb-1">Пользователи</p>
     @php $route = 'admin.users.index'; $exists = Route::has($route); @endphp

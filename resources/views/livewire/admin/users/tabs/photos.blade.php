@@ -13,7 +13,6 @@ new class extends Component
 {
     public int $userId;
 
-    // Управление модалкой отклонения
     public bool $isRejectModalVisible = false;
     public ?int $rejectingPhotoId = null;
     public string $rejectReason = '';
@@ -30,14 +29,12 @@ new class extends Component
         $this->userId = $userId;
     }
 
-    // Достаем юзера (с удаленными для защиты от 404/500)
     #[Computed]
     public function user(): User
     {
         return User::withTrashed()->findOrFail($this->userId);
     }
 
-    // Динамическая выборка фото (обновляется при любом действии)
     #[Computed]
     public function albums()
     {
@@ -56,15 +53,15 @@ new class extends Component
             return [
                 'name' => $albumName,
                 'photos' => [
+                    'pending'  => $photos->filter(fn($p) => $p->status === 'pending' && !$p->deleted_at)->values(),
                     'approved' => $photos->filter(fn($p) => $p->status === 'approved' && !$p->deleted_at)->values(),
-                    'pending' => $photos->filter(fn($p) => $p->status === 'pending' && !$p->deleted_at)->values(),
-                    'trashed' => $photos->filter(fn($p) => $p->deleted_at)->values(),
+                    'rejected' => $photos->filter(fn($p) => $p->status === 'rejected' && !$p->deleted_at)->values(),
+                    'trashed'  => $photos->filter(fn($p) => $p->deleted_at)->values(),
                 ]
             ];
         });
     }
 
-    // Слушаем обновления (например, если забанили юзера, фото сами снимутся с модерации)
     #[On('user-action-performed')] 
     public function refreshUser(): void
     {
@@ -72,24 +69,20 @@ new class extends Component
         unset($this->albums);
     }
 
-    // ============================================
-    // ДЕЙСТВИЯ МОДЕРАТОРА
-    // ============================================
-
     public function approve(int $photoId): void
     {
         $photo = Photo::withTrashed()->find($photoId);
         if (!$photo) return;
         $this->moderatePhotoAction->approve($photo, auth()->user());
         $this->dispatch('show-toast', type: 'success', message: 'Фото одобрено');
-        unset($this->albums); // Сбрасываем кэш галереи
+        unset($this->albums);
     }
 
     public function openRejectModal(int $photoId): void
     {
         $this->rejectingPhotoId = $photoId;
         $this->rejectReason = '';
-        $this->isRejectModalVisible = true; // Показываем модалку
+        $this->isRejectModalVisible = true;
     }
 
     public function closeRejectModal(): void
@@ -113,7 +106,7 @@ new class extends Component
         $this->moderatePhotoAction->reject($photo, auth()->user(), $this->rejectReason);
 
         $this->closeRejectModal();
-        $this->dispatch('show-toast', type: 'error', message: 'Фото отклонено и отправлено в карантин');
+        $this->dispatch('show-toast', type: 'error', message: 'Фото отклонено и помечено как нарушение');
         unset($this->albums);
     }
 
@@ -134,7 +127,7 @@ new class extends Component
         if (!$photo) return;
         $this->moderatePhotoAction->setPrimary($photo, auth()->user());
         $this->dispatch('show-toast', type: 'success', message: 'Установлено как аватар');
-        $this->dispatch('user-action-performed'); // Триггерим шапку
+        $this->dispatch('user-action-performed');
         unset($this->albums);
     }
 
@@ -143,7 +136,7 @@ new class extends Component
         $photo = Photo::withTrashed()->find($photoId);
         if (!$photo) return;
 
-        DB::transaction(function () use ($photo) {
+        DB::Transaction(function () use ($photo) {
             $photo->restore();
             $photo->update([
                 'status' => 'pending',
@@ -153,7 +146,7 @@ new class extends Component
             ]);
         });
 
-        \App\Models\AdminLog::record('photo.restore', $photo, auth()->user(), ['status' => 'rejected', 'deleted_at' => 'set'], ['status' => 'pending', 'deleted_at' => null]);
+        \App\Models\AdminLog::record('photo.restore', $photo, auth()->user(), ['deleted_at' => 'set'], ['deleted_at' => null, 'status' => 'pending']);
         $this->dispatch('show-toast', type: 'success', message: 'Фото восстановлено в очередь');
         unset($this->albums);
     }
@@ -277,7 +270,47 @@ new class extends Component
                         </div>
                     @endif
 
-                    {{-- Блок: В карантине (Удаленные и Отклоненные) --}}
+                    {{-- Блок: Отклоненные (Нарушители правил) --}}
+                    @if($albumData['photos']['rejected']->isNotEmpty())
+                        <div>
+                            <h4 class="text-xs uppercase font-semibold text-destructive mb-3 flex items-center gap-1.5">
+                                <x-lucide-x-circle class="w-3.5 h-3.5" /> Отклонены ({{ $albumData['photos']['rejected']->count() }})
+                            </h4>
+                            <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+                                @foreach($albumData['photos']['rejected'] as $photo)
+                                    @php $reasonEnum = $photo->reject_reason ? PhotoRejectReason::tryFrom($photo->reject_reason) : null; @endphp
+                                    <div class="bg-muted/10 border border-destructive/20 rounded-lg overflow-hidden" wire:key="photo-{{ $photo->id }}-rejected">
+                                        <div class="relative aspect-square group overflow-hidden">
+                                            <a href="{{ $photo->original_url ?: $photo->medium_url ?: '#' }}" data-fancybox="gallery-user-{{ $this->user->id }}" data-caption="Фото #{{ $photo->id }}" class="block w-full h-full cursor-pointer">
+                                                <img src="{{ $photo->thumb_url ?: $photo->medium_url ?: asset('images/no-image-placeholder.png') }}" class="w-full h-full object-cover opacity-70">
+                                            </a>
+                                            
+                                            <div class="absolute top-2 left-2 z-10 flex flex-col gap-1">
+                                                <x-ui.badge variant="destructive" size="xs">{{ $reasonEnum?->label() ?? 'Отклонено' }}</x-ui.badge>
+                                            </div>
+
+                                             <div class="absolute top-2 right-2 z-10 inline-flex flex-col gap-1">                                
+                                                <span class="bg-black/60 text-white text-[0.625rem] px-1.5 py-0.5 rounded font-medium">#{{ $photo->id }}</span>
+                                            </div>   
+
+                                            <div class="absolute bottom-2 left-2 right-2 z-10 flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity bg-black/60 p-1.5 rounded-lg backdrop-blur-sm">
+                                                <x-ui.button wire:click="approve({{ $photo->id }})" wire:target="approve({{ $photo->id }})" variant="success" size="sm" class="flex-1 h-8 text-xs">
+                                                    <span wire:loading.remove wire:target="approve({{ $photo->id }})">Одобрить</span>
+                                                    <x-lucide-loader-2 wire:loading wire:target="approve({{ $photo->id }})" class="w-4 h-4 animate-spin" />
+                                                </x-ui.button>
+                                                <x-ui.button wire:click="softDelete({{ $photo->id }})" wire:confirm="Переместить в карантин?" wire:target="softDelete({{ $photo->id }})" variant="destructive" size="sm" class="h-8 text-xs">
+                                                    <span wire:loading.remove wire:target="softDelete({{ $photo->id }})">В карантин</span>
+                                                    <x-lucide-loader-2 wire:loading wire:target="softDelete({{ $photo->id }})" class="w-4 h-4 animate-spin" />
+                                                </x-ui.button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                @endforeach
+                            </div>
+                        </div>
+                    @endif
+
+                    {{-- Блок: В карантине (Удаленные) --}}
                     @if($albumData['photos']['trashed']->isNotEmpty())
                         <div>
                             <h4 class="text-xs uppercase font-semibold text-muted-foreground mb-3 flex items-center gap-1.5">

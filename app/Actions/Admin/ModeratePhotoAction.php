@@ -54,8 +54,7 @@ class ModeratePhotoAction
         $before = ['photo_id' => $photo->id, 'status' => $photo->status];
 
         $photo->markAsRejected($admin->id, $reason);
-        $photo->delete(); 
-
+       
         if ($user) {
             $user->notify(new PhotoModerated($photo->id, $photo->user_id, 'rejected', 1));
         }

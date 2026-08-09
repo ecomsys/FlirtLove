@@ -69,27 +69,27 @@ class AdminLog extends Model
 
     /**
      * Универсальный метод для записи действия в лог.
-     * Использование в коде:
-     * AdminLog::record('user.ban', $user, auth()->user(), ['status' => 'active'], ['status' => 'banned']);
+     * Безопасен для вызова из Queue/CLI!
      *
      * @param string $action - Что сделали (slug)
-     * @param Model $model - Над какой моделью издевались
-     * @param User|null $admin - Кто издевался (если null — система)
+     * @param Model|null $model - Над какой моделью издевались (null для глобальных событий)
+     * @param User|null $admin - Кто издевался (null — система/воркер)
      * @param array|null $before - Данные ДО
      * @param array|null $after - Данные ПОСЛЕ
      * @return self
      */
-    public static function record(string $action, Model $model, ?User $admin = null, ?array $before = null, ?array $after = null): self
+    public static function record(string $action, ?Model $model = null, ?User $admin = null, ?array $before = null, ?array $after = null): self
     {
         return self::create([
             'admin_id'      => $admin?->id,
             'action'        => $action,
-            'loggable_type' => get_class($model),
-            'loggable_id'   => $model->id,
+            'loggable_type' => $model ? get_class($model) : null,
+            'loggable_id'   => $model?->id,
             'before'        => $before,
             'after'         => $after,
-            'ip_address'    => Request::ip(),
-            'user_agent'    => Request::userAgent(),
+            // Защита от краша в консоли (php artisan / queue:work)
+            'ip_address'    => app()->runningInConsole() ? null : Request::ip(),
+            'user_agent'    => app()->runningInConsole() ? null : Request::userAgent(),
         ]);
     }
 }

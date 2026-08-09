@@ -16,21 +16,15 @@ new #[Layout('layouts.admin')] class extends Component
 {
     use WithPagination;
 
-    /** @var string Текущий статус фильтрации (pending, approved, rejected) */
     #[Url(as: 'status', except: 'pending')]
     public string $status = 'pending';
 
-    /** @var int Кол-во юзеров на странице в очереди (карточки) */
     public int $perPage = 5; 
-    
-    /** @var int Кол-во фото на странице в истории (сетка) */
     public int $perPhotos = 24; 
     
-    /** @var string Строка поиска по имени юзера или ID фото/юзера */
     #[Url(as: 'q', except: '')]
     public string $search = '';
 
-    // Управление модалкой (починенное)
     public bool $isRejectModalVisible = false;
     public ?int $rejectingPhotoId = null;
     public string $rejectReason = '';
@@ -61,15 +55,10 @@ new #[Layout('layouts.admin')] class extends Component
         $this->resetPage();
     }
 
-    // ============================================
-    // ДЕЙСТВИЯ (ДЕЛЕГИРУЕМ БИЗНЕС-ЛОГИКУ В ACTION)
-    // ============================================
-
     public function approve(int $photoId, ModeratePhotoAction $action): void
     {
         $photo = Photo::find($photoId);
         if (!$photo) return;
-
         $action->approve($photo, auth()->user());
         $this->dispatch('show-toast', type: 'success', message: 'Фото одобрено. Запущена обработка...');
     }
@@ -109,7 +98,6 @@ new #[Layout('layouts.admin')] class extends Component
     {
         $photo = Photo::find($photoId);
         if (!$photo) return;
-
         $action->setPrimary($photo, auth()->user());
         $this->dispatch('show-toast', type: 'success', message: 'Установлено как аватар');
     }
@@ -156,46 +144,32 @@ new #[Layout('layouts.admin')] class extends Component
     {
         $user = User::find($userId);
         if (!$user) return;
-
         $count = $action->approveAllForUser($user, auth()->user());
-
-        if ($count > 0) {
-            $this->dispatch('show-toast', type: 'success', message: "Одобрено {$count} фото");
-        } else {
-            $this->dispatch('show-toast', type: 'info', message: 'Нет фото для одобрения.');
-        }
+        $this->dispatch('show-toast', type: $count > 0 ? 'success' : 'info', message: $count > 0 ? "Одобрено {$count} фото" : 'Нет фото для одобрения.');
     }
 
     public function rejectAllForUser(int $userId, ModeratePhotoAction $action): void
     {
         $user = User::find($userId);
         if (!$user) return;
-
         $count = $action->rejectAllForUser($user, auth()->user());
-
-        if ($count > 0) {
-            $this->dispatch('show-toast', type: 'error', message: "Отклонено {$count} фото");
-        } else {
-            $this->dispatch('show-toast', type: 'info', message: 'Нет фото для отклонения.');
-        }
+        $this->dispatch('show-toast', type: $count > 0 ? 'error' : 'info', message: $count > 0 ? "Отклонено {$count} фото" : 'Нет фото для отклонения.');
     }
-
-    // ============================================
-    // ВЫВОД ДАННЫХ (ОПТИМИЗИРОВАННЫЕ ЗАПРОСЫ)
-    // ============================================
 
     public function with(): array
     {
         $users = collect();
         $photos = collect();
 
+        // Обновленный подсчет счетчиков (добавлен quarantine)
         $counts = Photo::withTrashed()
             ->whereHas('user', fn($q) => $q->excludeStaff())
             ->selectRaw("
                 COUNT(*) as total,
                 SUM(CASE WHEN status = 'pending' AND deleted_at IS NULL THEN 1 ELSE 0 END) as pending,
                 SUM(CASE WHEN status = 'approved' AND deleted_at IS NULL THEN 1 ELSE 0 END) as approved,
-                SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END) as rejected
+                SUM(CASE WHEN status = 'rejected' AND deleted_at IS NULL THEN 1 ELSE 0 END) as rejected,
+                SUM(CASE WHEN deleted_at IS NOT NULL THEN 1 ELSE 0 END) as quarantine
             ")->first();
 
         $isSearching = !empty($this->search);
@@ -230,10 +204,12 @@ new #[Layout('layouts.admin')] class extends Component
             ->whereHas('user', fn($q) => $q->excludeStaff());
 
             if (!$isSearching) {
-                if ($this->status === 'approved') {
-                    $query->where('status', 'approved')->whereNull('deleted_at');
+                if ($this->status === 'quarantine') {
+                    // ФИКС: Карантин - это всё, где есть deleted_at
+                    $query->whereNotNull('deleted_at');
                 } else {
-                    $query->where('status', 'rejected');
+                    // ФИКС: Для остальных вкладок ищем строго статус и отсутствие deleted_at
+                    $query->where('status', $this->status)->whereNull('deleted_at');
                 }
             }
 
@@ -257,6 +233,7 @@ new #[Layout('layouts.admin')] class extends Component
             'pendingCount' => (int) ($counts->pending ?? 0),
             'approvedCount' => (int) ($counts->approved ?? 0),
             'rejectedCount' => (int) ($counts->rejected ?? 0),
+            'quarantineCount' => (int) ($counts->quarantine ?? 0),
             'totalCount' => (int) ($counts->total ?? 0),
         ];
     }
@@ -286,7 +263,7 @@ new #[Layout('layouts.admin')] class extends Component
 
     <!-- Фильтры -->
     <div class="flex flex-wrap items-center gap-3">
-        <div class="flex gap-2">
+         <div class="flex gap-2">
             <x-ui.button wire:click="setStatus('pending')" variant="{{ $status == 'pending' ? 'default' : 'secondary' }}">
                 Ожидают <x-ui.badge>{{ $pendingCount }}</x-ui.badge>
             </x-ui.button>
@@ -295,6 +272,9 @@ new #[Layout('layouts.admin')] class extends Component
             </x-ui.button>
             <x-ui.button wire:click="setStatus('rejected')" variant="{{ $status == 'rejected' ? 'default' : 'secondary' }}">
                 Отклонены <x-ui.badge>{{ $rejectedCount }}</x-ui.badge>
+            </x-ui.button>
+            <x-ui.button wire:click="setStatus('quarantine')" variant="{{ $status == 'quarantine' ? 'default' : 'secondary' }}">
+                Карантин <x-ui.badge>{{ $quarantineCount }}</x-ui.badge>
             </x-ui.button>
         </div>
 
@@ -402,8 +382,11 @@ new #[Layout('layouts.admin')] class extends Component
                                         <x-lucide-maximize-2 class="w-6 h-6 text-white drop-shadow-lg" />
                                     </div>
 
-                                    <div class="absolute top-2 left-2 z-10 flex flex-col gap-1">
-                                        <span class="bg-black/60 text-white text-[10px] px-1.5 py-0.5 rounded font-medium">#{{ $photo->id }}</span>
+                                    <div class="absolute top-2 right-2 z-10 inline-flex flex-col gap-1">                                
+                                        <span class="bg-black/60 text-white text-[0.625rem] px-1.5 py-0.5 rounded font-medium">#{{ $photo->id }}</span>
+                                    </div>      
+                                    
+                                    <div class="absolute top-2 left-2 z-10 flex flex-col gap-1">                                       
                                         @if ($photo->is_primary) <x-ui.badge size="xs">Аватар</x-ui.badge> @endif
                                         @if ($photo->is_intimate) <x-ui.badge variant="destructive" size="xs">18+</x-ui.badge> @endif
                                         @if ($photo->album) <x-ui.badge variant="secondary" size="xs">{{ $photo->album->name }}</x-ui.badge> @endif
@@ -461,7 +444,7 @@ new #[Layout('layouts.admin')] class extends Component
                     <div wire:key="photo-{{ $photo->id }}" class="bg-card border border-border rounded-lg overflow-hidden flex flex-col">
                         <div class="relative aspect-square bg-muted group overflow-hidden">
                             <a href="{{ $fullSrc }}" data-fancybox="gallery-{{ $photo->user_id }}" data-caption="{{ $photo->user?->name }}" class="block w-full h-full">
-                                <img src="{{ $imgSrc }}" alt="Photo" loading="lazy" class="absolute inset-0 w-full h-full object-cover group-hover:scale-105 transition-transform duration-300 {{ $isRejected ? 'opacity-50 grayscale' : '' }}">
+                                <img src="{{ $imgSrc }}" alt="Photo" loading="lazy" class="absolute inset-0 w-full h-full object-cover group-hover:scale-105 transition-transform duration-300 {{ $photo->trashed() ? 'opacity-50 grayscale' : '' }}">
                             </a>
 
                             <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center pointer-events-none">
@@ -478,7 +461,7 @@ new #[Layout('layouts.admin')] class extends Component
                                 <span class="bg-black/60 text-white text-[0.625rem] px-1.5 py-0.5 rounded font-medium">#{{ $photo->id }}</span>
                             </div>            
 
-                            @if ($isRejected && $photo->reject_reason)
+                            @if ($photo->status === 'rejected' && $photo->reject_reason && !$photo->trashed())
                                 @php
                                     $reasonLabel = \App\Enums\PhotoRejectReason::tryFrom($photo->reject_reason)?->label() ?? $photo->reject_reason;
                                 @endphp
@@ -515,7 +498,8 @@ new #[Layout('layouts.admin')] class extends Component
                         
                         {{-- КНОПКИ ДЕЙСТВИЙ В ЗАВИСИМОСТИ ОТ СТАТУСА --}}
                         <div class="p-2 flex gap-2">
-                            @if ($isRejected)
+                            @if ($photo->trashed())
+                                {{-- В КАРТАНТИНЕ: Можно только вернуть или сжечь --}}
                                 <x-ui.button wire:click="restorePhoto({{ $photo->id }})" wire:target="restorePhoto({{ $photo->id }})" variant="success" size="sm" class="flex-1 h-8 text-xs">
                                     <span wire:loading.remove wire:target="restorePhoto({{ $photo->id }})">Вернуть</span>
                                     <x-lucide-loader-2 wire:loading wire:target="restorePhoto({{ $photo->id }})" class="w-4 h-4 animate-spin" />
@@ -524,14 +508,25 @@ new #[Layout('layouts.admin')] class extends Component
                                     <span wire:loading.remove wire:target="destroy({{ $photo->id }})">Удалить навсегда</span>
                                     <x-lucide-loader-2 wire:loading wire:target="destroy({{ $photo->id }})" class="w-4 h-4 animate-spin" />
                                 </x-ui.button>
-                            @else
+                            @elseif ($photo->status === 'approved')
+                                {{-- ОДОБРЕННЫЕ: Можно отклонить или удалить в карантин --}}
                                 <x-ui.button wire:click="openRejectModal({{ $photo->id }})" variant="warning" size="sm" class="flex-1 h-8 text-xs">Отклонить</x-ui.button>
                                 <x-ui.button wire:click="softDelete({{ $photo->id }})" wire:confirm="Переместить в карантин?" wire:target="softDelete({{ $photo->id }})" variant="destructive" size="sm" class="flex-1 h-8 text-xs">
                                     <span wire:loading.remove wire:target="softDelete({{ $photo->id }})">Удалить</span>
                                     <x-lucide-loader-2 wire:loading wire:target="softDelete({{ $photo->id }})" class="w-4 h-4 animate-spin" />
                                 </x-ui.button>
+                            @elseif ($photo->status === 'rejected')
+                                {{-- ОТКЛОНЕННЫЕ: Можно переодобрить или удалить в карантин --}}
+                                <x-ui.button wire:click="approve({{ $photo->id }})" wire:target="approve({{ $photo->id }})" variant="success" size="sm" class="flex-1 h-8 text-xs">
+                                    <span wire:loading.remove wire:target="approve({{ $photo->id }})">Одобрить</span>
+                                    <x-lucide-loader-2 wire:loading wire:target="approve({{ $photo->id }})" class="w-4 h-4 animate-spin" />
+                                </x-ui.button>
+                                <x-ui.button wire:click="softDelete({{ $photo->id }})" wire:confirm="Переместить в карантин?" wire:target="softDelete({{ $photo->id }})" variant="destructive" size="sm" class="flex-1 h-8 text-xs">
+                                    <span wire:loading.remove wire:target="softDelete({{ $photo->id }})">Удалить</span>
+                                    <x-lucide-loader-2 wire:loading wire:target="softDelete({{ $photo->id }})" class="w-4 h-4 animate-spin" />
+                                </x-ui.button>
                             @endif
-                        </div>                   
+                        </div>                                                               
                     </div>
                 @endforeach
             </div>
