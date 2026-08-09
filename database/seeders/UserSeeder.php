@@ -65,8 +65,8 @@ class UserSeeder extends Seeder
         // НЕ отключаем события! В модели User событие created само создаст пустые связи.
         // А мы ниже через updateOrCreate их заполним.
 
-        for ($i = 1; $i <= 10; $i++) {
-            $year = rand(1989, 2006);
+        for ($i = 1; $i <= 30; $i++) {
+            $year = rand(1984, 2006);
             $month = rand(1, 12);
             $day = rand(1, 28);
             $birthDate = "{$year}-{$month}-{$day}";

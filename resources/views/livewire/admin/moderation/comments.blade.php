@@ -14,24 +14,17 @@ new #[Layout('layouts.admin')] class extends Component
 {
     use WithPagination;
 
-    /** @var string Текущий фильтр статуса (pending, approved, rejected, spam) */
     public string $statusFilter = 'pending';
     
-    /** @var string Строка поиска по тексту или автору */
     #[Url(as: 'q', except: '')]
     public string $search = '';
     
-    /** @var int Кол-во фото на странице */
     public int $perPage = 5;
 
-        /**
-     * Инициализация. Восстанавливаем фильтры из сессии.
-     */
     public function mount(): void
     {
-        // Если перешли по прямой ссылке с поиском (например, из профиля ?q=105)
         if (request()->has('q')) {
-            $this->statusFilter = 'all'; // Сбрасываем фильтр статуса, чтобы точно найти коммент
+            $this->statusFilter = 'all';
             return;
         }
 
@@ -40,28 +33,18 @@ new #[Layout('layouts.admin')] class extends Component
         if (isset($saved['search'])) $this->search = $saved['search'];
     }
 
-    /**
-     * Хук Livewire: сброс пагинации и сохранение в сессию при поиске.
-     */
     public function updatedSearch(): void
     {
         session(['moderate_photo_comments.search' => $this->search]);
         $this->resetPage();
     }
 
-    /**
-     * Хук Livewire: сброс пагинации и сохранение в сессию при смене фильтра.
-     */
     public function updatedStatusFilter(): void
     {
         session(['moderate_photo_comments.statusFilter' => $this->statusFilter]);
         $this->resetPage();
     }
 
-    /**
-     * Установка фильтра статуса.
-     * @param string $status
-     */
     public function setStatusFilter(string $status): void
     {
         $this->statusFilter = $status;
@@ -69,9 +52,6 @@ new #[Layout('layouts.admin')] class extends Component
         $this->resetPage();
     }
 
-    /**
-     * Сброс всех фильтров к значениям по умолчанию.
-     */
     public function resetFilters(): void
     {
         $this->reset(['search', 'statusFilter']);
@@ -84,9 +64,6 @@ new #[Layout('layouts.admin')] class extends Component
     // ДЕЙСТВИЯ (ДЕЛЕГИРУЕМ В ACTION)
     // ============================================
 
-    /**
-     * Одобрить комментарий (проверяет, одобрен ли родитель).
-     */
     public function approveComment(int $commentId, ModerateCommentAction $action): void
     {
         $comment = PhotoComment::with('parent')->find($commentId);
@@ -102,9 +79,6 @@ new #[Layout('layouts.admin')] class extends Component
         $this->dispatch('show-toast', type: 'success', message: 'Комментарий одобрен');
     }
 
-    /**
-     * Отклонить комментарий с указанием причины из Enum.
-     */
     public function rejectComment(int $commentId, string $reason, ModerateCommentAction $action): void
     {
         $comment = PhotoComment::find($commentId);
@@ -114,9 +88,6 @@ new #[Layout('layouts.admin')] class extends Component
         $this->dispatch('show-toast', type: 'info', message: 'Комментарий отклонен');
     }
 
-    /**
-     * Пометить комментарий как спам (статус меняется на 'spam').
-     */
     public function markSpam(int $commentId, ModerateCommentAction $action): void
     {
         $comment = PhotoComment::find($commentId);
@@ -126,9 +97,6 @@ new #[Layout('layouts.admin')] class extends Component
         $this->dispatch('show-toast', type: 'error', message: 'Комментарий помечен как спам');
     }
 
-    /**
-     * Вернуть комментарий на модерацию (смена статуса на 'pending').
-     */
     public function restoreComment(int $commentId, ModerateCommentAction $action): void
     {
         $comment = PhotoComment::find($commentId);
@@ -138,9 +106,6 @@ new #[Layout('layouts.admin')] class extends Component
         $this->dispatch('show-toast', type: 'info', message: 'Комментарий возвращен на модерацию');
     }
 
-    /**
-     * Массовое одобрение всех pending-комментариев к конкретному фото.
-     */
     public function approveRemaining(int $photoId, ModerateCommentAction $action): void
     {
         $pendingComments = PhotoComment::where('photo_id', $photoId)
@@ -157,9 +122,6 @@ new #[Layout('layouts.admin')] class extends Component
         $this->dispatch('show-toast', type: 'success', message: "Одобрено {$count} комментариев");
     }
 
-    /**
-     * Массовое отклонение всех pending-комментариев к конкретному фото.
-     */
     public function rejectRemaining(int $photoId, ModerateCommentAction $action): void
     {
         $pendingComments = PhotoComment::where('photo_id', $photoId)
@@ -176,9 +138,6 @@ new #[Layout('layouts.admin')] class extends Component
         $this->dispatch('show-toast', type: 'info', message: "Отклонено {$count} комментариев");
     }
 
-    /**
-     * Глобальное массовое одобрение всех pending-комментариев на сайте.
-     */
     public function approveAllPending(ModerateCommentAction $action): void
     {
         $pendingComments = PhotoComment::where('status', 'pending')->with('parent', 'user')->get();
@@ -192,9 +151,6 @@ new #[Layout('layouts.admin')] class extends Component
         $this->dispatch('show-toast', type: 'success', message: "Одобрено {$count} комментариев");
     }
 
-    /**
-     * Глобальное массовое отклонение всех pending-комментариев на сайте.
-     */
     public function rejectAllPending(ModerateCommentAction $action): void
     {
         $pendingComments = PhotoComment::where('status', 'pending')->with('user')->get();
@@ -208,11 +164,6 @@ new #[Layout('layouts.admin')] class extends Component
         $this->dispatch('show-toast', type: 'info', message: "Отклонено {$count} комментариев");
     }
 
-    /**
-     * Хелпер для UI: маппинг статуса на бейджи (variant, label).
-     * @param string $status
-     * @return array
-     */
     public function getStatusBadge(string $status): array
     {
         return match ($status) {
@@ -228,14 +179,9 @@ new #[Layout('layouts.admin')] class extends Component
     // ВЫВОД ДАННЫХ (ОПТИМИЗИРОВАННЫЕ ЗАПРОСЫ)
     // ============================================
 
-       /**
-     * Универсальный фильтр для комментариев.
-     * Применяется как для whereHas, так и для with (чтобы избежать N+1 и пустых карточек).
-     * @param $query
-     */
     private function applyCommentFilters($query): void
     {
-        $query->whereNull('parent_id'); // Только корневые комментарии
+        $query->whereNull('parent_id'); 
         
         if ($this->statusFilter !== 'all') {
             $query->where(function ($sub) {
@@ -249,7 +195,6 @@ new #[Layout('layouts.admin')] class extends Component
             $search = '%' . $this->search . '%';
             $query->where(function ($sub) use ($search, $operator) {
                 $sub->where('content', $operator, $search)
-                    // ФИКС: Поиск по ID комментария (приводим к TEXT для безопасного ilike в Postgres)
                     ->orWhereRaw("CAST(id AS TEXT) {$operator} ?", [$search])
                     ->orWhereHas('user', fn($user) => $user->where('name', $operator, $search))
                     ->orWhereHas('replies', function ($r) use ($search, $operator) {
@@ -261,20 +206,18 @@ new #[Layout('layouts.admin')] class extends Component
         }
     }
 
-    /**
-     * Получение фото с их комментариями.
-     * Использует жадную загрузку (Eager Loading) для аватарок и автора фото.
-     */
     #[Computed]
     public function photos()
     {
-        $userAvatarQuery = fn($q) => $q->select('id', 'name', 'status', 'is_premium', 'premium_expires_at', 'is_verified', 'last_seen')
+        // ФИКС: withTrashed() для юзеров, чтобы видеть имена и аватарки удаленных авторов
+        $userAvatarQuery = fn($q) => $q->withTrashed()->select('id', 'name', 'status', 'is_premium', 'premium_expires_at', 'is_verified', 'last_seen')
             ->with(['photos' => fn($sq) => $sq->select('id', 'user_id', 'is_primary', 'status', 'path_thumb', 'path_medium', 'path_large', 'path_original')->orderByDesc('is_primary')->limit(1)]);
 
-        $query = Photo::whereHas('comments', fn($q) => $this->applyCommentFilters($q))
+        // ФИКС: Photo::withTrashed(), чтобы выводить комменты под удаленными фото
+        $query = Photo::withTrashed()->whereHas('comments', fn($q) => $this->applyCommentFilters($q))
         ->with([
             'album:id,name',
-            'user:id,name', 
+            'user' => fn($q) => $q->withTrashed()->select('id', 'name', 'status', 'is_premium', 'premium_expires_at', 'is_verified', 'last_seen'), 
             'comments' => function ($q) use ($userAvatarQuery) {
                 $this->applyCommentFilters($q);
                 $q->with([
@@ -289,19 +232,23 @@ new #[Layout('layouts.admin')] class extends Component
         return $query->latest()->paginate($this->perPage);
     }
 
-    /**
-     * Подсчет метрик для бейджей фильтров.
-     */
     #[Computed]
     public function counts()
     {
-        $stats = PhotoComment::selectRaw("
-            SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
-            SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) as approved,
-            SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END) as rejected,
-            SUM(CASE WHEN status = 'spam' THEN 1 ELSE 0 END) as spam,
-            COUNT(*) as total
-        ")->first();
+        // ФИКС: Считаем только те комменты, у которых есть фото (даже если оно в корзине)
+        // И исключаем "сирот" (ответы на удаленные комменты), чтобы счетчик совпадал со списком
+        $stats = PhotoComment::whereHas('photo', fn($q) => $q->withTrashed())
+            ->where(function ($q) {
+                $q->whereNull('parent_id')
+                  ->orWhereHas('parent'); 
+            })
+            ->selectRaw("
+                SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
+                SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) as approved,
+                SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END) as rejected,
+                SUM(CASE WHEN status = 'spam' THEN 1 ELSE 0 END) as spam,
+                COUNT(*) as total
+            ")->first();
 
         return [
             'pending' => (int) ($stats->pending ?? 0),

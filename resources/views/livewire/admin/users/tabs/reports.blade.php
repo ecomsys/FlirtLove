@@ -4,6 +4,8 @@ use App\Enums\ReportReason;
 use App\Enums\ReportResolution;
 use App\Models\Report;
 use App\Models\User;
+use Livewire\Attributes\Computed;
+use Livewire\Attributes\On;
 use Livewire\Attributes\Url;
 use Livewire\Volt\Component;
 use Livewire\WithPagination;
@@ -12,7 +14,7 @@ new class extends Component
 {
     use WithPagination;
 
-    public User $user;
+    public int $userId;
 
     // Раздельные страницы для независимой пагинации
     #[Url(as: 'made_page')] 
@@ -21,27 +23,51 @@ new class extends Component
     #[Url(as: 'received_page')] 
     public int $receivedPage = 1;
 
-    public function with(): array
+    public function mount(int $userId): void
     {
-        $avatarQuery = fn($q) => $q->select('id', 'name', 'email', 'status', 'is_premium', 'premium_expires_at', 'last_seen')
-            ->with(['photos' => fn($sq) => $sq->select('id', 'user_id', 'is_primary', 'status', 'path_thumb', 'path_medium', 'path_large', 'path_original')->orderByDesc('is_primary')->limit(1)]);
+        $this->userId = $userId;
+    }
 
-        // Жалобы, которые подал этот юзер (грузим аватарку цели)
-        $reportsMade = Report::where('reporter_id', $this->user->id)
-            ->with(['reportable', 'reported' => $avatarQuery, 'admin:id,name'])
+    // Достаем юзера (с удаленными для защиты от 404/500)
+    #[Computed]
+    public function user(): User
+    {
+        return User::withTrashed()->findOrFail($this->userId);
+    }
+
+    // Хелпер для жадной загрузки аватарок (чтобы не дублировать код)
+    private function getAvatarQuery(): \Closure
+    {
+        return fn($q) => $q->select('id', 'name', 'email', 'status', 'is_premium', 'premium_expires_at', 'last_seen')
+            ->with(['photos' => fn($sq) => $sq->select('id', 'user_id', 'is_primary', 'status', 'path_thumb')->orderByDesc('is_primary')->limit(1)]);
+    }
+
+    // Жалобы, которые подал этот юзер
+    #[Computed]
+    public function reportsMade()
+    {
+        return Report::where('reporter_id', $this->userId)
+            ->with(['reportable', 'reported' => $this->getAvatarQuery(), 'admin:id,name'])
             ->latest()
             ->paginate(5, ['*'], 'madePage');
+    }
 
-        // Жалобы, которые подали на этого юзера (грузим аватарку жалобщика)
-        $reportsReceived = Report::where('reported_id', $this->user->id)
-            ->with(['reportable', 'reporter' => $avatarQuery, 'admin:id,name'])
+    // Жалобы, которые подали на этого юзера
+    #[Computed]
+    public function reportsReceived()
+    {
+        return Report::where('reported_id', $this->userId)
+            ->with(['reportable', 'reporter' => $this->getAvatarQuery(), 'admin:id,name'])
             ->latest()
             ->paginate(5, ['*'], 'receivedPage');
+    }
 
-        return [
-            'reportsMade' => $reportsMade,
-            'reportsReceived' => $reportsReceived
-        ];
+    // Сбрасываем кэш при обновлении данных
+    #[On('user-action-performed')] 
+    public function refreshUser(): void
+    {
+        unset($this->reportsMade);
+        unset($this->reportsReceived);
     }
 }; 
 ?>
@@ -51,15 +77,15 @@ new class extends Component
     {{-- ЛЕВАЯ КОЛОНКА: ЖАЛОБЫ ОТ ЮЗЕРА --}}
     <div class="space-y-4">
         <h3 class="text-sm font-semibold flex items-center gap-2">
-            <x-lucide-flag class="w-4 h-4 text-blue-500" /> Пожаловался на ({{ $reportsMade->total() }})
+            <x-lucide-flag class="w-4 h-4 text-blue-500" /> Пожаловался на ({{ $this->reportsMade->total() }})
         </h3>
 
-        @if($reportsMade->isEmpty())
+        @if($this->reportsMade->isEmpty())
             <div class="p-4 bg-muted/20 rounded-lg border border-border text-center text-xs text-muted-foreground">
                 Пользователь не подавал жалоб.
             </div>
         @else
-                        <x-ui.table>
+            <x-ui.table>
                 <x-ui.table-header>
                     <x-ui.table-row>
                         <x-ui.table-head class="w-16">ID</x-ui.table-head>
@@ -69,11 +95,8 @@ new class extends Component
                     </x-ui.table-row>
                 </x-ui.table-header>
                 <x-ui.table-body>
-                    @foreach($reportsMade as $report)
-                        @php 
-                            $reasonEnum = ReportReason::tryFrom($report->reason ?? '');
-                            $resolutionEnum = ReportResolution::tryFrom($report->resolution ?? '');
-                        @endphp
+                    @foreach($this->reportsMade as $report)
+                        @php $targetUser = $report->reported; @endphp
                         <x-ui.table-row wire:key="made-{{ $report->id }}">
                             <x-ui.table-cell class="text-muted-foreground text-xs font-mono">
                                 <a href="{{ route('admin.moderation.reports', ['q' => $report->id]) }}" wire:navigate class="hover:text-primary" title="Найти в общей очереди">
@@ -81,15 +104,15 @@ new class extends Component
                                 </a>
                             </x-ui.table-cell>
                             <x-ui.table-cell>
-                                @if($report->reported)
-                                    <a href="{{ route('admin.users.show', $report->reported->id) }}" wire:navigate class="flex items-center gap-2 group">
-                                        <x-avatar src="{{ $report->reported->avatar_url }}" name="{{ $report->reported->name }}" size="sm" userId="{{ $report->reported->id }}" showStatus="true" :isOnline="$report->reported->is_online"/>
+                                @if($targetUser)
+                                    <a href="{{ route('admin.users.show', $targetUser->id) }}" wire:navigate class="flex items-center gap-2 group">
+                                        <x-avatar src="{{ $targetUser->avatar_url }}" name="{{ $targetUser->name }}" size="sm" userId="{{ $targetUser->id }}" showStatus="true" :isOnline="$targetUser->is_online"/>
                                         <div class="flex flex-col min-w-0">
                                             <span class="text-sm font-medium group-hover:text-primary flex items-center gap-1.5">
-                                                <x-user-status-sign :user="$report->reported" />
-                                                {{ $report->reported->name }}
+                                                <x-user-status-sign :user="$targetUser" />
+                                                {{ $targetUser->name }}
                                             </span>
-                                            <span class="text-xs text-muted-foreground truncate">{{ $report->reported->email }}</span>
+                                            <span class="text-xs text-muted-foreground truncate">{{ $targetUser->email }}</span>
                                         </div>
                                     </a>
                                 @else
@@ -100,11 +123,14 @@ new class extends Component
                                 @endif
                             </x-ui.table-cell>
                             <x-ui.table-cell>
-                                <div class="flex flex-col gap-1.5">
+                                <div class="flex flex-col gap-1">
+                                    @php $reasonEnum = ReportReason::tryFrom($report->reason ?? ''); @endphp
                                     @if($reasonEnum)
+                                    <div class="block">
                                         <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium {{ $reasonEnum->color() }}" title="{{ $report->description }}">
                                             {{ $reasonEnum->label() }}
                                         </span>
+                                    </div>
                                     @endif
                                     @if($report->status === 'pending')
                                         <x-ui.badge variant="warning" size="xs">Ожидает</x-ui.badge>
@@ -113,8 +139,12 @@ new class extends Component
                                     @else
                                         <x-ui.badge variant="secondary" size="xs">Отклонена</x-ui.badge>
                                     @endif
+                                    @php $resolutionEnum = ReportResolution::tryFrom($report->resolution ?? ''); @endphp
                                     @if($resolutionEnum)
-                                        <span class="text-[10px] text-muted-foreground">{{ $resolutionEnum->label() }}</span>
+                                    <div class="block text-[10px] text-muted-foreground ">
+                                        <span>Решение: </span>
+                                        <span class="{{ $resolutionEnum->color() }}">{{ $resolutionEnum->label() }}</span>
+                                    </div>
                                     @endif
                                 </div>
                             </x-ui.table-cell>
@@ -125,22 +155,22 @@ new class extends Component
                     @endforeach
                 </x-ui.table-body>
             </x-ui.table>
-            <div class="mt-2">{{ $reportsMade->links('partials.pagination') }}</div>
+            <div class="mt-2">{{ $this->reportsMade->links('partials.pagination') }}</div>
         @endif
     </div>
 
     {{-- ПРАВАЯ КОЛОНКА: ЖАЛОБЫ НА ЮЗЕРА --}}
     <div class="space-y-4">
         <h3 class="text-sm font-semibold flex items-center gap-2">
-            <x-lucide-alert-octagon class="w-4 h-4 text-destructive" /> Жалобы на пользователя ({{ $reportsReceived->total() }})
+            <x-lucide-alert-octagon class="w-4 h-4 text-destructive" /> Жалобы на пользователя ({{ $this->reportsReceived->total() }})
         </h3>
 
-        @if($reportsReceived->isEmpty())
+        @if($this->reportsReceived->isEmpty())
             <div class="p-4 bg-muted/20 rounded-lg border border-border text-center text-xs text-muted-foreground">
                 Жалоб на пользователя не поступало.
             </div>
         @else
-                        <x-ui.table>
+            <x-ui.table>
                 <x-ui.table-header>
                     <x-ui.table-row>
                         <x-ui.table-head class="w-16">ID</x-ui.table-head>
@@ -150,11 +180,8 @@ new class extends Component
                     </x-ui.table-row>
                 </x-ui.table-header>
                 <x-ui.table-body>
-                    @foreach($reportsReceived as $report)
-                        @php 
-                            $reasonEnum = ReportReason::tryFrom($report->reason ?? '');
-                            $resolutionEnum = ReportResolution::tryFrom($report->resolution ?? '');
-                        @endphp
+                    @foreach($this->reportsReceived as $report)
+                        @php $targetUser = $report->reporter; @endphp
                         <x-ui.table-row wire:key="received-{{ $report->id }}">
                             <x-ui.table-cell class="text-muted-foreground text-xs font-mono">
                                 <a href="{{ route('admin.moderation.reports', ['q' => $report->id]) }}" wire:navigate class="hover:text-primary" title="Найти в общей очереди">
@@ -162,15 +189,15 @@ new class extends Component
                                 </a>
                             </x-ui.table-cell>
                             <x-ui.table-cell>
-                                @if($report->reporter)
-                                    <a href="{{ route('admin.users.show', $report->reporter->id) }}" wire:navigate class="flex items-center gap-2 group">
-                                        <x-avatar src="{{ $report->reporter->avatar_url }}" name="{{ $report->reporter->name }}" size="sm" userId="{{ $report->reporter->id }}" showStatus="true" :isOnline="$report->reporter->is_online"/>
+                                @if($targetUser)
+                                    <a href="{{ route('admin.users.show', $targetUser->id) }}" wire:navigate class="flex items-center gap-2 group">
+                                        <x-avatar src="{{ $targetUser->avatar_url }}" name="{{ $targetUser->name }}" size="sm" userId="{{ $targetUser->id }}" showStatus="true" :isOnline="$targetUser->is_online"/>
                                         <div class="flex flex-col min-w-0">
                                             <span class="text-sm font-medium group-hover:text-primary flex items-center gap-1.5">
-                                                <x-user-status-sign :user="$report->reporter" />
-                                                {{ $report->reporter->name }}
+                                                <x-user-status-sign :user="$targetUser" />
+                                                {{ $targetUser->name }}
                                             </span>
-                                            <span class="text-xs text-muted-foreground truncate">{{ $report->reporter->email }}</span>
+                                            <span class="text-xs text-muted-foreground truncate">{{ $targetUser->email }}</span>
                                         </div>
                                     </a>
                                 @else
@@ -182,6 +209,7 @@ new class extends Component
                             </x-ui.table-cell>
                             <x-ui.table-cell>
                                 <div class="flex flex-col gap-1.5">
+                                    @php $reasonEnum = ReportReason::tryFrom($report->reason ?? ''); @endphp
                                     @if($reasonEnum)
                                         <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium {{ $reasonEnum->color() }}" title="{{ $report->description }}">
                                             {{ $reasonEnum->label() }}
@@ -194,6 +222,7 @@ new class extends Component
                                     @else
                                         <x-ui.badge variant="secondary" size="xs">Отклонена</x-ui.badge>
                                     @endif
+                                    @php $resolutionEnum = ReportResolution::tryFrom($report->resolution ?? ''); @endphp
                                     @if($resolutionEnum)
                                         <span class="text-[10px] text-muted-foreground">{{ $resolutionEnum->label() }}</span>
                                     @endif
@@ -206,7 +235,7 @@ new class extends Component
                     @endforeach
                 </x-ui.table-body>
             </x-ui.table>
-            <div class="mt-2">{{ $reportsReceived->links('partials.pagination') }}</div>
+            <div class="mt-2">{{ $this->reportsReceived->links('partials.pagination') }}</div>
         @endif
     </div>
 

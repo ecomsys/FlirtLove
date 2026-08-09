@@ -30,10 +30,9 @@ new #[Layout('layouts.admin')] class extends Component
     #[Url(as: 'q', except: '')]
     public string $search = '';
 
-    /** @var int|null ID фото, которое сейчас отклоняется (привязано к модалке) */
+    // Управление модалкой (починенное)
+    public bool $isRejectModalVisible = false;
     public ?int $rejectingPhotoId = null;
-    
-    /** @var string Выбранная причина отклонения */
     public string $rejectReason = '';
 
     public function mount(): void
@@ -79,6 +78,13 @@ new #[Layout('layouts.admin')] class extends Component
     {
         $this->rejectingPhotoId = $photoId;
         $this->rejectReason = '';
+        $this->isRejectModalVisible = true;
+    }
+
+    public function closeRejectModal(): void
+    {
+        $this->isRejectModalVisible = false;
+        $this->rejectingPhotoId = null;
     }
 
     public function rejectPhoto(ModeratePhotoAction $action): void
@@ -88,12 +94,14 @@ new #[Layout('layouts.admin')] class extends Component
         ]);
 
         $photo = Photo::find($this->rejectingPhotoId);
-        if (!$photo) return;
+        if (!$photo) {
+            $this->closeRejectModal();
+            return;
+        }
 
         $action->reject($photo, auth()->user(), $this->rejectReason);
 
-        $this->rejectingPhotoId = null;
-        $this->rejectReason = '';
+        $this->closeRejectModal();
         $this->dispatch('show-toast', type: 'error', message: 'Фото отклонено');
     }
 
@@ -116,9 +124,6 @@ new #[Layout('layouts.admin')] class extends Component
         $this->dispatch('show-toast', type: 'warning', message: 'Фото перемещено в карантин');
     }
 
-    /**
-     * Восстановить фото из отклоненных/карантина.
-     */
     public function restorePhoto(int $photoId): void
     {
         $photo = Photo::withTrashed()->find($photoId);
@@ -228,7 +233,6 @@ new #[Layout('layouts.admin')] class extends Component
                 if ($this->status === 'approved') {
                     $query->where('status', 'approved')->whereNull('deleted_at');
                 } else {
-                    // В "Отклоненных" показываем все отклоненные, в том числе те, что уже в корзине (с deleted_at)
                     $query->where('status', 'rejected');
                 }
             }
@@ -399,6 +403,7 @@ new #[Layout('layouts.admin')] class extends Component
                                     </div>
 
                                     <div class="absolute top-2 left-2 z-10 flex flex-col gap-1">
+                                        <span class="bg-black/60 text-white text-[10px] px-1.5 py-0.5 rounded font-medium">#{{ $photo->id }}</span>
                                         @if ($photo->is_primary) <x-ui.badge size="xs">Аватар</x-ui.badge> @endif
                                         @if ($photo->is_intimate) <x-ui.badge variant="destructive" size="xs">18+</x-ui.badge> @endif
                                         @if ($photo->album) <x-ui.badge variant="secondary" size="xs">{{ $photo->album->name }}</x-ui.badge> @endif
@@ -463,17 +468,21 @@ new #[Layout('layouts.admin')] class extends Component
                                 <x-lucide-maximize-2 class="w-8 h-8 text-white drop-shadow-lg" />
                             </div>
 
-                            <div class="absolute top-2 left-2 z-10 flex flex-col gap-1">
+                            <div class="absolute top-2 left-2 z-10 flex flex-col gap-1">                                
                                 @if ($photo->is_primary) <x-ui.badge size="xs">Аватар</x-ui.badge> @endif
                                 @if ($photo->is_intimate) <x-ui.badge variant="destructive" size="xs">18+</x-ui.badge> @endif
                                 @if ($photo->album) <x-ui.badge variant="secondary" size="xs">{{ $photo->album->name }}</x-ui.badge> @endif
                             </div>
 
+                            <div class="absolute top-2 right-2 z-10 inline-flex flex-col gap-1">                                
+                                <span class="bg-black/60 text-white text-[0.625rem] px-1.5 py-0.5 rounded font-medium">#{{ $photo->id }}</span>
+                            </div>            
+
                             @if ($isRejected && $photo->reject_reason)
                                 @php
                                     $reasonLabel = \App\Enums\PhotoRejectReason::tryFrom($photo->reject_reason)?->label() ?? $photo->reject_reason;
                                 @endphp
-                                <div class="absolute top-1 right-1 bg-destructive/90 text-white text-[0.625rem] px-2 py-0.5 m-1 rounded-sm font-medium">
+                                <div class="absolute bottom-2 left-2 bg-destructive/90 text-white text-[0.625rem] px-2 py-0.5 m-1 rounded-sm font-medium">
                                     {{ $reasonLabel }}
                                 </div>
                             @endif
@@ -530,18 +539,18 @@ new #[Layout('layouts.admin')] class extends Component
         @endif
     @endif
 
-    <!-- МОДАЛКА ОТКЛОНЕНИЯ -->
-    <div x-data="{ show: @entangle('rejectingPhotoId') }" x-show="show" x-cloak 
+    <!-- МОДАЛКА ОТКЛОНЕНИЯ (Починенная) -->
+    <div x-data="{ show: @entangle('isRejectModalVisible') }" x-show="show" x-cloak 
          class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" 
          style="display: none;"
-         @click.self="$wire.rejectingPhotoId = null"
+         @click.self="$wire.closeRejectModal()"
          x-transition:enter="transition ease-out duration-200"
          x-transition:enter-start="opacity-0 scale-95"
          x-transition:enter-end="opacity-100 scale-100"
          x-transition:leave="transition ease-in duration-150"
          x-transition:leave-start="opacity-100 scale-100"
          x-transition:leave-end="opacity-0 scale-95"
-         @keydown.escape.window="$wire.rejectingPhotoId = null">
+         @keydown.escape.window="$wire.closeRejectModal()">
          
         <div class="relative bg-card border border-border rounded-lg shadow-2xl max-w-md w-full mx-4 overflow-hidden">
             <div class="p-6 space-y-4">
@@ -571,7 +580,7 @@ new #[Layout('layouts.admin')] class extends Component
             </div>
 
             <div class="flex items-center justify-end gap-2 p-4 border-t border-border bg-muted/20">
-                <x-ui.button @click="$wire.rejectingPhotoId = null" variant="outline" size="sm">Отмена</x-ui.button>
+                <x-ui.button @click="$wire.closeRejectModal()" variant="outline" size="sm">Отмена</x-ui.button>
                 <x-ui.button wire:click="rejectPhoto" variant="destructive" size="sm" wire:loading.attr="disabled" wire:target="rejectPhoto">
                     <span wire:loading.remove wire:target="rejectPhoto">Отклонить фото</span>
                     <x-lucide-loader-2 wire:loading wire:target="rejectPhoto" class="w-4 h-4 animate-spin" />

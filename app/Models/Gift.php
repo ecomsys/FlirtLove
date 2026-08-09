@@ -84,17 +84,25 @@ class Gift extends Model
      * Используем тот же паттерн, что и в Photo: 
      * если ссылка полная (CDN) — отдаем как есть, если путь — генерируем через Storage.
      */
+        /**
+     * Получить URL картинки подарка.
+     */
     public function getImageUrlAttribute(): string
     {
-        if (empty($this->image_url)) {
+        // Берем чистое значение из БД, минуя рекурсию
+        $path = $this->attributes['image_url'] ?? null;
+
+        if (empty($path)) {
             return ''; // Заглушка, если админ не загрузил картинку
         }
 
-        if (filter_var($this->image_url, FILTER_VALIDATE_URL)) {
-            return $this->image_url;
+        // Если это уже полный URL (http/https) - возвращаем как есть
+        if (filter_var($path, FILTER_VALIDATE_URL)) {
+            return $path;
         }
 
-        return Storage::url($this->image_url);
+        // Иначе - генерируем Storage URL
+        return Storage::url($path);
     }
 
     // ============================================

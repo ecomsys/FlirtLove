@@ -32,9 +32,6 @@ new #[Layout('layouts.admin')] class extends Component
     private ModeratePhotoAction $moderatePhotoAction;
     private ModerateReportAction $moderateReportAction;
 
-    /**
-     * Внедряем Action-классы через boot (Livewire аналог конструктора контроллера).
-     */
     public function boot(
         ToggleUserBanAction $toggleUserBanAction,
         ModeratePhotoAction $moderatePhotoAction,
@@ -45,7 +42,7 @@ new #[Layout('layouts.admin')] class extends Component
         $this->moderateReportAction = $moderateReportAction;
     }
 
-    /**
+        /**
      * Восстанавливаем фильтры из сессии при загрузке страницы.
      */
     public function mount(): void
@@ -53,21 +50,32 @@ new #[Layout('layouts.admin')] class extends Component
         $saved = session('moderate_reports', []);
         if (isset($saved['statusFilter'])) $this->statusFilter = $saved['statusFilter'];
         if (isset($saved['typeFilter'])) $this->typeFilter = $saved['typeFilter'];
+
+        // ФИКС: Если мы перешли по ссылке с поиском (например, кликнули ID жалобы в профиле),
+        // принудительно включаем фильтр "Все", чтобы жалоба отобразилась, даже если она уже решена.
+        if (!empty($this->search)) {
+            $this->statusFilter = 'all';
+            // Сохраняем это в сессию, чтобы при перезагрузке фильтр не сбросился обратно на "pending"
+            session(['moderate_reports' => array_merge($saved, ['statusFilter' => 'all'])]);
+        }
     }
 
-    // Сброс пагинации при изменении фильтров, чтобы не зависать на пустых страницах
     public function updatingSearch(): void { $this->resetPage(); }
-    public function updatedTypeFilter(string $value): void 
-    { 
-        session(['moderate_reports' => array_merge(session('moderate_reports', []), ['typeFilter' => $value])]);
-        $this->resetPage(); 
-    }
-
-    public function setStatusFilter(string $status): void
+        public function setStatusFilter(string $status): void
     {
         $this->statusFilter = $status;
+        $this->search = ''; // Очищаем поиск при смене вкладки
+        
         session(['moderate_reports' => array_merge(session('moderate_reports', []), ['statusFilter' => $status])]);
         $this->resetPage();
+    }
+
+    public function updatedTypeFilter(string $value): void 
+    { 
+        $this->search = ''; // Очищаем поиск при смене типа жалобы
+        
+        session(['moderate_reports' => array_merge(session('moderate_reports', []), ['typeFilter' => $value])]);
+        $this->resetPage(); 
     }
 
     public function resetFilters(): void
@@ -83,57 +91,46 @@ new #[Layout('layouts.admin')] class extends Component
     // ДЕЙСТВИЯ МОДЕРАТОРА
     // ============================================
 
-    /**
-     * Закрыть жалобу с вынесением решения (warn, ban, etc).
-     */
-    public function resolve(int $reportId, string $resolution = 'warn'): void
+       public function resolve(int $reportId, string $resolution = 'warn'): void
     {
         $report = Report::find($reportId);
         if (!$report || $report->status !== 'pending') return;
 
-        // Безопасно маппим строковый ключ из UI в Enum
         $resolutionEnum = ReportResolution::tryFrom($resolution) ?? ReportResolution::Warn;
         
+        // Экшен сам закроет жалобу и отправит жалобщику ReportModerated
         $this->moderateReportAction->resolve($report, auth()->user(), $resolutionEnum, 'Решено модератором');
-        $this->dispatch('show-toast', type: 'success', message: 'Жалоба отмечена как решенная');
+
+        // Если это предупреждение — отправляем НАРУШИТЕЛЮ нотификацию (т.к. экшен этого не делает)
+        if ($resolutionEnum === ReportResolution::Warn && $report->reported) {
+            $reasonText = 'Нарушение правил сервиса';
+            $reportReasonEnum = \App\Enums\ReportReason::tryFrom($report->reason ?? '');
+            if ($reportReasonEnum) {
+                $reasonText = $reportReasonEnum->label();
+            }
+            $report->reported->notify(new \App\Notifications\UserWarned($reasonText));
+        }
+
+        $this->dispatch('show-toast', type: 'success', message: 'Жалоба решена. Нарушитель оповещен.');
     }
 
-    /**
-     * Отклонить жалобу (нарушение не подтвердилось).
-     */
-    public function reject(int $reportId): void
-    {
-        $report = Report::find($reportId);
-        if (!$report || $report->status !== 'pending') return;
-
-        $this->moderateReportAction->reject($report, auth()->user(), 'Нет нарушения');
-        $this->dispatch('show-toast', type: 'info', message: 'Жалоба отклонена');
-    }
-   
-     /**
-     * Бан/Разбан пользователя по жалобе.
-     * Автоматически берет причину из Enum жалобы и передает её в Action бана.
-     */
     public function toggleBan(int $userId, string $type = 'permanent', ?int $reportId = null): void
     {
-        $user = User::find($userId);
+        $user = User::withTrashed()->find($userId);
         if (!$user) return;
 
-        // Дефолтная причина
         $reasonText = 'Нарушение по жалобе пользователей';
 
-        // Если передан ID жалобы, пытаемся вытащить причину из Enum жалобы
         if ($reportId) {
             $report = Report::find($reportId);
             if ($report) {
                 $reportReasonEnum = \App\Enums\ReportReason::tryFrom($report->reason ?? '');
                 if ($reportReasonEnum) {
-                    $reasonText = $reportReasonEnum->label(); // Например: "Мошенничество"
+                    $reasonText = $reportReasonEnum->label();
                 }
             }
         }
 
-        // Вызываем экшен с указанием типа бана и причиной из жалобы
         $result = $this->toggleUserBanAction->execute($user, $reasonText, $type);
 
         if (!$result['success']) {
@@ -141,7 +138,6 @@ new #[Layout('layouts.admin')] class extends Component
             return;
         }
 
-        // Если забанили — закрываем жалобы
         if ($result['is_banned']) {
             $reports = Report::where('reported_id', $user->id)
                 ->where('status', 'pending')
@@ -154,36 +150,45 @@ new #[Layout('layouts.admin')] class extends Component
                 default => ReportResolution::Ban
             };
 
+            // Экшен сам закроет все жалобы и отправит жалобщикам ReportModerated
             $this->moderateReportAction->bulkResolveReports($reports, auth()->user(), $resolution);
         }
         
         $this->dispatch('show-toast', type: 'success', message: $result['message']);
     }
 
-    /**
-     * Отклонить фото по жалобе и закрыть все жалобы на это фото в одной транзакции.
-     */
     public function rejectPhoto(int $photoId): void
     {
-        $photo = Photo::find($photoId);
+        $photo = Photo::withTrashed()->find($photoId);
         if (!$photo) return;
 
         DB::transaction(function () use ($photo) {
             $reports = Report::where('reportable_type', Photo::class)
                 ->where('reportable_id', $photo->id)
                 ->where('status', 'pending')
+                ->with('reporter')
                 ->get();
 
             if ($reports->isNotEmpty()) {
+                // Экшен сам закроет жалобы и отправит жалобщикам уведомления
                 $this->moderateReportAction->bulkResolveReports($reports, auth()->user(), ReportResolution::PhotoDeleted);
             }
 
             $this->moderatePhotoAction->reject($photo, auth()->user(), 'report_violation');
         });
         
-        $this->dispatch('show-toast', type: 'success', message: 'Фото отклонено и отправлено в карантин. Жалобы закрыты.');
+        $this->dispatch('show-toast', type: 'success', message: 'Фото отклонено. Жалобщики оповещены.');
     }
 
+    public function reject(int $reportId): void
+    {
+        $report = Report::find($reportId);
+        if (!$report || $report->status !== 'pending') return;
+
+        $this->moderateReportAction->reject($report, auth()->user(), 'Нет нарушения');
+        $this->dispatch('show-toast', type: 'info', message: 'Жалоба отклонена');
+    }   
+    
     // ============================================
     // ВЫВОД ДАННЫХ (ОПТИМИЗИРОВАННЫЕ ЗАПРОСЫ)
     // ============================================
@@ -193,39 +198,37 @@ new #[Layout('layouts.admin')] class extends Component
     {
         $searchOperator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
         
-        // Оптимизация: берем только 1 фото, строго аватарку (is_primary)
         $avatarQuery = fn($q) => $q->select(['id', 'user_id', 'is_primary', 'status', 'path_thumb', 'path_medium', 'path_large', 'path_original'])->orderByDesc('is_primary')->limit(1);
 
         $reports = Report::query()
             ->with([
-                'reporter' => fn($q) => $q->select('id', 'name', 'email', 'role', 'status', 'is_premium', 'premium_expires_at', 'last_seen')->with(['photos' => $avatarQuery]),
-                'reported' => fn($q) => $q->select('id', 'name', 'email', 'role', 'status', 'is_premium', 'premium_expires_at', 'last_seen')->with(['photos' => $avatarQuery]),
+                // ФИКС: withTrashed() чтобы видеть имена/аватарки удаленных юзеров
+                'reporter' => fn($q) => $q->withTrashed()->select('id', 'name', 'email', 'role', 'status', 'is_premium', 'premium_expires_at', 'last_seen', 'deleted_at')->with(['photos' => $avatarQuery]),
+                'reported' => fn($q) => $q->withTrashed()->select('id', 'name', 'email', 'role', 'status', 'is_premium', 'premium_expires_at', 'last_seen', 'deleted_at')->with(['photos' => $avatarQuery]),
                 'reportable'
             ])
-            // ФИКС: whereHas исключает удаленных (null) юзеров. Заменяем на whereNull/orWhereHas, 
-            // чтобы жалобы от/на удаленных юзеров оставались видимыми для СБ.
+            // ФИКС: withTrashed() внутри whereHas, чтобы жалобы не выпадали из выборки
             ->where(function ($q) {
                 $q->whereNull('reporter_id')
-                  ->orWhereHas('reporter', fn($q2) => $q2->excludeStaff());
+                  ->orWhereHas('reporter', fn($q2) => $q2->withTrashed()->excludeStaff());
             })
             ->where(function ($q) {
                 $q->whereNull('reported_id')
-                  ->orWhereHas('reported', fn($q2) => $q2->excludeStaff());
+                  ->orWhereHas('reported', fn($q2) => $q2->withTrashed()->excludeStaff());
             })
             ->when($this->search, function ($query) use ($searchOperator) {
                 $search = $this->search;
                 $query->where(function ($q) use ($search, $searchOperator) {
                     $q->whereHas('reporter', function ($q2) use ($search, $searchOperator) {
-                        $q2->where('name', $searchOperator, "%{$search}%")
+                        $q2->withTrashed()->where('name', $searchOperator, "%{$search}%")
                            ->orWhere('email', $searchOperator, "%{$search}%");
                     })
                     ->orWhereHas('reported', function ($q2) use ($search, $searchOperator) {
-                        $q2->where('name', $searchOperator, "%{$search}%")
+                        $q2->withTrashed()->where('name', $searchOperator, "%{$search}%")
                            ->orWhere('email', $searchOperator, "%{$search}%");
                     })
                     ->orWhere('reason', $searchOperator, "%{$search}%")
                     ->orWhere('description', $searchOperator, "%{$search}%")
-                    // ФИКС: Поиск по ID. Приводим id к TEXT для безопасного ILIKE в PostgreSQL
                     ->orWhereRaw("CAST(id AS TEXT) {$searchOperator} ?", ["%{$search}%"]);
                 });
             })
@@ -234,12 +237,10 @@ new #[Layout('layouts.admin')] class extends Component
                 $type = $this->typeFilter === 'user' ? User::class : Photo::class;
                 $q->where('reportable_type', $type);
             })
-            // ФИКС: Стабильная сортировка. Если даты создания совпадают, тай-брейкер по ID предотвращает "прыжки" строк.
             ->latest('created_at')
             ->latest('id') 
             ->paginate($this->perPage);
 
-        // Ленивая жадная загрузка полиморфной связи (подгружает автора фото, не вызывая N+1)
         $reports->loadMorph('reportable', [
             Photo::class => ['user:id,name']
         ]);
@@ -250,22 +251,20 @@ new #[Layout('layouts.admin')] class extends Component
     #[Computed]
     public function counts(): array
     {
-        // ФИКС: Тот же фикс с whereNull для.deleted юзеров, чтобы счетчики не терялись
         $baseQuery = Report::query()
             ->where(function ($q) {
                 $q->whereNull('reporter_id')
-                  ->orWhereHas('reporter', fn($q2) => $q2->excludeStaff());
+                  ->orWhereHas('reporter', fn($q2) => $q2->withTrashed()->excludeStaff());
             })
             ->where(function ($q) {
                 $q->whereNull('reported_id')
-                  ->orWhereHas('reported', fn($q2) => $q2->excludeStaff());
+                  ->orWhereHas('reported', fn($q2) => $q2->withTrashed()->excludeStaff());
             })
             ->when($this->typeFilter !== 'all', function ($q) {
                 $type = $this->typeFilter === 'user' ? User::class : Photo::class;
                 $q->where('reportable_type', $type);
             });
 
-        // Агрегация в 1 запрос (вместо 4 отдельных count())
         $stats = $baseQuery->selectRaw("
             SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
             SUM(CASE WHEN status = 'resolved' THEN 1 ELSE 0 END) as resolved,
@@ -329,8 +328,8 @@ new #[Layout('layouts.admin')] class extends Component
         </div>
 
         <div class="flex items-center gap-2 ml-auto">
-            <x-ui.select wire:model.live="typeFilter" class="w-40" wire:key="select-type">
-                <x-ui.select-trigger>
+            <x-ui.select wire:model.live="typeFilter" wire:key="select-type">
+                <x-ui.select-trigger class="w-40">
                     <x-ui.select-value placeholder="Тип жалобы" />
                 </x-ui.select-trigger>
                 <x-ui.select-content>
@@ -386,7 +385,7 @@ new #[Layout('layouts.admin')] class extends Component
                                     @endif      
                                     @if($report->reporter?->status === 'banned')
                                         <x-ui.badge variant="destructive" size="xs">Бан</x-ui.badge>
-                                    @endif                                             
+                                    @endif                                                                          
                                 </div>                                    
                                 <div class="text-xs text-muted-foreground">{{ $report->reporter?->email ?? '-' }}</div>
                             </div>
@@ -407,7 +406,7 @@ new #[Layout('layouts.admin')] class extends Component
                                         @endif      
                                         @if($report->reported?->status === 'banned')
                                             <x-ui.badge variant="destructive" size="xs">Бан</x-ui.badge>
-                                        @endif                                             
+                                        @endif                                                                                 
                                     </div>                                        
                                     <div class="text-xs text-muted-foreground">{{ $report->reported?->email ?? '-' }}</div>
                                 </div>
@@ -418,8 +417,13 @@ new #[Layout('layouts.admin')] class extends Component
                                     @php $imgSrc = $report->reportable->thumb_url ?: $report->reportable->medium_url ?: $report->reportable->original_url; @endphp
                                     <img src="{{ $imgSrc ?: asset('images/no-image-placeholder.png') }}" class="w-10 h-10 object-cover rounded bg-muted" alt="photo">
                                     <div class="text-sm">
-                                        <div>Фото #{{ $report->reportable_id }}</div>
-                                        <div class="text-xs text-muted-foreground">{{ $report->reportable->user?->name ?? 'Удален' }}</div>
+                                        <a href="{{ route('admin.moderation.photos', ['q' => $report->reportable_id]) }}" wire:navigate class="text-xs fomt-medium text-muted-foreground hover:text-primary" title="Найти в модерации">
+                                            Фото #{{ $report->reportable_id }}
+                                        </a>                                        
+                                         <a href="{{ route('admin.users.show', $report->reportable->user_id) }}" wire:navigate class="block hover:text-primary transition-colors text-xs text-muted-foreground">
+                                            <x-user-status-sign :user="$report->reported" />
+                                            {{ $report->reportable->user?->name ?? 'Удален' }}
+                                        </a>                                        
                                     </div>
                                 @else
                                     <span class="text-sm text-muted-foreground">Фото удалено</span>
@@ -527,7 +531,7 @@ new #[Layout('layouts.admin')] class extends Component
                                     @if($report->reportable_type === \App\Models\Photo::class && $report->reportable)
                                         <x-ui.dropdown-menu-item wire:key="reject-photo-{{ $report->id }}" wire:click="rejectPhoto({{ $report->reportable_id }})" variant="destructive" wire:confirm="Отклонить фото (отправить в карантин) и закрыть жалобу?">
                                             <x-lucide-x-circle class="w-4 h-4" />
-                                            Исключить фото
+                                            Отклонить фото
                                         </x-ui.dropdown-menu-item>
                                     @endif
 
@@ -540,7 +544,7 @@ new #[Layout('layouts.admin')] class extends Component
 
                                     <x-ui.dropdown-menu-item wire:key="reject-{{ $report->id }}" wire:click="reject({{ $report->id }})">
                                         <x-lucide-x-circle class="w-4 h-4 text-muted-foreground" />
-                                        Отклонить (Нет нарушения)
+                                        Отклонить жалобу(все ок)
                                     </x-ui.dropdown-menu-item>
                                     
                                 </x-ui.dropdown-menu-content>

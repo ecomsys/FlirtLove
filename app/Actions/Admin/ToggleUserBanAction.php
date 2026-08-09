@@ -11,14 +11,15 @@ use Illuminate\Support\Facades\Log;
 class ToggleUserBanAction
 {
     /**
-     * Забанить (с выбором типа) или разбанить пользователя.
+     * Забанить или разбанить пользователя.
      *
      * @param User $user
      * @param string $reason
-     * @param string $type Тип бана: 'shadow', 'temp', 'permanent'
+     * @param string $type
+     * @param bool $forceBan Если true — только банит (игнорирует разбан). Нужно для массовых действий.
      * @return array
      */
-    public function execute(User $user, string $reason = 'Нарушение правил сервиса', string $type = 'permanent'): array
+     public function execute(User $user, string $reason = 'Нарушение правил сервиса', string $type = 'permanent', bool $forceBan = false): array
     {
         if ($user->isStaff()) {
             return ['success' => false, 'message' => 'Нельзя забанить сотрудника (админа/модератора)'];
@@ -26,15 +27,23 @@ class ToggleUserBanAction
 
         $isCurrentlyBanned = ($user->status === 'banned' || $user->status === 'shadowbanned');
 
-        // Если уже забанен — снимаем бан
+        // Если флаг forceBan включен (вызвано из модалки) — мы ПРИНУДИТЕЛЬНО баним, 
+        // даже если юзер уже в бане. Это перезапишет старый тип/причину бана на новый.
+        if ($forceBan) {
+            return $this->ban($user, $reason, $type);
+        }
+
+        // Если forceBan выключен (вызвано кнопкой "Разбанить" из списка) 
+        // и юзер реально забанен — снимаем бан.
         if ($isCurrentlyBanned) {
             return $this->unban($user);
         }
 
-        // Иначе — выдаем бан нужного типа
+        // Если forceBan выключен и юзер активен — баним (защита от случайных вызовов)
         return $this->ban($user, $reason, $type);
     }
-
+    
+    
     protected function ban(User $user, string $reason, string $type): array
     {
         $before = $user->only(['status', 'ban_reason', 'banned_until', 'is_verified']);
@@ -68,10 +77,13 @@ class ToggleUserBanAction
 
         AdminLog::record('user.ban', $user, auth()->user(), $before, $after);
         
-        try {
-            $user->notify(new UserBanned(true, "Ваш аккаунт заблокирован. Причина: {$reason}"));
-        } catch (\Exception $e) {
-            Log::error('Ошибка отправки уведомления о бане: ' . $e->getMessage());
+        // ФИКС: Отправляем уведомление ТОЛЬКО если это не теневой бан
+        if ($type !== 'shadow') {
+            try {
+                $user->notify(new UserBanned(true, "Ваш аккаунт заблокирован. Причина: {$reason}"));
+            } catch (\Exception $e) {
+                Log::error('Ошибка отправки уведомления о бане: ' . $e->getMessage());
+            }
         }
 
         $banLabel = match($type) {
@@ -83,6 +95,7 @@ class ToggleUserBanAction
         return ['success' => true, 'is_banned' => true, 'message' => "Пользователь {$user->name} {$banLabel}"];
     }
 
+    
     protected function unban(User $user): array
     {
         $before = $user->only(['status', 'ban_reason', 'banned_until', 'is_verified']);
@@ -98,10 +111,13 @@ class ToggleUserBanAction
         
         AdminLog::record('user.unban', $user, auth()->user(), $before, $after);
         
-        try {
-            $user->notify(new UserBanned(false, "Ваш аккаунт разблокирован. Приносим извинения за неудобства."));
-        } catch (\Exception $e) {
-            Log::error('Ошибка отправки уведомления о разбане: ' . $e->getMessage());
+        // ФИКС: Если снимаем теневой бан — молчим. Юзер не должен знать, что был в бане.
+        if ($before['status'] !== 'shadowbanned') {
+            try {
+                $user->notify(new UserBanned(false, "Ваш аккаунт разблокирован. Приносим извинения за неудобства."));
+            } catch (\Exception $e) {
+                Log::error('Ошибка отправки уведомления о разбане: ' . $e->getMessage());
+            }
         }
 
         return ['success' => true, 'is_banned' => false, 'message' => "Пользователь {$user->name} разбанен"];

@@ -47,6 +47,8 @@
 
     <x-ui.sonner expand="true" />
     <x-ui.confirm-modal />
+    <livewire:admin.ban-user-modal />
+    <livewire:admin.delete-user-modal />
 
     <!-- Подключаем скрипт Trix -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>

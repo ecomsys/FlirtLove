@@ -1,33 +1,89 @@
 <?php
 
+use App\Models\AdminLog;
 use App\Models\User;
+use App\Notifications\ProfileFieldCleared;
+use Livewire\Attributes\Computed;
+use Livewire\Attributes\On;
 use Livewire\Volt\Component;
 
 new class extends Component 
 {
-    public User $user;
+    // ПРИНИМАЕМ ТОЛЬКО ID (Спасает от 404/500 при рендере)
+    public int $userId;
+
+    public function mount(int $userId): void
+    {
+        $this->userId = $userId;
+    }
+
+    // ДОСТАЕМ ЮЗЕРА (с удаленными, чтобы не падать)
+    #[Computed]
+    public function user(): User
+    {
+        return User::withTrashed()
+            ->with(['profile', 'preferences'])
+            ->findOrFail($this->userId);
+    }
+
+    // Слушаем обновления из родительского компонента
+    #[On('user-action-performed')] 
+    public function refreshUser(): void
+    {
+        unset($this->user);
+    }
 
     /**
-     * Хелпер для перевода ID опций в текст (из конфига profile_options).
+     * Очистка текстового поля модератором с логированием и уведомлением.
      */
+    public function clearProfileField(string $field): void
+    {
+        $allowedFields = ['headline', 'bio', 'looking_for'];
+        if (!in_array($field, $allowedFields)) return;
+
+        $user = $this->user;
+        $profile = $user->profile;
+        if (!$profile) return;
+
+        $oldValue = $profile->{$field};
+        if (empty($oldValue)) {
+            $this->dispatch('show-toast', type: 'error', message: 'Это поле уже пустое.');
+            return;
+        }
+
+        // Очищаем поле в БД
+        $profile->update([$field => null]);
+
+        // Логируем в AdminLog (before/after)
+        AdminLog::record('profile.clear_field', $user, auth()->user(), [$field => $oldValue], [$field => null]);
+
+        // Отправляем юзеру уведомление (если он не удален)
+        if (!$user->trashed()) {
+            $user->notify(new ProfileFieldCleared($field));
+        }
+
+        $fieldLabels = ['headline' => 'Заголовок', 'bio' => 'О себе', 'looking_for' => 'Кого я ищу'];
+        $this->dispatch('show-toast', type: 'success', message: "Поле '{$fieldLabels[$field]}' очищено. Юзеру отправлено уведомление.");
+        
+        $this->refreshUser();
+    }
+
+    // ============================================
+    // ХЕЛПЕРЫ ДЛЯ ВЫВОДА (Твои методы)
+    // ============================================
+
     public function getOptionLabel(string $type, int|string|null $value): ?string
     {
         if (is_null($value) || $value === '') return 'Нет ответа';
         return config("profile_options.{$type}.{$value}", 'Нет ответа');
     }
 
-    /**
-     * Хелпер для вывода JSON-массивов опций (языки, спорт) в виде бейджей.
-     */
     public function getArrayLabels(string $type, ?array $values): array
     {
         if (empty($values)) return [];
         return array_map(fn($id) => $this->getOptionLabel($type, $id), $values);
     }
 
-    /**
-     * Хелпер для перевода пола (муж/жен/любой).
-     */
     public function getGenderLabel(?string $gender): string
     {
         return match($gender) {
@@ -37,9 +93,6 @@ new class extends Component
         };
     }
 
-    /**
-     * Хелпер для вывода бейджей расширенных фильтров поиска.
-     */
     public function getSearchFilterLabels(?array $filters): array
     {
         if (empty($filters)) return [];
@@ -63,9 +116,6 @@ new class extends Component
         return $labels;
     }
 
-    /**
-     * Хелпер для знака зодиака (т.к. его нет в конфиге).
-     */
     public function getZodiacLabel(?int $sign): string
     {
         $signs = [
@@ -82,37 +132,95 @@ new class extends Component
     
     {{-- ЛЕВАЯ КОЛОНКА --}}
     <div class="space-y-4">
+
+           {{-- Тексты анкеты (С кнопками очистки) --}}
+            <div class="p-4 bg-muted/20 rounded-lg border border-border space-y-1">
+                <p class="text-xs text-muted-foreground uppercase font-semibold flex items-center gap-1.5">
+                    <x-lucide-message-square class="w-3.5 h-3.5" /> Тексты анкеты
+                </p>
+
+                <div class="divide-y divide-border/50">
+                {{-- Заголовок --}}
+                <div class="py-3">
+                    <div class="flex justify-between items-center mb-1">
+                        <span class="text-xs font-medium text-muted-foreground uppercase">Заголовок</span>
+                        @if($this->user->profile?->headline)
+                            <x-ui.button wire:click="clearProfileField('headline')" wire:confirm="Очистить заголовок? Юзеру уйдет уведомление." variant="ghost" size="xs" class="text-red-500 hover:text-red-400 gap-1 h-6 px-2">
+                                <x-lucide-trash-2 class="w-3 h-3" /> Удалить
+                            </x-ui.button>
+                        @endif
+                    </div>
+                    <p class="text-sm {{ $this->user->profile?->headline ? 'text-foreground font-medium' : 'text-muted-foreground/50 italic' }}">
+                        @if($this->user->profile?->headline) "{{ $this->user->profile->headline }}" @else Не указано @endif
+                    </p>
+                </div>
+
+                {{-- О себе --}}
+                <div class="py-3">
+                    <div class="flex justify-between items-center mb-1">
+                        <span class="text-xs font-medium text-muted-foreground uppercase">О себе</span>
+                        @if($this->user->profile?->bio)
+                            <x-ui.button wire:click="clearProfileField('bio')" wire:confirm="Очистить поле 'О себе'? Юзеру уйдет уведомление." variant="ghost" size="xs" class="text-red-500 hover:text-red-400 gap-1 h-6 px-2">
+                                <x-lucide-trash-2 class="w-3 h-3" /> Удалить
+                            </x-ui.button>
+                        @endif
+                    </div>
+                    <p class="text-sm {{ $this->user->profile?->bio ? 'text-foreground' : 'text-muted-foreground/50 italic' }}">
+                        {{ $this->user->profile?->bio ?? 'Не указано' }}
+                    </p>
+                </div>
+
+                {{-- Кого я ищу --}}
+                <div class="py-3">
+                    <div class="flex justify-between items-center mb-1">
+                        <span class="text-xs font-medium text-muted-foreground uppercase">Кого я ищу</span>
+                        @if($this->user->profile?->looking_for)
+                            <x-ui.button wire:click="clearProfileField('looking_for')" wire:confirm="Очистить поле 'Кого я ищу'? Юзеру уйдет уведомление." variant="ghost" size="xs" class="text-red-500 hover:text-red-400 gap-1 h-6 px-2">
+                                <x-lucide-trash-2 class="w-3 h-3" /> Удалить
+                            </x-ui.button>
+                        @endif
+                    </div>
+                    <p class="text-sm {{ $this->user->profile?->looking_for ? 'text-foreground' : 'text-muted-foreground/50 italic' }}">
+                        {{ $this->user->profile?->looking_for ?? 'Не указано' }}
+                    </p>
+                </div>
+                </div>
+            </div>
+
         
         {{-- Основная информация --}}
         <div class="p-4 bg-muted/20 rounded-lg border border-border">
             <p class="text-xs text-muted-foreground uppercase mb-2 font-semibold flex items-center gap-1.5">
                 <x-lucide-user class="w-3.5 h-3.5" /> Основная информация
-            </p>
-            <div class="divide-y divide-border/50">
+            </p>        
+
+            <div class="divide-y divide-border/50">            
                 <div class="flex justify-between items-center py-1.5">
                     <span class="text-xs text-muted-foreground">Пол</span>
                     <span class="text-sm font-medium">
-                        {{ $user->profile?->gender === 'male' ? 'Мужской' : ($user->profile?->gender === 'female' ? 'Женский' : 'Не указан') }}
+                        {{ $this->user->profile?->gender === 'male' ? 'Мужской' : ($this->user->profile?->gender === 'female' ? 'Женский' : 'Не указан') }}
                     </span>
                 </div>
+
                 <div class="flex justify-between items-center py-1.5">
                     <span class="text-xs text-muted-foreground">Возраст</span>
-                    <span class="text-sm font-medium">{{ $user->profile?->age ? $user->profile->age . ' лет' : 'Не указан' }}</span>
+                    <span class="text-sm font-medium">{{ $this->user->profile?->age ? $this->user->profile->age . ' лет' : 'Не указан' }}</span>
                 </div>
                 <div class="flex justify-between items-center py-1.5">
                     <span class="text-xs text-muted-foreground">Дата рождения</span>
-                    <span class="text-sm font-medium">{{ $user->profile?->birth_date ? $user->profile->birth_date->format('d.m.Y') : '—' }}</span>
+                    <span class="text-sm font-medium">{{ $this->user->profile?->birth_date ? $this->user->profile->birth_date->format('d.m.Y') : '—' }}</span>
                 </div>
                 <div class="flex justify-between items-center py-1.5">
                     <span class="text-xs text-muted-foreground">Страна</span>
-                    <span class="text-sm font-medium">{{ $user->profile?->country ?? 'Не указана' }}</span>
+                    <span class="text-sm font-medium">{{ $this->user->profile?->country ?? 'Не указана' }}</span>
                 </div>
                 <div class="flex justify-between items-center py-1.5">
                     <span class="text-xs text-muted-foreground">Город</span>
-                    <span class="text-sm font-medium">{{ $user->profile?->city ?? 'Не указан' }}</span>
+                    <span class="text-sm font-medium">{{ $this->user->profile?->city ?? 'Не указан' }}</span>
                 </div>
                 <div class="flex justify-between items-center py-1.5">
-                    <span class="text-xs text-muted-foreground">Цель знакомства</span                    @php $goalEnum = \App\Enums\DatingGoal::tryFrom($user->profile?->dating_goal ?? ''); @endphp
+                    <span class="text-xs text-muted-foreground">Цель знакомства</span>
+                    @php $goalEnum = \App\Enums\DatingGoal::tryFrom($this->user->profile?->dating_goal ?? ''); @endphp
                     @if($goalEnum)
                         <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium {{ $goalEnum->color() }}">
                             {{ $goalEnum->label() }}
@@ -123,7 +231,7 @@ new class extends Component
                 </div>
                 <div class="flex justify-between items-center py-1.5">
                     <span class="text-xs text-muted-foreground">Знак зодиака</span>
-                    <span class="text-sm font-medium">{{ $this->getZodiacLabel($user->profile?->zodiac_sign) }}</span>
+                    <span class="text-sm font-medium">{{ $this->getZodiacLabel($this->user->profile?->zodiac_sign) }}</span>
                 </div>
             </div>
         </div>
@@ -136,29 +244,29 @@ new class extends Component
             <div class="divide-y divide-border/50">
                 <div class="flex justify-between items-center py-1.5">
                     <span class="text-xs text-muted-foreground">Телосложение</span>
-                    <span class="text-sm font-medium">{{ $this->getOptionLabel('body_type', $user->profile?->body_type) }}</span>
+                    <span class="text-sm font-medium">{{ $this->getOptionLabel('body_type', $this->user->profile?->body_type) }}</span>
                 </div>
                 <div class="flex justify-between items-center py-1.5">
                     <span class="text-xs text-muted-foreground">Цвет глаз</span>
-                    <span class="text-sm font-medium">{{ $this->getOptionLabel('eye_color', $user->profile?->eye_color) }}</span>
+                    <span class="text-sm font-medium">{{ $this->getOptionLabel('eye_color', $this->user->profile?->eye_color) }}</span>
                 </div>
                 <div class="flex justify-between items-center py-1.5">
                     <span class="text-xs text-muted-foreground">Цвет волос</span>
-                    <span class="text-sm font-medium">{{ $this->getOptionLabel('hair_color', $user->profile?->hair_color) }}</span>
+                    <span class="text-sm font-medium">{{ $this->getOptionLabel('hair_color', $this->user->profile?->hair_color) }}</span>
                 </div>
                 <div class="flex justify-between items-center py-1.5">
                     <span class="text-xs text-muted-foreground">Рост / Вес</span>
                     <span class="text-sm font-medium">
-                        {{ $user->profile?->height ? $user->profile->height . ' см' : '—' }} / {{ $user->profile?->weight ? $user->profile->weight . ' кг' : '—' }}
+                        {{ $this->user->profile?->height ? $this->user->profile->height . ' см' : '—' }} / {{ $this->user->profile?->weight ? $this->user->profile->weight . ' кг' : '—' }}
                     </span>
                 </div>
                 <div class="flex justify-between items-center py-1.5">
                     <span class="text-xs text-muted-foreground">Украшения / Особенности</span>
                     <div class="flex flex-wrap gap-1 justify-end max-w-[60%]">
-                        @foreach($this->getArrayLabels('body_decorations', $user->profile?->body_decorations) as $label)
+                        @foreach($this->getArrayLabels('body_decorations', $this->user->profile?->body_decorations) as $label)
                             <x-ui.badge variant="secondary" size="xs">{{ $label }}</x-ui.badge>
                         @endforeach
-                        @if(empty($user->profile?->body_decorations)) <span class="text-sm font-medium">Нет</span> @endif
+                        @if(empty($this->user->profile?->body_decorations)) <span class="text-sm font-medium">Нет</span> @endif
                     </div>
                 </div>
             </div>
@@ -172,61 +280,44 @@ new class extends Component
             <div class="divide-y divide-border/50">
                 <div class="flex justify-between items-center py-1.5">
                     <span class="text-xs text-muted-foreground">Семейное положение</span>
-                    <span class="text-sm font-medium">{{ $this->getOptionLabel('relationship_status', $user->profile?->relationship_status) }}</span>
+                    <span class="text-sm font-medium">{{ $this->getOptionLabel('relationship_status', $this->user->profile?->relationship_status) }}</span>
                 </div>
                 <div class="flex justify-between items-center py-1.5">
                     <span class="text-xs text-muted-foreground">Дети</span>
-                    <span class="text-sm font-medium">{{ $this->getOptionLabel('children_status', $user->profile?->children_status) }}</span>
+                    <span class="text-sm font-medium">{{ $this->getOptionLabel('children_status', $this->user->profile?->children_status) }}</span>
                 </div>
                 <div class="flex justify-between items-center py-1.5">
                     <span class="text-xs text-muted-foreground">Домашние животные</span>
-                    <span class="text-sm font-medium">{{ $this->getOptionLabel('pets', $user->profile?->pets) }}</span>
+                    <span class="text-sm font-medium">{{ $this->getOptionLabel('pets', $this->user->profile?->pets) }}</span>
                 </div>
                 <div class="flex justify-between items-center py-1.5">
                     <span class="text-xs text-muted-foreground">Жилье</span>
-                    <span class="text-sm font-medium">{{ $this->getOptionLabel('housing', $user->profile?->housing) }}</span>
+                    <span class="text-sm font-medium">{{ $this->getOptionLabel('housing', $this->user->profile?->housing) }}</span>
                 </div>
                 <div class="flex justify-between items-center py-1.5">
                     <span class="text-xs text-muted-foreground">Автомобиль</span>
-                    <span class="text-sm font-medium">{{ $this->getOptionLabel('has_car', $user->profile?->has_car) }}</span>
+                    <span class="text-sm font-medium">{{ $this->getOptionLabel('has_car', $this->user->profile?->has_car) }}</span>
                 </div>
                 <div class="flex justify-between items-center py-1.5">
                     <span class="text-xs text-muted-foreground">Курение</span>
-                    <span class="text-sm font-medium">{{ $this->getOptionLabel('smoking', $user->profile?->smoking) }}</span>
+                    <span class="text-sm font-medium">{{ $this->getOptionLabel('smoking', $this->user->profile?->smoking) }}</span>
                 </div>
                 <div class="flex justify-between items-center py-1.5">
                     <span class="text-xs text-muted-foreground">Алкоголь</span>
-                    <span class="text-sm font-medium">{{ $this->getOptionLabel('alcohol', $user->profile?->alcohol) }}</span>
+                    <span class="text-sm font-medium">{{ $this->getOptionLabel('alcohol', $this->user->profile?->alcohol) }}</span>
                 </div>
             </div>
         </div>
 
-        {{-- О себе --}}
-        <div class="p-4 bg-muted/20 rounded-lg border border-border">
-            <p class="text-xs text-muted-foreground uppercase mb-1 font-semibold flex items-center gap-1.5">
-                <x-lucide-message-square class="w-3.5 h-3.5" /> О себе
-            </p>
-            @if($user->profile?->headline)
-                <p class="text-sm font-medium text-foreground mb-1">"{{ $user->profile->headline }}"</p>
-            @endif
-            <p class="text-sm text-muted-foreground">{{ $user->profile?->bio ?? 'Пусто' }}</p>
-            
-            @if($user->profile?->looking_for)
-                <div class="mt-3 pt-3 border-t border-border/50">
-                    <p class="text-xs text-muted-foreground mb-1">Кого я ищу:</p>
-                    <p class="text-sm text-muted-foreground">{{ $user->profile->looking_for }}</p>
-                </div>
-            @endif
-        </div>
-
+     
         {{-- Автопортрет (JSON) --}}
-        @if(!empty($user->profile?->self_portrait))
+        @if(!empty($this->user->profile?->self_portrait))
         <div class="p-4 bg-muted/20 rounded-lg border border-border">
             <p class="text-xs text-muted-foreground uppercase mb-2 font-semibold flex items-center gap-1.5">
                 <x-lucide-brush class="w-3.5 h-3.5" /> Автопортрет
             </p>
             <div class="space-y-2">
-                @foreach($user->profile->self_portrait as $key => $value)
+                @foreach($this->user->profile->self_portrait as $key => $value)
                     <div>
                         <span class="text-xs text-muted-foreground capitalize">{{ str_replace('_', ' ', $key) }}</span>
                         <p class="text-sm font-medium">{{ $value }}</p>
@@ -248,23 +339,23 @@ new class extends Component
             <div class="divide-y divide-border/50">
                 <div class="flex justify-between items-center py-1.5">
                     <span class="text-xs text-muted-foreground">Образование</span>
-                    <span class="text-sm font-medium">{{ $this->getOptionLabel('education_level', $user->profile?->education) }}</span>
+                    <span class="text-sm font-medium">{{ $this->getOptionLabel('education_level', $this->user->profile?->education) }}</span>
                 </div>
                 <div class="flex justify-between items-center py-1.5">
                     <span class="text-xs text-muted-foreground">Учебное заведение</span>
-                    <span class="text-sm font-medium">{{ $user->profile?->institution ?? '—' }}</span>
+                    <span class="text-sm font-medium">{{ $this->user->profile?->institution ?? '—' }}</span>
                 </div>
                 <div class="flex justify-between items-center py-1.5">
                     <span class="text-xs text-muted-foreground">Год выпуска</span>
-                    <span class="text-sm font-medium">{{ $user->profile?->institution_year ?? '—' }}</span>
+                    <span class="text-sm font-medium">{{ $this->user->profile?->institution_year ?? '—' }}</span>
                 </div>             
                 <div class="flex justify-between items-center py-1.5">
                     <span class="text-xs text-muted-foreground">Сфера деятельности</span>
-                    <span class="text-sm font-medium">{{ $user->profile?->activity ?? '—' }}</span>
+                    <span class="text-sm font-medium">{{ $this->user->profile?->activity ?? '—' }}</span>
                 </div>
                 <div class="flex justify-between items-center py-1.5">
                     <span class="text-xs text-muted-foreground">Должность</span>
-                    <span class="text-sm font-medium">{{ $user->profile?->position ?? '—' }}</span>
+                    <span class="text-sm font-medium">{{ $this->user->profile?->position ?? '—' }}</span>
                 </div>
             </div>
         </div>
@@ -275,13 +366,13 @@ new class extends Component
                 <x-lucide-star class="w-3.5 h-3.5" /> Интересы
             </p>
             <div class="flex flex-wrap gap-1.5">
-                @foreach($this->getArrayLabels('sports', $user->profile?->sports) as $label)
+                @foreach($this->getArrayLabels('sports', $this->user->profile?->sports) as $label)
                     <x-ui.badge variant="default" size="xs">{{ $label }}</x-ui.badge>
                 @endforeach
-                @foreach($user->profile?->interests ?? [] as $interest)
+                @foreach($this->user->profile?->interests ?? [] as $interest)
                     <x-ui.badge variant="secondary" size="xs">{{ $interest }}</x-ui.badge>
                 @endforeach
-                @if(empty($user->profile?->sports) && empty($user->profile?->interests))
+                @if(empty($this->user->profile?->sports) && empty($this->user->profile?->interests))
                     <span class="text-sm font-medium">Не указаны</span>
                 @endif
             </div>
@@ -293,10 +384,10 @@ new class extends Component
                 <x-lucide-languages class="w-3.5 h-3.5" /> Языки
             </p>
             <div class="flex flex-wrap gap-1.5">
-                @foreach($this->getArrayLabels('languages', $user->profile?->languages) as $label)
+                @foreach($this->getArrayLabels('languages', $this->user->profile?->languages) as $label)
                     <x-ui.badge variant="warning" size="xs">{{ $label }}</x-ui.badge>
                 @endforeach
-                @if(empty($user->profile?->languages))
+                @if(empty($this->user->profile?->languages))
                     <span class="text-sm font-medium">Не указаны</span>
                 @endif
             </div>
@@ -310,7 +401,7 @@ new class extends Component
             <div class="grid grid-cols-2 gap-4">
                 <div>
                     <p class="text-xs text-muted-foreground mb-1">Подписка</p>
-                    @if ($user->has_active_premium)
+                    @if ($this->user->has_active_premium)
                         <x-ui.badge variant="warning" size="xs"><x-lucide-crown class="w-3 h-3 inline mr-1" />Premium</x-ui.badge>
                     @else
                         <x-ui.badge variant="secondary" size="xs">Бесплатный</x-ui.badge>
@@ -318,17 +409,17 @@ new class extends Component
                 </div>
                 <div>
                     <p class="text-xs text-muted-foreground mb-1">Верификация</p>
-                    @if ($user->is_verified) <x-ui.badge variant="success" size="xs">Верифицирован</x-ui.badge>
+                    @if ($this->user->is_verified) <x-ui.badge variant="success" size="xs">Верифицирован</x-ui.badge>
                     @else <x-ui.badge variant="destructive" size="xs">Не верифицирован</x-ui.badge> @endif
                 </div>
                 <div>
                     <p class="text-xs text-muted-foreground mb-1">Онбординг</p>
-                    @if ($user->has_completed_onboarding) <x-ui.badge variant="success" size="xs">Пройден</x-ui.badge>
+                    @if ($this->user->has_completed_onboarding) <x-ui.badge variant="success" size="xs">Пройден</x-ui.badge>
                     @else <x-ui.badge variant="warning" size="xs">Не завершен</x-ui.badge> @endif
                 </div>
                 <div>
                     <p class="text-xs text-muted-foreground mb-1">Email</p>
-                    @if ($user->email_verified_at) <x-ui.badge variant="success" size="xs">Подтвержден</x-ui.badge>
+                    @if ($this->user->email_verified_at) <x-ui.badge variant="success" size="xs">Подтвержден</x-ui.badge>
                     @else <x-ui.badge variant="destructive" size="xs">Не подтвержден</x-ui.badge> @endif
                 </div>
             </div>
@@ -342,29 +433,29 @@ new class extends Component
             <div class="divide-y divide-border/50">
                 <div class="flex justify-between items-center py-1.5">
                     <span class="text-xs text-muted-foreground">Регистрация</span>
-                    <span class="text-sm font-medium">{{ $user->created_at->format('d.m.Y H:i') }}</span>
+                    <span class="text-sm font-medium">{{ $this->user->created_at->format('d.m.Y H:i') }}</span>
                 </div>
                 <div class="flex justify-between items-center py-1.5">
                     <span class="text-xs text-muted-foreground">Последний визит</span>
-                    @if($user->is_online)
+                    @if($this->user->is_online)
                         <span class="text-sm font-medium text-green-500 flex items-center gap-1.5">
                             <span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span> В сети
                         </span>
                     @else
-                        <span class="text-sm font-medium">{{ $user->last_seen ? $user->last_seen->diffForHumans() : 'Никогда' }}</span>
+                        <span class="text-sm font-medium">{{ $this->user->last_seen ? $this->user->last_seen->diffForHumans() : 'Никогда' }}</span>
                     @endif
                 </div>
                 <div class="flex justify-between items-center py-1.5">
                     <span class="text-xs text-muted-foreground">IP адрес</span>
-                    <span class="text-sm font-mono font-medium">{{ $user->last_login_ip ?? 'Нет данных' }}</span>
+                    <span class="text-sm font-mono font-medium">{{ $this->user->last_login_ip ?? 'Нет данных' }}</span>
                 </div>
                 <div class="flex justify-between items-center py-1.5">
                     <span class="text-xs text-muted-foreground">Device ID</span>
-                    <span class="text-sm font-mono font-medium truncate ml-4">{{ $user->device_id ?? 'Нет данных' }}</span>
+                    <span class="text-sm font-mono font-medium truncate ml-4">{{ $this->user->device_id ?? 'Нет данных' }}</span>
                 </div>
                 <div class="flex justify-between items-center py-1.5">
                     <span class="text-xs text-muted-foreground">ОС устройства</span>
-                    <span class="text-sm font-mono font-medium truncate ml-4">{{ $user->device_os ?? 'Нет данных' }}</span>
+                    <span class="text-sm font-mono font-medium truncate ml-4">{{ $this->user->device_os ?? 'Нет данных' }}</span>
                 </div>
             </div>
         </div>
@@ -377,24 +468,24 @@ new class extends Component
             <div class="divide-y divide-border/50">
                 <div class="flex justify-between items-center py-1.5">
                     <span class="text-xs text-muted-foreground">Искомый пол</span>
-                    <span class="text-sm font-medium">{{ $this->getGenderLabel($user->preferences?->preferred_gender) }}</span>
+                    <span class="text-sm font-medium">{{ $this->getGenderLabel($this->user->preferences?->preferred_gender) }}</span>
                 </div>
                 <div class="flex justify-between items-center py-1.5">
                     <span class="text-xs text-muted-foreground">Возраст</span>
                     <span class="text-sm font-medium">
-                        {{ $user->preferences?->preferred_age_min ?? 18 }} - {{ $user->preferences?->preferred_age_max ?? 99 }}
+                        {{ $this->user->preferences?->preferred_age_min ?? 18 }} - {{ $this->user->preferences?->preferred_age_max ?? 99 }}
                     </span>
                 </div>
                 <div class="flex justify-between items-center py-1.5">
                     <span class="text-xs text-muted-foreground">Радиус поиска</span>
                     <span class="text-sm font-medium">
-                        {{ $user->preferences?->preferred_distance_km ? $user->preferences->preferred_distance_km . ' км' : 'Не ограничен' }}
+                        {{ $this->user->preferences?->preferred_distance_km ? $this->user->preferences->preferred_distance_km . ' км' : 'Не ограничен' }}
                     </span>
                 </div>
             </div>
             
             {{-- Дополнительные фильтры поиска (JSON) --}}
-            @php $searchFilterLabels = $this->getSearchFilterLabels($user->preferences?->search_filters); @endphp
+            @php $searchFilterLabels = $this->getSearchFilterLabels($this->user->preferences?->search_filters); @endphp
             @if(!empty($searchFilterLabels))
                 <div class="mt-3 pt-3 border-t border-border/50">
                     <p class="text-xs text-muted-foreground mb-2">Дополнительные фильтры:</p>
@@ -415,14 +506,14 @@ new class extends Component
             <div class="divide-y divide-border/50">
                 <div class="flex justify-between items-center py-1.5">
                     <span class="text-xs text-muted-foreground">Фильтр сообщений</span>
-                    @if($user->preferences?->chat_filter_enabled)
+                    @if($this->user->preferences?->chat_filter_enabled)
                         <x-ui.badge variant="success" size="xs">Включен</x-ui.badge>
                     @else
                         <x-ui.badge variant="secondary" size="xs">Выключен</x-ui.badge>
                     @endif
                 </div>
-                @if($user->preferences?->chat_filter_enabled)
-                    @php $chatFilters = $user->preferences->chat_filter_settings; @endphp
+                @if($this->user->preferences?->chat_filter_enabled)
+                    @php $chatFilters = $this->user->preferences->chat_filter_settings; @endphp
                     <div class="flex justify-between items-center py-1.5">
                         <span class="text-xs text-muted-foreground">Принимать от пола</span>
                         <span class="text-sm font-medium">{{ $this->getGenderLabel($chatFilters['gender'] ?? 'any') }}</span>
@@ -461,7 +552,7 @@ new class extends Component
             <div class="divide-y divide-border/50">
                 <div class="flex justify-between items-center py-1.5">
                     <span class="text-xs text-muted-foreground">Невидимка (VIP)</span>
-                    @if($user->preferences?->is_invisible)
+                    @if($this->user->preferences?->is_invisible)
                         <x-ui.badge variant="warning" size="xs">Включена</x-ui.badge>
                     @else
                         <x-ui.badge variant="secondary" size="xs">Выключена</x-ui.badge>
@@ -469,7 +560,7 @@ new class extends Component
                 </div>
                 <div class="flex justify-between items-center py-1.5">
                     <span class="text-xs text-muted-foreground">Скрыт из поиска</span>
-                    @if($user->preferences?->hide_from_search)
+                    @if($this->user->preferences?->hide_from_search)
                         <x-ui.badge variant="destructive" size="xs">Да</x-ui.badge>
                     @else
                         <x-ui.badge variant="success" size="xs">Нет</x-ui.badge>
@@ -477,7 +568,7 @@ new class extends Component
                 </div>
                 <div class="flex justify-between items-center py-1.5">
                     <span class="text-xs text-muted-foreground">Скрывать 18+ фото</span>
-                    @if($user->preferences?->hide_intimate)
+                    @if($this->user->preferences?->hide_intimate)
                         <x-ui.badge variant="success" size="xs">Да</x-ui.badge>
                     @else
                         <x-ui.badge variant="secondary" size="xs">Нет</x-ui.badge>
@@ -485,7 +576,7 @@ new class extends Component
                 </div>
                 <div class="flex justify-between items-center py-1.5">
                     <span class="text-xs text-muted-foreground">Запрет коммент. фото</span>
-                    @if($user->preferences?->disable_photo_comments)
+                    @if($this->user->preferences?->disable_photo_comments)
                         <x-ui.badge variant="destructive" size="xs">Да</x-ui.badge>
                     @else
                         <x-ui.badge variant="success" size="xs">Нет</x-ui.badge>

@@ -10,9 +10,12 @@ class DeleteUserAction
 {
     /**
      * Мягкое удаление (деактивация) пользователя.
-     * Отменяет подписку и пишет лог.
+     *
+     * @param User $user
+     * @param User $admin
+     * @param string|null $reason Причина удаления (для логов)
      */
-    public function execute(User $user, User $admin): void
+    public function execute(User $user, User $admin, ?string $reason = null): void
     {
         if ($user->isStaff()) {
             return; // Защита от удаления админов
@@ -20,16 +23,25 @@ class DeleteUserAction
 
         $before = $user->only(['status', 'is_premium', 'premium_expires_at', 'deleted_at']);
 
-        DB::transaction(function () use ($user, $admin, $before) {
+        DB::transaction(function () use ($user, $admin, $before, $reason) {
             $user->update([
                 'status' => 'deactivated',
                 'is_premium' => false,
                 'premium_expires_at' => null,
+                // Можно добавить поле deletion_reason в таблицу users, 
+                // но для экономии полей достаточно хранить это только в AdminLog
             ]);
             
             $user->delete(); // Soft Delete
 
-            AdminLog::record('user.delete', $user, $admin, $before, ['status' => 'deactivated', 'deleted_at' => now()]);
+            // Записываем причину в лог
+            $after = [
+                'status' => 'deactivated', 
+                'deleted_at' => now()->toDateTimeString(),
+                'reason' => $reason ?: 'Причина не указана'
+            ];
+            
+            AdminLog::record('user.delete', $user, $admin, $before, $after);
         });
     }
 }

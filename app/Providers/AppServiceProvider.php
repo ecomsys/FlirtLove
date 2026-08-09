@@ -8,6 +8,9 @@ use Illuminate\Support\Facades\Session;
 
 use Illuminate\Support\ServiceProvider;
 
+use Illuminate\Support\Facades\Route;
+use App\Models\User;
+
 class AppServiceProvider extends ServiceProvider
 {
     /**
@@ -34,6 +37,6 @@ class AppServiceProvider extends ServiceProvider
                 // Обычных юзеров на их дашборд
                 Session::put('url.intended', route('dashboard'));
             }
-        });
+        });      
     }
 }

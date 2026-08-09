@@ -3,6 +3,8 @@
 use App\Enums\CommentRejectReason;
 use App\Models\PhotoComment;
 use App\Models\User;
+use Livewire\Attributes\Computed;
+use Livewire\Attributes\On;
 use Livewire\Attributes\Url;
 use Livewire\Volt\Component;
 use Livewire\WithPagination;
@@ -11,7 +13,7 @@ new class extends Component
 {
     use WithPagination;
 
-    public User $user;
+    public int $userId;
 
     // Раздельные страницы для независимой пагинации
     #[Url(as: 'made_page')] 
@@ -20,28 +22,57 @@ new class extends Component
     #[Url(as: 'received_page')] 
     public int $receivedPage = 1;
 
-    public function with(): array
+    public function mount(int $userId): void
     {
-        $avatarQuery = fn($q) => $q->select('id', 'name', 'email', 'status', 'is_premium', 'premium_expires_at', 'last_seen')
-            ->with(['photos' => fn($sq) => $sq->select('id', 'user_id', 'is_primary', 'status', 'path_thumb', 'path_medium', 'path_large', 'path_original')->orderByDesc('is_primary')->limit(1)]);
+        $this->userId = $userId;
+    }
 
-        // 1. Комменты, которые написал этот юзер (под чужими/своими фото)
-        // ФИКС: Подгружаем пути к файлам фото (thumb, medium, original)
-        $commentsMade = PhotoComment::where('user_id', $this->user->id)
-            ->with(['photo:id,user_id,path_thumb,path_medium,path_original', 'photo.user' => $avatarQuery])
+    // Достаем юзера (с удаленными для защиты от 404/500)
+    #[Computed]
+    public function user(): User
+    {
+        return User::withTrashed()->findOrFail($this->userId);
+    }
+
+    // Хелпер для жадной загрузки аватарок (с траншем)
+    private function getAvatarQuery(): \Closure
+    {
+        return fn($q) => $q->withTrashed()->select('id', 'name', 'email', 'status', 'is_premium', 'premium_expires_at', 'last_seen')
+            ->with(['photos' => fn($sq) => $sq->select('id', 'user_id', 'is_primary', 'status', 'path_thumb')->orderByDesc('is_primary')->limit(1)]);
+    }
+
+    // 1. Комменты, которые написал этот юзер
+    #[Computed]
+    public function commentsMade()
+    {
+        return PhotoComment::where('user_id', $this->userId)
+            ->with([
+                'photo' => fn($q) => $q->withTrashed()->select('id', 'user_id', 'path_thumb', 'path_medium', 'path_original'), 
+                'photo.user' => $this->getAvatarQuery()
+            ])
             ->latest()
             ->paginate(5, ['*'], 'madePage');
+    }
 
-        // 2. Комменты, написанные под фото этого юзера (другими людьми)
-        $commentsReceived = PhotoComment::whereHas('photo', fn($q) => $q->where('user_id', $this->user->id))
-            ->with(['photo:id,user_id', 'user' => $avatarQuery])
+    // 2. Комменты, написанные под фото этого юзера
+    #[Computed]
+    public function commentsReceived()
+    {
+        return PhotoComment::whereHas('photo', fn($q) => $q->where('user_id', $this->userId))
+            ->with([
+                'photo' => fn($q) => $q->withTrashed()->select('id', 'user_id'), 
+                'user' => $this->getAvatarQuery()
+            ])
             ->latest()
             ->paginate(5, ['*'], 'receivedPage');
+    }
 
-        return [
-            'commentsMade' => $commentsMade,
-            'commentsReceived' => $commentsReceived
-        ];
+    // Сбрасываем кэш при обновлениях
+    #[On('user-action-performed')] 
+    public function refreshUser(): void
+    {
+        unset($this->commentsMade);
+        unset($this->commentsReceived);
     }
 }; 
 ?>
@@ -51,10 +82,10 @@ new class extends Component
     {{-- ЛЕВАЯ КОЛОНКА: НАПИСАЛ САМ --}}
     <div class="space-y-4">
         <h3 class="text-sm font-semibold flex items-center gap-2">
-            <x-lucide-message-circle class="w-4 h-4 text-blue-500" /> Написал сам ({{ $commentsMade->total() }})
+            <x-lucide-message-circle class="w-4 h-4 text-blue-500" /> Написал сам ({{ $this->commentsMade->total() }})
         </h3>
 
-        @if($commentsMade->isEmpty())
+        @if($this->commentsMade->isEmpty())
             <div class="p-4 bg-muted/20 rounded-lg border border-border text-center text-xs text-muted-foreground">
                 Пользователь не оставлял комментариев.
             </div>
@@ -69,7 +100,7 @@ new class extends Component
                     </x-ui.table-row>
                 </x-ui.table-header>
                 <x-ui.table-body>
-                    @foreach($commentsMade as $comment)
+                    @foreach($this->commentsMade as $comment)
                         @php 
                             $statusBadge = match($comment->status) {
                                 'pending' => ['variant' => 'warning', 'label' => 'Ожидает'],
@@ -129,17 +160,17 @@ new class extends Component
                     @endforeach
                 </x-ui.table-body>
             </x-ui.table>
-            <div class="mt-2">{{ $commentsMade->links('partials.pagination') }}</div>
+            <div class="mt-2">{{ $this->commentsMade->links('partials.pagination') }}</div>
         @endif
     </div>
 
     {{-- ПРАВАЯ КОЛОНКА: НА ЕГО ФОТО --}}
     <div class="space-y-4">
         <h3 class="text-sm font-semibold flex items-center gap-2">
-            <x-lucide-inbox class="w-4 h-4 text-destructive" /> На его фото ({{ $commentsReceived->total() }})
+            <x-lucide-inbox class="w-4 h-4 text-destructive" /> На его фото ({{ $this->commentsReceived->total() }})
         </h3>
 
-        @if($commentsReceived->isEmpty())
+        @if($this->commentsReceived->isEmpty())
             <div class="p-4 bg-muted/20 rounded-lg border border-border text-center text-xs text-muted-foreground">
                 Под фото пользователя нет комментариев.
             </div>
@@ -154,7 +185,7 @@ new class extends Component
                     </x-ui.table-row>
                 </x-ui.table-header>
                 <x-ui.table-body>
-                    @foreach($commentsReceived as $comment)
+                    @foreach($this->commentsReceived as $comment)
                         @php 
                             $statusBadge = match($comment->status) {
                                 'pending' => ['variant' => 'warning', 'label' => 'Ожидает'],
@@ -208,10 +239,11 @@ new class extends Component
                     @endforeach
                 </x-ui.table-body>
             </x-ui.table>
-            <div class="mt-2">{{ $commentsReceived->links('partials.pagination') }}</div>
+            <div class="mt-2">{{ $this->commentsReceived->links('partials.pagination') }}</div>
         @endif
     </div>
-     <script>
+
+    <script>
     document.addEventListener('livewire:navigated', () => {
         if (typeof Fancybox !== 'undefined') {
             Fancybox.defaults.Hash = false; 

@@ -331,7 +331,7 @@ new #[Layout('layouts.admin')] class extends Component
         <x-ui.table-body>
             @forelse ($this->items as $item)
                 <x-ui.table-row wire:key="{{ $viewMode }}-{{ $item->id }}-{{ $item->status ?? 'trashed' }}">
-                    <x-ui.table-cell class="text-muted-foreground text-xs font-mono">{{ $item->id }}</x-ui.table-cell>
+                    <x-ui.table-cell class="text-muted-foreground text-xs font-mono">#{{ $item->id }}</x-ui.table-cell>
 
                     @if ($viewMode === 'swipes')
                         <!-- Кто оценил -->
