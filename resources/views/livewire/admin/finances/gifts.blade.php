@@ -21,6 +21,9 @@ new #[Layout('layouts.admin')] class extends Component
 {
     use WithPagination;
 
+        /** @var bool Флаг процесса выбора картинки из менеджера */
+    public bool $isSelectingMedia = false;
+
     /** @var string Активная вкладка (catalog или history) */
     public string $activeTab = 'catalog';
     
@@ -95,9 +98,10 @@ new #[Layout('layouts.admin')] class extends Component
     #[On('media-selected')]
     public function setMediaFromManager(int $mediaId, string $diskPath, string $collection): void
     {
-        if ($collection === 'gifts') {
+        if ($collection === 'gift') {
             $this->modalImageUrl = $diskPath; // Сохраняем чистый путь (media/gifts/...)
         }
+          $this->isSelectingMedia = false;
     }
 
     /**
@@ -498,7 +502,7 @@ new #[Layout('layouts.admin')] class extends Component
                             <x-ui.table-cell>
                                 @if($gift->image_url)
                                     <div class="w-14 h-14 overflow-hidden rounded-md bg-muted shrink-0">
-                                        <img src="{{ $gift->image_url }}" alt="{{ $gift->name }}" class="w-full h-full object-cover">
+                                        <x-media-image src="{{ $gift->image_url }}" alt="{{ $gift->name }}" class="w-full h-full object-cover"/>
                                     </div>
                                 @else
                                     <div class="w-14 h-14 flex items-center justify-center rounded-md bg-muted border border-dashed border-border">
@@ -672,7 +676,7 @@ new #[Layout('layouts.admin')] class extends Component
                                 <div class="flex items-center gap-2">
                                     <div class="w-14 h-14 overflow-hidden rounded-md bg-muted shrink-0 flex items-center justify-center">
                                         @if($uGift->image_url)
-                                            <img src="{{ $uGift->image_url }}" alt="{{ $uGift->snapshot_name }}" class="w-full h-full object-cover">
+                                            <x-media-image src="{{ $uGift->image_url }}" alt="{{ $uGift->snapshot_name }}" class="w-full h-full object-cover"/>
                                         @else
                                             <x-lucide-image-off class="w-4 h-4 text-muted-foreground/50" />
                                         @endif
@@ -823,13 +827,16 @@ new #[Layout('layouts.admin')] class extends Component
                         
                         <div class="min-h-[7rem] flex-1 flex flex-col items-center justify-center gap-3 border border-dashed border-border rounded-lg p-3 bg-muted/10 text-center">
                             
-                            @if($modalImageUrl)
+                            @if($isSelectingMedia)
+                                <x-lucide-loader-2 class="w-8 h-8 text-primary animate-spin" />
+                                <p class="text-xs text-muted-foreground">Выбор изображения...</p>
+                            @elseif($modalImageUrl)
                                 <div class="flex items-center gap-4 w-full">
                                     <div class="w-22 h-22 bg-background rounded-lg overflow-hidden border border-border shrink-0">
                                         <img src="{{ $this->previewImageUrl }}" class="w-full h-full object-cover" alt="Preview">
                                     </div>
                                     <div class="flex flex-col gap-4 flex-1">
-                                        <x-ui.button type="button" wire:click="$dispatch('open-media-manager', { collection: 'gifts' })" variant="outline" size="sm" class="w-full gap-1.5">
+                                        <x-ui.button type="button" wire:click="$set('isSelectingMedia', true); $dispatch('open-media-manager', { collection: 'gift' })" variant="outline" size="sm" class="w-full gap-1.5">
                                             <x-lucide-refresh-cw class="w-3.5 h-3.5" /> Заменить
                                         </x-ui.button>
                                         <x-ui.button type="button" wire:click="$set('modalImageUrl', '')" variant="destructive" size="sm" class="w-full gap-1.5">
@@ -839,7 +846,7 @@ new #[Layout('layouts.admin')] class extends Component
                                 </div>
                             @else
                                 <x-lucide-image-plus class="w-8 h-8 text-muted-foreground/50" />
-                                <x-ui.button type="button" wire:click="$dispatch('open-media-manager', { collection: 'gifts' })" variant="secondary" size="sm" class="gap-1.5">
+                                <x-ui.button type="button" wire:click="$set('isSelectingMedia', true); $dispatch('open-media-manager', { collection: 'gift' })" variant="secondary" size="sm" class="gap-1.5">
                                     <x-lucide-folder-open class="w-3.5 h-3.5" /> Выбрать из хранилища
                                 </x-ui.button>
                             @endif
