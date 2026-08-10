@@ -12,6 +12,7 @@ class Media extends Model
         'collection',
         'file_name',
         'disk_path',
+        'variants',
         'url',
         'type',
         'mime_type',
@@ -21,6 +22,7 @@ class Media extends Model
 
     protected $casts = [
         'size' => 'integer',
+        'variants' => 'array',
     ];
 
     // ============================================
@@ -55,72 +57,40 @@ class Media extends Model
     // ХЕЛПЕРЫ
     // ============================================
 
-        /**
-     * Удобный метод для загрузки и создания записи в БД.
-     * Теперь он принимает Enum и сам применяет правила сжатия и кропа!
+    /**
+     * Получить URL конкретного варианта (например, 'sm' или 'cover_lg').
+     * Если варианта нет, вернет основной URL.
      */
-    public static function createFromFile(\Illuminate\Http\UploadedFile $file, \App\Enums\MediaCollection $collection, ?int $userId = null): self
+    public function getVariantUrl(string $key = null): string
     {
-        $fileName = pathinfo($file->getClientOriginalName(), PATHINFO_FILENAME);
-        $cleanName = \Illuminate\Support\Str::slug($fileName) . '-' . uniqid();
-        
-        // Определяем тип
-        $type = str_starts_with($file->getMimeType(), 'video/') ? 'video' : 'image';
-
-        // Если это картинка - конвертируем в WebP по правилам коллекции
-        if ($type === 'image') {
-            $cleanName .= '.webp';
-            $manager = new \Intervention\Image\ImageManager(new \Intervention\Image\Drivers\Gd\Driver());
-            $image = $manager->read($file->getRealPath());
-
-            // 1. Если нужно квадрат — делаем кроп по центру
-            if ($collection->shouldBeSquare()) {
-                // cover обрезает картинку так, чтобы она стала строго заданного размера
-                $size = min($image->width(), $image->height());
-                $image->cover($size, $size);
-            }
-
-            // 2. Масштабируем по ширине, не превышая maxWidth
-            if ($image->width() > $collection->maxWidth()) {
-                $image->scale(width: $collection->maxWidth());
-            }
-
-            // 3. Кодируем в WebP с нужным качеством
-            $encoded = (string) $image->toWebp($collection->quality());
-            
-            $diskPath = "media/{$collection->value}/" . $cleanName;
-            Storage::disk('public')->put($diskPath, $encoded);
-            unset($image); // Освобождаем память
-            
-            $size = strlen($encoded); // Записываем новый размер файла
-            $mimeType = 'image/webp';
-        } else {
-            // Видео просто сохраняем
-            $cleanName .= '.' . $file->getClientOriginalExtension();
-            $diskPath = $file->store("media/{$collection->value}", 'public');
-            $size = $file->getSize();
-            $mimeType = $file->getMimeType();
+        if ($key && isset($this->variants[$key])) {
+            return Storage::url($this->variants[$key]);
         }
-
-        return self::create([
-            'collection' => $collection->value, // Сохраняем значение Enum (строку 'gifts')
-            'file_name' => $file->getClientOriginalName(),
-            'disk_path' => $diskPath,
-            'url' => Storage::url($diskPath),
-            'type' => $type,
-            'mime_type' => $mimeType,
-            'size' => $size,
-            'uploaded_by' => $userId,
-        ]);
+        return $this->url;
     }
+
     /**
      * Безопасное удаление файла с диска и из БД.
+     * Удаляет главный файл и все сгенерированные варианты (variants).
      */
     public function safeDelete(): bool
     {
-        if (Storage::disk('public')->exists($this->disk_path)) {
-            Storage::disk('public')->delete($this->disk_path);
+        $disk = Storage::disk('public');
+
+        // 1. Удаляем главный файл (если он не временный)
+        if ($this->disk_path && !str_starts_with($this->disk_path, 'media/temp/') && $disk->exists($this->disk_path)) {
+            $disk->delete($this->disk_path);
         }
+
+        // 2. Удаляем все сгенерированные варианты (sm, lg, cover_sm и т.д.)
+        if (!empty($this->variants)) {
+            foreach ($this->variants as $variantPath) {
+                if ($disk->exists($variantPath)) {
+                    $disk->delete($variantPath);
+                }
+            }
+        }
+
         return $this->delete();
-    }
+    }  
 }
