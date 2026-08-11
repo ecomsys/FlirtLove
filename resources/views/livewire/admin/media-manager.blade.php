@@ -345,10 +345,10 @@ new class extends Component {
                                     <div wire:click="{{ $isProcessing ? '' : 'selectMedia(' . $media->id . ')' }}" 
                                          wire:key="media-{{ $media->id }}" 
                                          @contextmenu.prevent="activeMedia = { id: {{ $media->id }}, url: '{{ asset($media->url) }}' }"
-                                         class="relative group aspect-square rounded-lg overflow-hidden transition-all {{ $isProcessing ? 'opacity-50 cursor-wait' : 'cursor-pointer ' . ($selectedMediaId === $media->id ? 'ring-2 ring-primary ring-offset-2 ring-offset-card border-transparent' : 'border border-border hover:border-primary/50') }} bg-background">
+                                         class="relative group aspect-square rounded-lg overflow-hidden transition-all {{ $isProcessing ? 'opacity-50 cursor-wait' : 'cursor-pointer ' . ($selectedMediaId === $media->id ? 'ring-2 ring-primary ring-offset-2 ring-offset-card border-transparent' : 'border border-border hover:border-primary/50') }} bg-background">                                        
                                         
-                                        <div class="block w-full h-full" title="{{ $isProcessing ? 'Идет обработка...' : 'Выбрать: ' . $media->file_name }}">
-                                            <x-media-image src="{{ $media->url }}" class="w-full h-full object-cover {{ $selectedMediaId === $media->id ? 'opacity-90' : 'group-hover:scale-110 transition-transform' }}"/>
+                                        <div class="w-full h-full block" title="{{ $isProcessing ? 'Идет обработка...' : 'Выбрать: ' . $media->file_name }}">
+                                            <x-media-image src="{{ $media->getVariantUrl('thumb') }}" class="w-full h-full object-cover {{ $selectedMediaId === $media->id ? 'opacity-90' : 'group-hover:scale-110 transition-transform' }}"/>
                                         </div>
                                         
                                         @if($isProcessing)

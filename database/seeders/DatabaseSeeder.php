@@ -2,7 +2,7 @@
 
 namespace Database\Seeders;
 
-use App\Models\{AdminLog, Broadcast, Chat, ChatParticipant, FraudAlert, Gift, Message, Photo, PhotoComment, Album, Report, StopWord, SubscriptionPlan, Swipe, Transaction, User, UserGift, UserMatch, UserPreference, UserProfile, UserSubscription, Setting};
+use App\Models\{AdminLog, Broadcast, Chat, ChatParticipant, FraudAlert, Gift, Media, Message, Photo, PhotoComment, Album, Report, StopWord, SubscriptionPlan, Swipe, Transaction, User, UserGift, UserMatch, UserPreference, UserProfile, UserSubscription, Setting};
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -24,9 +24,9 @@ class DatabaseSeeder extends Seeder
         $this->command->info('');
 
         // ============================================
-        // 2. ОЧИСТКА ПАПОК С ФОТО
+        // 2. ОЧИСТКА ПАПОК С ФОТО И МЕДИА
         // ============================================
-        $this->command->info('📁 Очистка папок с фото...');
+        $this->command->info('📁 Очистка папок с фото и медиа...');
         $this->cleanPhotoDirectories();
         $this->command->info('✅ Папки очищены!');
         $this->command->info('');
@@ -126,6 +126,7 @@ class DatabaseSeeder extends Seeder
         $this->command->info('   │ 👑 Админов                │ ' . str_pad(User::where('role', 'admin')->count(), 8, ' ', STR_PAD_LEFT) . ' │');
         $this->command->info('   │ 👤 Пользователей          │ ' . str_pad(User::where('role', 'user')->count(), 8, ' ', STR_PAD_LEFT) . ' │');
         $this->command->info('   │ 📸 Фото                   │ ' . str_pad(Photo::count(), 8, ' ', STR_PAD_LEFT) . ' │');
+        $this->command->info('   │ 🖼️ Медиа файлов           │ ' . str_pad(Media::count(), 8, ' ', STR_PAD_LEFT) . ' │');
         $this->command->info('   │ 💬 Комментариев           │ ' . str_pad(PhotoComment::count(), 8, ' ', STR_PAD_LEFT) . ' │');
         $this->command->info('   │ 👉 Свайпов                │ ' . str_pad(Swipe::count(), 8, ' ', STR_PAD_LEFT) . ' │');
         $this->command->info('   │ ❤️ Матчей                 │ ' . str_pad(UserMatch::count(), 8, ' ', STR_PAD_LEFT) . ' │');
@@ -164,6 +165,7 @@ class DatabaseSeeder extends Seeder
                 chat_participants,
                 chats,
                 fraud_alerts,
+                media, -- ФИКС: Добавили очистку медиа
                 messages,
                 photo_comments,
                 photos,
@@ -194,6 +196,7 @@ class DatabaseSeeder extends Seeder
             Message::query()->delete();
             Chat::query()->delete();
             FraudAlert::query()->delete();
+            Media::query()->delete(); // ФИКС: Добавили очистку медиа
             PhotoComment::query()->delete();
             Photo::query()->delete();
             Album::query()->delete();
@@ -217,11 +220,11 @@ class DatabaseSeeder extends Seeder
                 'photo_comments', 'reports', 'stop_words', 'swipes', 'user_matches', 
                 'chats', 'chat_participants', 'messages', 'gifts', 'user_gifts', 
                 'subscription_plans', 'user_subscriptions', 'transactions', 'fraud_alerts', 
-                'admin_logs', 'broadcasts', 'settings'
+                'admin_logs', 'broadcasts', 'settings', 'media' // ФИКС: Добавили сброс медиа
             ];
             
             foreach ($tables as $table) {
-                DB::statement("ALTER TABLE {$table} AUTO_INCREMENT = 1");
+                DB::statement("ALTER TABLE `{$table}` AUTO_INCREMENT = 1");
             }
             
             DB::statement('SET FOREIGN_KEY_CHECKS=1');
@@ -229,11 +232,12 @@ class DatabaseSeeder extends Seeder
     }
 
     /**
-     * Очистка папок с фото
+     * Очистка папок с фото и медиа
      */
     private function cleanPhotoDirectories(): void
     {
-        $directories = ['photos/pending', 'photos/approved', 'photos/profile']; // Добавил profile
+        // ФИКС: Добавили удаление папки 'media' (включает temp, default, gift и т.д.)
+        $directories = ['photos/pending', 'photos/approved', 'photos/profile', 'media']; 
         
         foreach ($directories as $dir) {
             if (Storage::disk('public')->exists($dir)) {
