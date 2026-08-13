@@ -141,7 +141,7 @@ new #[Layout('layouts.admin')] class extends Component
                 'total_likes' => (clone $baseSwipeQuery)->where('type', 'like')->count(),
                 'total_dislikes' => (clone $baseSwipeQuery)->where('type', 'dislike')->count(),
                 'total_superlikes' => (clone $baseSwipeQuery)->where('type', 'superlike')->count(),
-                'total_swipes' => $baseSwipeQuery->count(),
+                'total_swipes' => (clone $baseSwipeQuery)->count(),
                 'total_matches' => $baseMatchQuery->count(),
             ];
         });
@@ -343,8 +343,7 @@ new #[Layout('layouts.admin')] class extends Component
                                         <div class="flex gap-2 items-center">
                                             <x-user-status-sign :user="$item->user" />
                                             <span class="text-sm font-medium">{{ $item->user->name }}</span>
-                                            @if($item->user->has_active_premium)<x-lucide-crown class="w-3 h-3 text-yellow-500" />@endif 
-                                            @if($item->user->status === 'banned')<x-ui.badge variant="destructive" size="xs">Бан</x-ui.badge>@endif                                  
+                                            @if($item->user->has_active_premium)<x-lucide-crown class="w-3 h-3 text-yellow-500" />@endif                                           
                                             <span class="text-xs text-muted-foreground font-normal">(ID: {{ $item->user->id }})</span>                                        
                                         </div>                                        
                                         <span class="text-xs text-muted-foreground group-hover:text-primary/80 transition-colors">{{ $item->user->email }}</span>
@@ -364,8 +363,7 @@ new #[Layout('layouts.admin')] class extends Component
                                         <div class="flex gap-2 items-center">
                                             <x-user-status-sign :user="$item->targetUser" />
                                             <span class="text-sm font-medium">{{ $item->targetUser->name }}</span>
-                                            @if($item->targetUser->has_active_premium)<x-lucide-crown class="w-3 h-3 text-yellow-500" />@endif   
-                                            @if($item->targetUser->status === 'banned')<x-ui.badge variant="destructive" size="xs">Бан</x-ui.badge>@endif           
+                                            @if($item->targetUser->has_active_premium)<x-lucide-crown class="w-3 h-3 text-yellow-500" />@endif                                               
                                             <span class="text-xs text-muted-foreground font-normal">(ID: {{ $item->targetUser->id }})</span>
                                         </div>
                                         <span class="text-xs text-muted-foreground group-hover:text-primary/80 transition-colors">{{ $item->targetUser->email }}</span>
@@ -398,8 +396,7 @@ new #[Layout('layouts.admin')] class extends Component
                                         <div class="flex gap-2 items-center">
                                             <x-user-status-sign :user="$item->user1" />
                                             <span class="text-sm font-medium">{{ $item->user1->name }}</span>
-                                            @if($item->user1->has_active_premium)<x-lucide-crown class="w-3 h-3 text-yellow-500" />@endif  
-                                            @if($item->user1->status === 'banned')<x-ui.badge variant="destructive" size="xs">Бан</x-ui.badge>@endif       
+                                            @if($item->user1->has_active_premium)<x-lucide-crown class="w-3 h-3 text-yellow-500" />@endif                                              
                                             <span class="text-xs text-muted-foreground font-normal">(ID: {{ $item->user1->id }})</span>
                                         </div>                                        
                                         <span class="text-xs text-muted-foreground group-hover:text-primary/80 transition-colors">{{ $item->user1->email }}</span>
@@ -419,8 +416,7 @@ new #[Layout('layouts.admin')] class extends Component
                                         <div class="flex gap-2 items-center">
                                             <x-user-status-sign :user="$item->user2" />
                                             <span class="text-sm font-medium">{{ $item->user2->name }}</span>
-                                            @if($item->user2->has_active_premium)<x-lucide-crown class="w-3 h-3 text-yellow-500" />@endif  
-                                            @if($item->user2->status === 'banned')<x-ui.badge variant="destructive" size="xs">Бан</x-ui.badge>@endif       
+                                            @if($item->user2->has_active_premium)<x-lucide-crown class="w-3 h-3 text-yellow-500" />@endif                                              
                                             <span class="text-xs text-muted-foreground font-normal">(ID: {{ $item->user2->id }})</span>
                                         </div>                                              
                                         <span class="text-xs text-muted-foreground group-hover:text-primary/80 transition-colors">{{ $item->user2->email }}</span>
@@ -447,7 +443,7 @@ new #[Layout('layouts.admin')] class extends Component
                         {{ $item->created_at->format('d.m.Y H:i') }}
                     </x-ui.table-cell>
 
-                    <!-- Меню действий -->
+                   <!-- Меню действий -->
                     <x-ui.table-cell class="text-right">
                         <x-ui.dropdown-menu>
                             <x-ui.dropdown-menu-trigger>
@@ -463,8 +459,11 @@ new #[Layout('layouts.admin')] class extends Component
                                             variant="destructive" 
                                             wire:click="deleteItem({{ $item->id }})" 
                                             wire:confirm="Принудительно разорвать мэтч? Пользователи больше не смогут общаться."
+                                            wire:target="deleteItem({{ $item->id }})"
+                                            wire:loading.attr="disabled"
                                         >
-                                            <x-lucide-trash-2 class="w-4 h-4 mr-2" />
+                                            <x-lucide-trash-2 class="w-4 h-4 mr-2" wire:loading.remove wire:target="deleteItem({{ $item->id }})" />
+                                            <x-lucide-loader-2 class="w-4 h-4 mr-2 animate-spin hidden" wire:loading wire:target="deleteItem({{ $item->id }})" />
                                             Разорвать мэтч
                                         </x-ui.dropdown-menu-item>
                                     @else
@@ -473,8 +472,11 @@ new #[Layout('layouts.admin')] class extends Component
                                             variant="success" 
                                             wire:click="restoreMatch({{ $item->id }})" 
                                             wire:confirm="Восстановить мэтч? Пользователи снова смогут общаться."
+                                            wire:target="restoreMatch({{ $item->id }})"
+                                            wire:loading.attr="disabled"
                                         >
-                                            <x-lucide-rotate-ccw class="w-4 h-4 mr-2" />
+                                            <x-lucide-rotate-ccw class="w-4 h-4 mr-2" wire:loading.remove wire:target="restoreMatch({{ $item->id }})" />
+                                            <x-lucide-loader-2 class="w-4 h-4 mr-2 animate-spin hidden" wire:loading wire:target="restoreMatch({{ $item->id }})" />
                                             Восстановить мэтч
                                         </x-ui.dropdown-menu-item>
                                     @endif
@@ -484,8 +486,11 @@ new #[Layout('layouts.admin')] class extends Component
                                         variant="destructive" 
                                         wire:click="deleteItem({{ $item->id }})" 
                                         wire:confirm="Удалить этот свайп?"
+                                        wire:target="deleteItem({{ $item->id }})"
+                                        wire:loading.attr="disabled"
                                     >
-                                        <x-lucide-trash-2 class="w-4 h-4 mr-2" />
+                                        <x-lucide-trash-2 class="w-4 h-4 mr-2" wire:loading.remove wire:target="deleteItem({{ $item->id }})" />
+                                        <x-lucide-loader-2 class="w-4 h-4 mr-2 animate-spin hidden" wire:loading wire:target="deleteItem({{ $item->id }})" />
                                         Удалить
                                     </x-ui.dropdown-menu-item>
                                 @endif

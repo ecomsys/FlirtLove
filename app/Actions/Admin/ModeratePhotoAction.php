@@ -51,17 +51,27 @@ class ModeratePhotoAction
     {
         $user = $photo->user;
         
-        $before = ['photo_id' => $photo->id, 'status' => $photo->status];
+        $before = ['photo_id' => $photo->id, 'status' => $photo->status, 'is_primary' => $photo->is_primary];
 
         $photo->markAsRejected($admin->id, $reason);
-       
+        
+        //  Если отклонили аватарку, снимаем флаг is_primary!
+        if ($photo->is_primary) {
+            $photo->update(['is_primary' => false]);
+            
+            // Опционально: Автоматически делаем главным любое другое одобренное фото
+            $nextAvatar = $photo->user?->photos()->approved()->where('id', '!=', $photo->id)->first();
+            if ($nextAvatar) {
+                $nextAvatar->update(['is_primary' => true]);
+            }
+        }
+
         if ($user) {
             $user->notify(new PhotoModerated($photo->id, $photo->user_id, 'rejected', 1));
         }
 
-        $after = ['photo_id' => $photo->id, 'status' => 'rejected', 'reason' => $reason];
+        $after = ['photo_id' => $photo->id, 'status' => 'rejected', 'reason' => $reason, 'is_primary' => false];
         
-        // ЛОГИРУЕМ ЮЗЕРА
         AdminLog::record('photo.reject', $user, $admin, $before, $after);
     }
 
@@ -143,28 +153,22 @@ class ModeratePhotoAction
     public function rejectAllForUser(User $user, User $admin): int
     {
         $photos = $user->photos()->where('status', 'pending')->get();
-
         if ($photos->isEmpty()) return 0;
 
         $photoIds = $photos->pluck('id');
         $count = $photos->count();
         $before = ['status' => 'pending', 'count' => $count];
 
-        DB::transaction(function () use ($photoIds, $admin) {
-            Photo::whereIn('id', $photoIds)->update([
-                'status' => 'rejected',
-                'moderated_by' => $admin->id,
-                'moderated_at' => now(),
-                'reject_reason' => 'mass_reject',
-                'deleted_at' => now(), // Soft delete
-            ]);
+        DB::transaction(function () use ($photos, $admin) {
+            foreach ($photos as $photo) {
+                // Вызывает нашу же Action-логику (снятие is_primary, логирование и т.д.)
+                $this->reject($photo, $admin, 'mass_reject');
+            }
         });
 
         $user->notify(new PhotoModerated($photoIds->first(), $user->id, 'rejected', $count));
         
         $after = ['status' => 'rejected', 'count' => $count, 'photo_ids' => $photoIds->toArray()];
-        
-        // Логируем массовое действие, привязывая лог к модели Юзера
         AdminLog::record('photo.mass_reject', $user, $admin, $before, $after);
 
         return $count;

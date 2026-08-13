@@ -5,6 +5,7 @@ namespace Database\Seeders;
 use App\Models\User;
 use App\Models\UserProfile;
 use App\Models\UserPreference;
+use App\Models\UserBalance; // <--- ДОБАВИЛИ
 use App\Models\Album;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Hash;
@@ -37,7 +38,6 @@ class UserSeeder extends Seeder
         $activities = ["IT", "Медицина", "Маркетинг", "Финансы", "Дизайн", "Образование", "Продажи"];
         $positions = ["Разработчик", "Менеджер проекта", "Врач-терапевт", "Учитель", "Дизайнер интерфейсов", "Бухгалтер", "Маркетолог"];
 
-        // Пытаемся получить опции из конфига, если его нет - используем заглушки
         $options = config('profile_options', [
             'body_type' => [1 => 'Среднее', 2 => 'Спортивное', 3 => 'Полное'],
             'eye_color' => [1 => 'Карие', 2 => 'Голубые'],
@@ -62,9 +62,6 @@ class UserSeeder extends Seeder
             return array_slice($keys, 0, $count);
         };
 
-        // НЕ отключаем события! В модели User событие created само создаст пустые связи.
-        // А мы ниже через updateOrCreate их заполним.
-
         for ($i = 1; $i <= 30; $i++) {
             $year = rand(1984, 2006);
             $month = rand(1, 12);
@@ -76,16 +73,16 @@ class UserSeeder extends Seeder
 
             $gender = $genders[array_rand($genders)];
 
-            // Имитация ботоварни (пользователи 8, 9, 10)
+            // Имитация ботоварни
             if (in_array($i, [8, 9, 10])) {
                 $ip = '185.23.44.12'; 
-                $status = 'shadowbanned'; // Теневой бан для ботов
+                $status = 'shadowbanned';
             } else {
                 $ip = rand(100, 220) . '.' . rand(10, 250) . '.' . rand(1, 255) . '.' . rand(1, 255);
                 $status = 'active';
             }
 
-            // 1. Создаем Юзера (событие booted создаст пустые profile, preferences, album)
+            // 1. Создаем Юзера
             $user = User::updateOrCreate(
                 ['email' => 'user' . $i . '@test.com'],
                 [
@@ -93,7 +90,7 @@ class UserSeeder extends Seeder
                     'password' => Hash::make('password'),
                     'email_verified_at' => now(),
                     'role' => 'user',
-                    'status' => $status, // active или shadowbanned
+                    'status' => $status,
                     'is_premium' => $isPremium,
                     'premium_expires_at' => $premiumExpires,
                     'is_verified' => (bool) rand(0, 1),
@@ -116,7 +113,7 @@ class UserSeeder extends Seeder
                     'dating_goal' => $goals[array_rand($goals)],
                     'city' => $cities[array_rand($cities)],
                     'country' => 'Россия',
-                    'headline' => $bios[array_rand($bios)], // Было status
+                    'headline' => $bios[array_rand($bios)],
                     'bio' => $bios[array_rand($bios)],
                     'looking_for' => $lookingFors[array_rand($lookingFors)],
                     'interests' => ['музыка', 'кино', 'спорт', 'путешествия', 'книги'],
@@ -133,7 +130,7 @@ class UserSeeder extends Seeder
                     'has_car' => array_rand($options['has_car']),
                     'smoking' => array_rand($options['smoking']),
                     'alcohol' => array_rand($options['alcohol']),
-                    'zodiac_sign' => $this->getZodiacSign($month, $day), // Теперь возвращает int (1-12)
+                    'zodiac_sign' => $this->getZodiacSign($month, $day),
                     'body_decorations' => $getRandomIds($options['body_decorations'], 0, 2),
                     'languages' => $getRandomIds($options['languages'], 1, 3),
                     'sports' => $getRandomIds($options['sports'], 0, 4),
@@ -142,18 +139,17 @@ class UserSeeder extends Seeder
                     'institution_year' => rand(2005, (int) date('Y') - 1),
                     'activity' => $activities[array_rand($activities)],
                     'position' => $positions[array_rand($positions)],
-                    // PostGIS: Обязательно добавляем ::geography, так как колонка geography, а не geometry
                     'location' => DB::raw("ST_SetSRID(ST_MakePoint({$lng}, {$lat}), 4326)::geography"),
                 ]
             );
 
-            // 3. Обновляем Настройки
+            // 3. Обновляем Настройки (БЕЗ КРЕДИТОВ И ЛАЙКОВ)
             $emailSettings = [
                 'on_message' => (bool) rand(0, 1),
                 'on_like' => (bool) rand(0, 1),
                 'on_view' => (bool) rand(0, 1),
                 'on_gift' => (bool) rand(0, 1),
-                'on_event' => (bool) rand(0, 1), // Новый стандарт
+                'on_event' => (bool) rand(0, 1),
                 'on_broadcast' => (bool) rand(0, 1),
                 'sub_new_faces' => (bool) rand(0, 1),
                 'sub_popular' => (bool) rand(0, 1),
@@ -175,16 +171,23 @@ class UserSeeder extends Seeder
                     'hide_intimate' => (bool) rand(0, 1),
                     'disable_photo_comments' => (bool) rand(0, 1),
                     'hide_from_search' => false,
-                    'superlikes_remaining' => rand(0, 5), // Переехало из users
-                    'superlikes_reset_at' => now()->addHours(rand(1, 24)),
-                    'credits' => rand(0, 500), // Внутренняя валюта
                     'push_enabled' => (bool) rand(0, 1),
-                    'email_enabled' => true, // Глобальный тумблер
+                    'email_enabled' => true,
                     'email_settings' => $emailSettings,
                 ]
             );
 
-            // 4. Обновляем Альбом
+            // 4. Обновляем БАЛАНС (НОВОЕ)
+            UserBalance::updateOrCreate(
+                ['user_id' => $user->id],
+                [
+                    'credits' => rand(0, 500),
+                    'superlikes_remaining' => rand(0, 5),
+                    'superlikes_reset_at' => now()->addHours(rand(1, 24)),
+                ]
+            );
+
+            // 5. Обновляем Альбом
             Album::updateOrCreate(
                 ['user_id' => $user->id, 'is_default' => true],
                 [
@@ -226,7 +229,6 @@ class UserSeeder extends Seeder
         $date = sprintf('%02d-%02d', $month, $day);
         
         foreach ($zodiacs as $signId => $dates) {
-            // Учитываем переход через год для Козерога
             if ($signId === 10) {
                 if ($date >= $dates['start'] || $date <= $dates['end']) {
                     return $signId;
@@ -238,6 +240,6 @@ class UserSeeder extends Seeder
             }
         }
 
-        return 1; // По умолчанию Овен (если что-то пошло не так)
+        return 1; // По умолчанию Овен
     }
 }

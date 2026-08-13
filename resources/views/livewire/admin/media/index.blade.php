@@ -100,10 +100,17 @@ new #[Layout('layouts.admin')] class extends Component
     #[Computed]
     public function collectionCounts(): array
     {
-        $counts = ['all' => Media::where('type', 'image')->count()];
+        // Получаем счетчики по всем коллекциям одним запросом
+        $dbCounts = Media::where('type', 'image')
+            ->selectRaw('collection, count(*) as count')
+            ->groupBy('collection')
+            ->pluck('count', 'collection');
+
+        $counts = ['all' => $dbCounts->sum()];
         
+        // Проходим по Enum и берем число из массива, если коллекция пуста — ставим 0
         foreach (\App\Enums\MediaCollection::cases() as $case) {
-            $counts[$case->value] = Media::where('type', 'image')->where('collection', $case->value)->count();
+            $counts[$case->value] = $dbCounts[$case->value] ?? 0;
         }
         
         return $counts;
@@ -222,9 +229,13 @@ new #[Layout('layouts.admin')] class extends Component
             @if(!empty($search) || $collectionFilter !== 'all')
                 <x-ui.button wire:click="resetFilters" variant="outline" size="sm" class="mt-4">Сбросить фильтры</x-ui.button>
             @endif
-        </div>
+        </div>    
     @else
-        <div x-data="{ activeMedia: { id: null, url: '' } }">            
+        @php 
+            // Проверяем, есть ли в текущей пагинации файлы без вариантов (в обработке)
+            $hasProcessing = $this->mediaItems->contains(fn($m) => $m->type === 'image' && empty($m->variants));
+        @endphp
+        <div x-data="{ activeMedia: { id: null, url: '' } }" @if($hasProcessing) wire:poll.5s @endif>            
             <x-ui.context-menu>
                 <x-ui.context-menu-trigger asChild>
                     <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
@@ -262,7 +273,7 @@ new #[Layout('layouts.admin')] class extends Component
                                 @endif
 
                                 <!-- Быстрая кнопка удаления -->
-                                <button @click.stop="deleteMedia({{ $media->id }})" wire:confirm="Удалить файл навсегда с диска?" class="absolute bottom-1 right-1 z-40 opacity-0 group-hover:opacity-100 transition-opacity bg-destructive/80 hover:bg-destructive text-white p-1 rounded-sm">
+                                <button wire:click="deleteMedia({{ $media->id }})" wire:confirm="Удалить файл навсегда с диска?" class="absolute bottom-1 right-1 z-40 opacity-0 group-hover:opacity-100 transition-opacity bg-destructive/80 hover:bg-destructive text-white p-1 rounded-sm">
                                     <x-lucide-trash-2 class="w-3 h-3" />                                    
                                 </button>
                             </div>
@@ -333,8 +344,8 @@ new #[Layout('layouts.admin')] class extends Component
             <div class="p-6 grid grid-cols-1 sm:grid-cols-2 gap-6 overflow-y-auto little-scroll">
                 {{-- Большое превью --}}
                 <div class="bg-muted/10 rounded-lg overflow-hidden border border-border flex items-center justify-center aspect-square">
-                {{-- В модалке грузим 'lg' (или основной, если lg нет) --}}
-                    <img src="{{ $this->viewingMedia->getVariantUrl('sm') }}" alt="{{ $this->viewingMedia->file_name }}" class="w-full h-full object-contain">
+                {{-- В модалке грузим 'lg' (или основной, если lg нет) --}}                    
+                    <img src="{{ $this->viewingMedia->getVariantUrl('lg') }}" alt="{{ $this->viewingMedia->file_name }}" class="w-full h-full object-contain">
                 </div>
 
                 {{-- Метаданные --}}

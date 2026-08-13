@@ -60,6 +60,7 @@ Route::middleware(['auth', 'verified'])->prefix('admin')->name('admin.')->group(
         Volt::route('/communication/chats', 'admin.communication.chats')->name('communication.chats');
         Volt::route('/communication/diaries', 'admin.communication.diaries')->name('communication.diaries');
         Volt::route('/communication/stop-words', 'admin.communication.stop-words')->name('communication.stop-words');
+        Volt::route('/communication//templates', 'admin.communication.templates')->name('communication.templates');
 
         // Безопасность
         Volt::route('/security/blocks', 'admin.security.blocks')->name('security.blocks');

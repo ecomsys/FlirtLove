@@ -20,6 +20,9 @@ return new class extends Migration
             
             // Путь в filesystem (storage/app/public/media/...)
             $table->string('disk_path');
+
+            // Храним пути к нарезанным вариантам (sm, lg, cover_sm и т.д.)
+            $table->json('variants')->nullable();
             
             // Полный URL для фронтенда (кэшируем, чтобы не генерировать каждый раз)
             $table->string('url');

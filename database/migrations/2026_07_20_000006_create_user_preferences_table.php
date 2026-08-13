@@ -21,7 +21,7 @@ return new class extends Migration
             $table->unsignedInteger('preferred_age_max')->default(99);
             $table->string('preferred_gender')->default('any')->index();
             $table->unsignedInteger('preferred_distance_km')->default(50);
-            $table->json('search_filters')->nullable(); // Расширенные фильтры ({"body_type": 3, "smoking": 8})
+            $table->json('search_filters')->nullable(); // Расширенные фильтры
 
             // === 3. ФИЛЬТРЫ ЧАТА (Приватность) ===
             $table->boolean('chat_filter_enabled')->default(false);
@@ -33,15 +33,10 @@ return new class extends Migration
             $table->boolean('disable_photo_comments')->default(false);
             $table->boolean('hide_from_search')->default(false); // Экстренное скрытие
 
-            // === 5. ЛИМИТЫ И ВАЛЮТА ===
-            $table->unsignedInteger('superlikes_remaining')->default(5);
-            $table->timestamp('superlikes_reset_at')->nullable(); // Когда обновить лимит
-            $table->unsignedInteger('credits')->default(0); // Внутренняя валюта для подарков
-
-            // === 6. УВЕДОМЛЕНИЯ ===
+            // === 5. УВЕДОМЛЕНИЯ ===
             $table->boolean('push_enabled')->default(true);
             $table->boolean('email_enabled')->default(true);
-            $table->json('email_settings')->nullable(); // Гранулярные настройки по категориям
+            $table->json('email_settings')->nullable(); // Гранулярные настройки
 
             $table->timestamps();
         });

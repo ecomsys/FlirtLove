@@ -119,7 +119,7 @@ new class extends Component {
         </a>
     @endif
 
-    @if(in_array(auth()->user()->role, ['admin', 'moderator']))
+    @if(in_array(auth()->user()->role, ['admin', 'moderator','support']))
         @php $route = 'admin.communication.chats'; $exists = Route::has($route); @endphp
         <a href="{{ $exists ? route($route) : '#' }}" {{ $exists ? 'wire:navigate' : '' }}
             class="flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium {{ request()->routeIs('admin.communication.chats') ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-accent hover:text-foreground' }}">
@@ -133,6 +133,14 @@ new class extends Component {
             <x-lucide-headset class="w-4 h-4" />
             Чат поддержки
         </a>
+
+         @php $route = 'admin.communication.templates'; $exists = Route::has($route); @endphp
+        <a href="{{ $exists ? route($route) : '#' }}" {{ $exists ? 'wire:navigate' : '' }}
+            class="flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium {{ request()->routeIs('admin.communication.templates') ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-accent hover:text-foreground' }}">
+            <x-lucide-headset class="w-4 h-4" />
+            Шаблоны поддержки
+        </a>
+
 
         @php $route = 'admin.communication.diaries'; $exists = Route::has($route); @endphp
         <a href="{{ $exists ? route($route) : '#' }}" {{ $exists ? 'wire:navigate' : '' }}

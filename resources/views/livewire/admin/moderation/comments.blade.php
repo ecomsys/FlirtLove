@@ -373,8 +373,8 @@ new #[Layout('layouts.admin')] class extends Component
         <div class="space-y-6">
             @foreach ($this->photos as $photo)
                 @php
-                    $imgSrc = $photo->thumb_url ?: $photo->medium_url ?: $photo->original_url ?: asset('images/no-image-placeholder.png');
-                    $fullSrc = $photo->original_url ?: $photo->medium_url ?: '#';
+                      $imgSrc = $photo->thumb_url ?: asset('images/no-image-placeholder.png');
+                      $fullSrc = $photo->original_url ?: $imgSrc; // Для лайтбокса берем оригинал
                     $pendingCount = $photo->comments->where('status', 'pending')->count() + $photo->comments->flatMap->replies->where('status', 'pending')->count();
                 @endphp
 
@@ -389,8 +389,7 @@ new #[Layout('layouts.admin')] class extends Component
                                 @if($photo->user)
                                     <x-user-status-sign :user="$photo->user" />
                                     <a href="{{ route('admin.users.show', $photo->user->id) }}" wire:navigate class="hover:text-primary">{{ $photo->user->name }}</a>
-                                    @if($photo->user->has_active_premium)<x-lucide-crown class="w-3 h-3 text-yellow-500" />@endif
-                                    @if($photo->user->status === 'banned') <x-ui.badge variant="destructive" size="xs">Бан</x-ui.badge> @endif
+                                    @if($photo->user->has_active_premium)<x-lucide-crown class="w-3 h-3 text-yellow-500" />@endif                                    
                                 @else 
                                     <span class="text-muted-foreground">Удален</span>
                                 @endif
@@ -443,8 +442,7 @@ new #[Layout('layouts.admin')] class extends Component
                                             @if($comment->user)
                                                 <x-user-status-sign :user="$comment->user" />
                                                 <a href="{{ route('admin.users.show', $comment->user->id) }}" wire:navigate class="font-medium text-sm hover:text-primary">{{ $comment->user->name }}</a>
-                                                @if($comment->user->has_active_premium)<x-lucide-crown class="w-3 h-3 text-yellow-500" />@endif
-                                                @if($comment->user->status === 'banned') <x-ui.badge variant="destructive" size="xs">Бан</x-ui.badge> @endif
+                                                @if($comment->user->has_active_premium)<x-lucide-crown class="w-3 h-3 text-yellow-500" />@endif                                                
                                             @else
                                                 <span class="font-medium text-sm text-muted-foreground">Удален</span>
                                             @endif
@@ -514,8 +512,7 @@ new #[Layout('layouts.admin')] class extends Component
                                                         @if($reply->user)
                                                             <x-user-status-sign :user="$reply->user" />
                                                             <a href="{{ route('admin.users.show', $reply->user->id) }}" wire:navigate class="font-medium text-xs hover:text-primary">{{ $reply->user->name }}</a>
-                                                            @if($reply->user->has_active_premium)<x-lucide-crown class="w-3 h-3 text-yellow-500" />@endif
-                                                            @if($reply->user->status === 'banned') <x-ui.badge variant="destructive" size="xs">Бан</x-ui.badge> @endif
+                                                            @if($reply->user->has_active_premium)<x-lucide-crown class="w-3 h-3 text-yellow-500" />@endif                                                            
                                                         @else
                                                             <span class="font-medium text-xs text-muted-foreground">Удален</span>
                                                         @endif

@@ -67,7 +67,10 @@ return new class extends Migration
             
             // Для очереди модерации в админке: выбрать профильные фото со статусом pending, отсортированные по дате
             $table->index(['status', 'type', 'created_at']); 
+
         });
+        DB::statement('CREATE UNIQUE INDEX photos_user_primary_unique ON photos (user_id) WHERE is_primary = true AND deleted_at IS NULL');
+  
     }
 
     public function down(): void

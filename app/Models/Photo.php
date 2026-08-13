@@ -78,20 +78,20 @@ class Photo extends Model
     /**
      *  Универсальный метод: возвращает URL или полную ссылку
      */
-    private function getUrl(?string $path): string
+    private function getUrl(?string $path, ?string $fallbackPath = null): string
     {
-        if (empty($path)) {
-            return '';
+        if (!empty($path)) {
+            return filter_var($path, FILTER_VALIDATE_URL) ? $path : Storage::url($path);
         }
-
-        // Если это уже полный URL (http/https) - возвращаем как есть
-        if (filter_var($path, FILTER_VALIDATE_URL)) {
-            return $path;
+        
+        // Если запрошенного размера нет, пробуем отдать фоллбэк (например, оригинал)
+        if (!empty($fallbackPath)) {
+            return filter_var($fallbackPath, FILTER_VALIDATE_URL) ? $fallbackPath : Storage::url($fallbackPath);
         }
-
-        // Иначе - генерируем Storage URL
-        return Storage::url($path);
+        
+        return ''; // Или возвращай URL дефолтной заглушки (placeholder)
     }
+
 
     public function getUrlAttribute(): string
     {
@@ -110,12 +110,14 @@ class Photo extends Model
 
     public function getMediumUrlAttribute(): string
     {
-        return $this->getUrl($this->path_medium);
+        // Если нет medium, отдаст original
+        return $this->getUrl($this->path_medium, $this->path_original);
     }
 
     public function getThumbUrlAttribute(): string
     {
-        return $this->getUrl($this->path_thumb);
+        // Если нет thumb, отдаст medium, а если нет medium — original
+        return $this->getUrl($this->path_thumb, $this->path_medium ?? $this->path_original);
     }
 
     // ============================================

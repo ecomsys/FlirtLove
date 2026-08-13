@@ -50,9 +50,11 @@ class MediaProcessorService
 
             if ($fit === 'cover' && $width && $height) {
                 $image->cover($width, $height);
-            } elseif ($fit === 'contain' && $width && $height) {
+            } elseif (($fit === 'contain' || $fit === 'inside') && $width && $height) {
+                // Добавили проверку на 'inside'
                 $image->contain($width, $height);
             } elseif ($width && !$height) {
+                // Если передали только ширину (например '800w')
                 if ($image->width() > $width) {
                     $image->scale(width: $width);
                 }

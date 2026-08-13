@@ -11,10 +11,12 @@ class Chat extends Model
     protected $fillable = [
         'type',             // private, support
         'last_message_at',  // Кэш времени последнего сообщения для сортировки
+         'is_locked',
     ];
 
     protected $casts = [
         'last_message_at' => 'datetime',
+        'is_locked' => 'boolean',
     ];
 
     // ============================================

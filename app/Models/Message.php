@@ -13,11 +13,11 @@ class Message extends Model
     protected $fillable = [
         'chat_id',
         'sender_id',
-        'type',             // text, image, system, gift
+        'type',             // text, system, gift (image пока игнорируем)
         'body',
-        'attachment_url',   // Ссылка на картинку (если type=image)
+        'attachment_url',   // Оставляем в БД, на будущее
         'gift_id',          // Ссылка на подарок (если type=gift)
-        'status',           // approved, pending, rejected (для модерации фоток)
+        'status',           // approved, pending, rejected (на будущее для фоток)
         'reject_reason',
         'moderated_by',
         'moderated_at',
@@ -41,16 +41,14 @@ class Message extends Model
         return $this->belongsTo(User::class, 'sender_id');
     }
 
-    // Модератор, проверивший фотку в сообщении
     public function moderator(): BelongsTo
     {
         return $this->belongsTo(User::class, 'moderated_by');
     }
 
-    // Подарок (если type=gift)
     public function gift(): BelongsTo
     {
-        return $this->belongsTo(Gift::class); 
+        return $this->belongsTo(Gift::class); // Убедись, что модель Gift у тебя существует!
     }
 
     // ============================================
@@ -60,16 +58,6 @@ class Message extends Model
     public function scopeApproved($query)
     {
         return $query->where('status', 'approved');
-    }
-
-    public function scopePending($query)
-    {
-        return $query->where('status', 'pending');
-    }
-
-    public function scopeImages($query)
-    {
-        return $query->where('type', 'image');
     }
 
     public function scopeGifts($query)
@@ -87,7 +75,6 @@ class Message extends Model
     // ============================================
 
     public function isText(): bool { return $this->type === 'text'; }
-    public function isImage(): bool { return $this->type === 'image'; }
     public function isGift(): bool { return $this->type === 'gift'; }
     public function isSystem(): bool { return $this->type === 'system'; }
 

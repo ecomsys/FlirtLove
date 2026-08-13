@@ -44,7 +44,7 @@ class ProcessApprovedPhoto implements ShouldQueue
     public function handle(): void
     {
         // Увеличиваем лимит памяти для Intervention Image (GD драйвер прожорлив)
-        ini_set('memory_limit', '256M');
+        ini_set('memory_limit', '512M');
 
         $paths = [];
         $originalDbPath = null;
@@ -92,9 +92,9 @@ class ProcessApprovedPhoto implements ShouldQueue
                 if (isset($config['cover']) && $config['cover']) {
                     $resized = $image->cover(200, 200);
                 } else {
-                    $resized = $config['width'] 
-                        ? $image->scale(width: $config['width']) 
-                        : $image;
+                   $resized = $config['width'] 
+                    ? $image->scaleDown(width: $config['width']) 
+                    : $image;
                 }
                 
                 Storage::disk('public')->put(
@@ -145,18 +145,16 @@ class ProcessApprovedPhoto implements ShouldQueue
                 Storage::disk('public')->delete($failedPath);
             }
 
-            // ИСПРАВЛЕНО: Откатываем статус фото. 
-            // Проверяем на 'approved', так как экшен уже поменял статус до диспатча.
-            $photo = Photo::find($this->photoId);
-            if ($photo && $photo->status === 'approved') {
-                $photo->markAsRejected(null, 'processing_error');
-            }
-
-            if ($this->attempts() < $this->tries) {
-                // Повторяем через 5 минут
-                $this->release(60 * 5);
+            // Если это последняя попытка — помечаем фото как отклоненное и фейлим джобу
+            if ($this->attempts() >= $this->tries) {
+                $photo = Photo::find($this->photoId);
+                if ($photo && $photo->status === 'approved') {
+                    $photo->markAsRejected(null, 'processing_error');
+                }
+                $this->fail($e); // Окончательно фейлим джобу, она больше не пойдет в очередь
             } else {
-                $this->fail($e);
+                // Если попытки еще есть — просто отпускаем в очередь, статус не трогаем!
+                $this->release(60 * 5);
             }
         }
     }

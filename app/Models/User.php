@@ -1,5 +1,4 @@
 <?php
-
 namespace App\Models;
 
 use Illuminate\Contracts\Auth\MustVerifyEmail;
@@ -10,11 +9,10 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
-// use Laravel\Sanctum\HasApiTokens;
 
 class User extends Authenticatable implements MustVerifyEmail
 {
-    use HasFactory, Notifiable, SoftDeletes; // , HasApiTokens,
+    use HasFactory, Notifiable, SoftDeletes;
 
     protected $fillable = [
         'name', 'email', 'password',
@@ -46,7 +44,7 @@ class User extends Authenticatable implements MustVerifyEmail
     // ============================================
     // СВЯЗИ (ОТНОШЕНИЯ)
     // ============================================
-        // Логи действий администратора (для журнала аудита)
+
     public function adminLogs(): HasMany
     {
         return $this->hasMany(AdminLog::class, 'admin_id');
@@ -62,12 +60,17 @@ class User extends Authenticatable implements MustVerifyEmail
         return $this->hasOne(UserPreference::class);
     }
 
+    // НОВАЯ СВЯЗЬ: Кошелек и лимиты
+    public function balance(): HasOne
+    {
+        return $this->hasOne(UserBalance::class);
+    }
+
     public function albums(): HasMany
     {
         return $this->hasMany(Album::class);
     }
 
-    // Твой крутой хелпер для дефолтного альбома
     public function defaultAlbum(): HasOne
     {
         return $this->hasOne(Album::class)->where('is_default', true);
@@ -83,7 +86,6 @@ class User extends Authenticatable implements MustVerifyEmail
         return $this->hasMany(PhotoComment::class);
     }
 
-    // Чаты (Многие ко многим через сводную таблицу)
     public function chats(): BelongsToMany
     {
         return $this->belongsToMany(Chat::class, 'chat_participants')
@@ -136,8 +138,6 @@ class User extends Authenticatable implements MustVerifyEmail
         return $this->hasMany(Swipe::class, 'target_user_id');
     }
 
-    // В нашей БД user1_id всегда меньше user2_id. 
-    // Поэтому матчи делятся на две связи (где я инициатор записи, и где собеседник).
     public function matchesAsUser1(): HasMany
     {
         return $this->hasMany(UserMatch::class, 'user1_id');
@@ -148,26 +148,22 @@ class User extends Authenticatable implements MustVerifyEmail
         return $this->hasMany(UserMatch::class, 'user2_id');
     }    
 
-    // Просмотры
-    public function profileViewers() 
+    public function profileViewers(): HasMany 
     { 
         return $this->hasMany(ProfileView::class, 'viewed_id'); 
     }
 
-    // Кого заблокировали
-    public function blockedUsers() 
+    public function blockedUsers(): HasMany 
     { 
         return $this->hasMany(UserBlock::class, 'blocker_id'); 
     } 
 
-    // Кто заблокировал
-    public function blockers() 
+    public function blockers(): HasMany 
     { 
         return $this->hasMany(UserBlock::class, 'blocked_id'); 
     } 
 
-    // верифицированные пользователи
-    public function verifications() 
+    public function verifications(): HasMany 
     { 
         return $this->hasMany(Verification::class); 
     }
@@ -176,13 +172,11 @@ class User extends Authenticatable implements MustVerifyEmail
     // СКОПЫ (SCOPES)
     // ============================================
 
-    // Выводить только обычных юзеров (исключать админов/модераторов)
     public function scopeExcludeStaff($query)
     {
         return $query->where('role', 'user');
     }
 
-    // Выводить только активных (не забаненных и не деактивированных)
     public function scopeActive($query)
     {
         return $query->where('status', 'active');
@@ -192,9 +186,6 @@ class User extends Authenticatable implements MustVerifyEmail
     // АКСЕССОРЫ И ХЕЛПЕРЫ
     // ============================================
 
-    /**
-     * Проверка, является ли пользователь сотрудником (для админки).
-     */
     public function isStaff(): bool
     {
         return in_array($this->role, ['admin', 'moderator', 'support']);
@@ -205,13 +196,9 @@ class User extends Authenticatable implements MustVerifyEmail
         if ($this->status !== 'banned') {
             return false;
         }
-        // Если banned_until null — бан вечный. Если есть дата — проверяем, истек ли он.
         return is_null($this->banned_until) || $this->banned_until->isFuture();
     }
 
-    /**
-     * Проверка активной VIP-подписки.
-     */
     public function getHasActivePremiumAttribute(): bool
     {
         return $this->is_premium 
@@ -219,32 +206,22 @@ class User extends Authenticatable implements MustVerifyEmail
             && $this->premium_expires_at->isFuture();
     }
 
-    /**
-     * Проверка "Кто онлайн" (был за последние 5 минут).
-     */
     public function getIsOnlineAttribute(): bool
     {
         return $this->last_seen && $this->last_seen->gt(now()->subMinutes(5));
     }
 
-        /**
-     * Получить URL аватарки.
-     * СТРОГОЕ ПРАВИЛО: Только из жадной загрузки и только нарезанный thumb_url!
-     * Если нет — пустая строка (выведутся инициалы).
-     */
     public function getAvatarUrlAttribute(): string
     {
         if ($this->relationLoaded('photos')) {
             $photos = $this->getRelation('photos');
             
             if ($photos && $photos->isNotEmpty()) {
-                // Ищем главное одобренное -> любое одобренное -> главное (любого статуса) -> первое попавшееся
                 $photo = $photos->firstWhere(fn($p) => $p->is_primary && $p->status === 'approved')
                     ?? $photos->firstWhere('status', 'approved')
                     ?? $photos->firstWhere('is_primary', true)
                     ?? $photos->first();
                 
-                // Возвращаем строго thumb_url (если он null, вернем пустую строку)
                 return $photo ? ($photo->thumb_url ?: '') : '';
             }
         }
@@ -252,10 +229,7 @@ class User extends Authenticatable implements MustVerifyEmail
         return '';
     }
 
-    // ============================================
-    // ПРОКСИ-АКСЕССОРЫ ДЛЯ НАСТРОЕК (Из твоей старой модели)
-    // ============================================
-
+    // Прокси-аксессоры для настроек (остаются тут)
     public function getLocaleAttribute(): string
     {
         return $this->preferences?->locale ?? config('app.locale');
@@ -273,10 +247,8 @@ class User extends Authenticatable implements MustVerifyEmail
 
     public function getEmailEnabledAttribute(): bool
     {
-        // Если настройки загружены — берем оттуда, иначе по умолчанию true
         return $this->preferences?->email_enabled ?? true;
     }
-
 
     public function getEmailSettingsAttribute(): array
     {
@@ -290,7 +262,6 @@ class User extends Authenticatable implements MustVerifyEmail
         return $this->preferences->email_settings;
     }
 
-
     // ============================================
     // СОБЫТИЯ МОДЕЛИ (Booted)
     // ============================================
@@ -298,11 +269,12 @@ class User extends Authenticatable implements MustVerifyEmail
     protected static function booted()
     {
         static::created(function (User $user) {
-            // При создании юзера — сразу создаем его пустой профиль и дефолтные настройки!
             $user->profile()->create();
             $user->preferences()->create();
             
-            // Создаем альбом по умолчанию (предполагаем, что в модели Album есть этот статический метод)
+            // Создаем кошелек с дефолтными значениями (наследуется из миграции)
+            $user->balance()->create();
+            
             Album::createDefaultForUser($user);
         });
     }

@@ -84,16 +84,17 @@ class ModerateCommentAction
         $approvedIds = [];
 
         DB::transaction(function () use ($comments, $admin, &$approvedCount, &$firstComment, &$approvedIds) {
-            foreach ($comments as $comment) {
-                if ($comment->parent_id && $comment->parent && $comment->parent->status !== 'approved') {
-                    continue;
-                }
+                foreach ($comments as $comment) {
+                    if ($comment->parent_id && $comment->parent && $comment->parent->status !== 'approved') {
+                        continue;
+                    }
 
-                $comment->update([
-                    'status' => 'approved', 
-                    'moderated_at' => now(),
-                    'moderated_by' => $admin->id
-                ]);
+                    $comment->update([
+                        'status' => 'approved', 
+                        'moderated_at' => now(),
+                        'reject_reason' => null, // <--- ДОБАВИЛИ СБРОС ПРИЧИНЫ!
+                        'moderated_by' => $admin->id
+                    ]);
                 $this->notifyAuthor($comment, 'approved');
                 
                 if (!$firstComment) $firstComment = $comment;
@@ -116,6 +117,8 @@ class ModerateCommentAction
         $count = 0;
 
         DB::transaction(function () use ($comments, $admin, $reason, &$firstComment, &$count, &$rejectedIds) {
+             $notifiedUsers = [];
+
             foreach ($comments as $comment) {
                 $comment->update([
                     'status' => 'rejected', 
@@ -123,7 +126,11 @@ class ModerateCommentAction
                     'reject_reason' => $reason,
                     'moderated_by' => $admin->id
                 ]);
-                $this->notifyAuthor($comment, 'rejected');
+                 // Запоминаем, кому уже отправили
+                if ($comment->user_id && !in_array($comment->user_id, $notifiedUsers)) {
+                    $this->notifyAuthor($comment, 'rejected');
+                    $notifiedUsers[] = $comment->user_id;
+                }
                 
                 if (!$firstComment) $firstComment = $comment;
                 $rejectedIds[] = $comment->id;
