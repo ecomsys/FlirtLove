@@ -153,11 +153,7 @@ class PhotoComment extends Model
      */
     public function markAsSpam(int $adminId): void
     {
-        $this->update([
-            'status' => 'spam',
-            'moderated_by' => $adminId,
-            'moderated_at' => now(),
-            'reject_reason' => 'spam',
-        ]);
+        // Просто вызываем reject с причиной 'spam'
+        $this->reject($adminId, 'spam');
     }
 }

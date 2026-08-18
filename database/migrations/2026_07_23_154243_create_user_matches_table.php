@@ -4,6 +4,21 @@ use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
 
+
+// В будущем MatchService для кнопки "Лайк" !
+// try {
+//     $match = UserMatch::createMatch($userA, $userB);
+//     // Отправляем пуш "У вас мэтч!"
+// } catch (\Illuminate\Database\QueryException $e) {
+//     if ($e->errorInfo[1] == 23505) { // Код ошибки дубликата в PostgreSQL
+//         $match = UserMatch::where('user1_id', min($userA, $userB))->where('user2_id', max($userA, $userB))->first();
+//         // Мэтч уже создан параллельным процессом, всё ок, просто берем его.
+//     } else {
+//         throw $e;
+//     }
+// }
+
+
 return new class extends Migration
 {
     public function up(): void

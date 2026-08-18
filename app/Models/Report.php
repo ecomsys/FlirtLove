@@ -105,6 +105,20 @@ class Report extends Model
     }
 
     /**
+     * Заново открыть жалобу (если модератор ошибся).
+     */
+    public function reopen(): bool
+    {
+        return $this->update([
+            'status' => 'pending',
+            'resolution' => null,
+            'resolution_note' => null,
+            'admin_id' => null,
+            'resolved_at' => null,
+        ]);
+    }
+
+    /**
      * Аксессор для UI: красивый бейдж статуса жалобы (как в PhotoComment)
      */
     public function getStatusBadgeAttribute(): array

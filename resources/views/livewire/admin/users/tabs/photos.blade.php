@@ -43,7 +43,7 @@ new class extends Component
             ->where('type', 'profile')
             ->with('album:id,name')
             ->orderByDesc('is_primary')
-            ->latest()
+            ->latest('created_at') // ФИКС: Явное указание колонки
             ->get();
 
         return $allPhotos->groupBy(function($photo) {
@@ -214,8 +214,9 @@ new class extends Component
                                                     <x-lucide-loader-2 wire:loading wire:target="approve({{ $photo->id }})" class="w-4 h-4 animate-spin" />
                                                 </x-ui.button>
                                                 <x-ui.button wire:click="openRejectModal({{ $photo->id }})" variant="warning" size="sm" class="flex-1 h-8 text-xs">Отклонить</x-ui.button>
+                                                <!-- ФИКС: Текст "Карантин" -->
                                                 <x-ui.button wire:click="softDelete({{ $photo->id }})" wire:confirm="Переместить в карантин без причины?" wire:target="softDelete({{ $photo->id }})" variant="destructive" size="sm" class="h-8 text-xs">
-                                                    <span wire:loading.remove wire:target="softDelete({{ $photo->id }})">Удалить</span>
+                                                    <span wire:loading.remove wire:target="softDelete({{ $photo->id }})">Карантин</span>
                                                     <x-lucide-loader-2 wire:loading wire:target="softDelete({{ $photo->id }})" class="w-4 h-4 animate-spin" />
                                                 </x-ui.button>
                                             </div>
@@ -258,8 +259,9 @@ new class extends Component
                                                     </x-ui.button>
                                                 @endif
                                                 <x-ui.button wire:click="openRejectModal({{ $photo->id }})" variant="warning" size="sm" class="flex-1 h-8 text-xs">Отклонить</x-ui.button>
+                                                <!-- ФИКС: Текст "Карантин" -->
                                                 <x-ui.button wire:click="softDelete({{ $photo->id }})" wire:confirm="Переместить в карантин без причины?" wire:target="softDelete({{ $photo->id }})" variant="destructive" size="sm" class="h-8 text-xs">
-                                                    <span wire:loading.remove wire:target="softDelete({{ $photo->id }})">Удалить</span>
+                                                    <span wire:loading.remove wire:target="softDelete({{ $photo->id }})">Карантин</span>
                                                     <x-lucide-loader-2 wire:loading wire:target="softDelete({{ $photo->id }})" class="w-4 h-4 animate-spin" />
                                                 </x-ui.button>
                                             </div>

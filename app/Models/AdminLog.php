@@ -1,4 +1,4 @@
-<?php 
+<?php
 
 namespace App\Models;
 
@@ -9,16 +9,14 @@ use Illuminate\Support\Facades\Request;
 
 class AdminLog extends Model
 {
-    // ВАЖНО: Никаких SoftDeletes! Логи нельзя удалять или скрывать.
-    // В идеале, доступ к удалению из этой таблицы должен быть только у DevOps через raw SQL.
-
+    // ВАЖНО: Никаких Soft Deletes! Логи нельзя удалять или скрывать.
     protected $fillable = [
         'admin_id',
-        'action',          // user.ban, photo.approve, transaction.refund
-        'loggable_type',   // Класс сущности (App\Models\User)
-        'loggable_id',     // ID сущности
-        'before',          // JSON: Состояние до изменения
-        'after',           // JSON: Состояние после изменения
+        'action',          
+        'loggable_type',   
+        'loggable_id',     
+        'before',          
+        'after',           
         'ip_address',
         'user_agent',
     ];
@@ -32,18 +30,17 @@ class AdminLog extends Model
     // СВЯЗИ
     // ============================================
 
-    // Кто совершил действие (админ/модератор). nullable, т.к. действие может совершить система (воркер).
     public function admin(): BelongsTo
     {
         return $this->belongsTo(User::class, 'admin_id');
     }
 
-    // Полиморфная связь: над кем или над чем совершили действие
     public function loggable(): MorphTo
     {
         return $this->morphTo();
     }
 
+    
     // ============================================
     // СКОПЫ (Для фильтрации в админке)
     // ============================================
@@ -63,23 +60,61 @@ class AdminLog extends Model
         return $query->where('loggable_type', $type)->where('loggable_id', $id);
     }
 
+
+    // ============================================
+    // ХЕЛПЕР: ВЫЧИСЛЕНИЕ ЧИСТОГО ДИФФА
+    // ============================================
+    
+    /**
+     * Сравнивает два массива и возвращает только изменившиеся поля.
+     * Игнорирует технические поля (updated_at, last_seen и т.д.)
+     */
+    private static function calculateDiff(array $before, array $after): array
+    {
+        $cleanBefore = [];
+        $cleanAfter = [];
+        
+        // Поля, которые меняются автоматически и не несут ценности для лога
+        $ignoreFields = ['updated_at', 'last_seen', 'last_login_at', 'remember_token'];
+
+        foreach ($after as $key => $value) {
+            if (in_array($key, $ignoreFields)) continue;
+
+            // Если поля не было раньше или оно изменилось
+            if (!array_key_exists($key, $before) || $before[$key] !== $value) {
+                // Не пишем в before, если это огромный текст (body), который не менялся
+                if ($key === 'body' && ($before[$key] ?? null) === $value) {
+                    continue;
+                }
+                
+                $cleanBefore[$key] = $before[$key] ?? null;
+                $cleanAfter[$key] = $value;
+            }
+        }
+
+        return [$cleanBefore, $cleanAfter];
+    }
+
     // ============================================
     // СТАТИЧЕСКИЙ ХЕЛПЕР ДЛЯ ЗАПИСИ ЛОГОВ
     // ============================================
 
     /**
      * Универсальный метод для записи действия в лог.
-     * Безопасен для вызова из Queue/CLI!
-     *
-     * @param string $action - Что сделали (slug)
-     * @param Model|null $model - Над какой моделью издевались (null для глобальных событий)
-     * @param User|null $admin - Кто издевался (null — система/воркер)
-     * @param array|null $before - Данные ДО
-     * @param array|null $after - Данные ПОСЛЕ
-     * @return self
+     * Автоматически вычисляет дифф, если переданы массивы before и after.
      */
     public static function record(string $action, ?Model $model = null, ?User $admin = null, ?array $before = null, ?array $after = null): self
     {
+        // УМНАЯ ОБРАБОТКА: Если переданы оба состояния, чистим их
+        if (is_array($before) && is_array($after)) {
+            [$before, $after] = self::calculateDiff($before, $after);
+            
+            // Если ничего не изменилось (кроме updated_at), не пишем пустой лог
+            if (empty($before) && empty($after)) {
+                return new self(); // Возвращаем пустую модель, чтобы не падать
+            }
+        }
+
         return self::create([
             'admin_id'      => $admin?->id,
             'action'        => $action,
@@ -87,13 +122,11 @@ class AdminLog extends Model
             'loggable_id'   => $model?->id,
             'before'        => $before,
             'after'         => $after,
-            // Защита от краша в консоли (php artisan / queue:work)
             'ip_address'    => app()->runningInConsole() ? null : Request::ip(),
             'user_agent'    => app()->runningInConsole() ? null : Request::userAgent(),
         ]);
     }
 }
-
 
 // Модель AdminLog (Журнал аудита) — это система видеонаблюдения твоего проекта. Если кто-то из модераторов решит по дружбе 
 // раздать VIP-статусы, поменять цены тарифов или тихо удалить жалобу — всё это навсегда останется в этой таблице.

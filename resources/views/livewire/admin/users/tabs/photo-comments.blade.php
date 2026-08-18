@@ -15,7 +15,6 @@ new class extends Component
 
     public int $userId;
 
-    // Раздельные страницы для независимой пагинации
     #[Url(as: 'made_page')] 
     public int $madePage = 1;
     
@@ -27,21 +26,18 @@ new class extends Component
         $this->userId = $userId;
     }
 
-    // Достаем юзера (с удаленными для защиты от 404/500)
     #[Computed]
     public function user(): User
     {
         return User::withTrashed()->findOrFail($this->userId);
     }
 
-    // Хелпер для жадной загрузки аватарок (с траншем)
     private function getAvatarQuery(): \Closure
     {
         return fn($q) => $q->withTrashed()->select('id', 'name', 'email', 'status', 'is_premium', 'premium_expires_at', 'last_seen')
             ->with(['photos' => fn($sq) => $sq->select('id', 'user_id', 'is_primary', 'status', 'path_thumb')->orderByDesc('is_primary')->limit(1)]);
     }
 
-    // 1. Комменты, которые написал этот юзер
     #[Computed]
     public function commentsMade()
     {
@@ -54,7 +50,6 @@ new class extends Component
             ->paginate(5, ['*'], 'madePage');
     }
 
-    // 2. Комменты, написанные под фото этого юзера
     #[Computed]
     public function commentsReceived()
     {
@@ -67,7 +62,6 @@ new class extends Component
             ->paginate(5, ['*'], 'receivedPage');
     }
 
-    // Сбрасываем кэш при обновлениях
     #[On('user-action-performed')] 
     public function refreshUser(): void
     {
@@ -112,14 +106,14 @@ new class extends Component
                             $reasonEnum = $comment->reject_reason ? CommentRejectReason::tryFrom($comment->reject_reason) : null;
                         @endphp
                         <x-ui.table-row wire:key="made-{{ $comment->id }}">
-                            <x-ui.table-cell class="text-muted-foreground text-xs font-mono">
-                                <a href="{{ route('admin.moderation.comments', ['q' => $comment->id]) }}" wire:navigate class="hover:text-primary" title="Найти в модерации">
+                            <x-ui.table-cell class="text-xs font-mono whitespace-nowrap">
+                                <a href="{{ route('admin.moderation.photo-comments', ['q' => $comment->id]) }}" wire:navigate class="text-blue-500 hover:underline" title="Найти в модерации">
                                     #{{ $comment->id }}
                                 </a>
                             </x-ui.table-cell>
                             <x-ui.table-cell>
-                                <div class="flex flex-col gap-1.5 max-w-[200px]">
-                                    <p class="text-xs text-muted-foreground italic truncate">"{{ $comment->content }}"</p>
+                                <div class="flex flex-col gap-1.5 max-w-[230px]">
+                                    <p class="text-xs text-muted-foreground italic break-words whitespace-normal line-clamp-2">"{{ $comment->content }}"</p>
                                     <div class="flex items-center gap-1.5 flex-wrap">
                                         <x-ui.badge variant="{{ $statusBadge['variant'] }}" size="xs">{{ $statusBadge['label'] }}</x-ui.badge>
                                         @if($reasonEnum)
@@ -136,13 +130,16 @@ new class extends Component
                                             <img src="{{ $photoSrc }}" class="w-full h-full object-cover" alt="photo">
                                         </a>
                                        <div class="flex flex-col gap-0.5 min-w-0">
-                                            <a href="{{ route('admin.moderation.photos', ['q' => $comment->photo->id]) }}" wire:navigate class="text-xs fomt-medium text-muted-foreground hover:text-primary" title="Найти в модерации">
+                                            <a href="{{ route('admin.moderation.photos', ['q' => $comment->photo->id]) }}" wire:navigate class="text-xs font-medium text-muted-foreground hover:text-primary" title="Найти в модерации">
                                                 Фото #{{ $comment->photo->id }}
                                             </a>
                                             @if($comment->photo->user)
-                                                <a href="{{ route('admin.users.show', $comment->photo->user->id) }}" wire:navigate class="text-xs font-medium hover:text-primary flex items-center gap-1">
+                                                <a href="{{ route('admin.users.show', $comment->photo->user->id) }}" wire:navigate class="text-[10px] text-muted-foreground hover:text-primary flex items-center gap-1">
                                                     <x-user-status-sign :user="$comment->photo->user" />
-                                                    {{ $comment->photo->user->name }}
+                                                    <span class="truncate">{{ $comment->photo->user->name }}</span>
+                                                    @if($comment->photo->user->has_active_premium)
+                                                        <x-lucide-crown class="w-3 h-3 text-yellow-500" />
+                                                    @endif
                                                 </a>
                                             @else
                                                 <span class="text-[10px] text-muted-foreground italic">Юзер удален</span>
@@ -197,8 +194,8 @@ new class extends Component
                             $reasonEnum = $comment->reject_reason ? CommentRejectReason::tryFrom($comment->reject_reason) : null;
                         @endphp
                         <x-ui.table-row wire:key="received-{{ $comment->id }}">
-                            <x-ui.table-cell class="text-muted-foreground text-xs font-mono">
-                                <a href="{{ route('admin.moderation.comments', ['q' => $comment->id]) }}" wire:navigate class="hover:text-primary" title="Найти в модерации">
+                            <x-ui.table-cell class="text-xs font-mono whitespace-nowrap">
+                                <a href="{{ route('admin.moderation.photo-comments', ['q' => $comment->id]) }}" wire:navigate class="text-blue-500 hover:underline" title="Найти в модерации">
                                     #{{ $comment->id }}
                                 </a>
                             </x-ui.table-cell>
@@ -209,7 +206,10 @@ new class extends Component
                                         <div class="flex flex-col min-w-0">
                                             <span class="text-sm font-medium group-hover:text-primary flex items-center gap-1.5">
                                                 <x-user-status-sign :user="$comment->user" />
-                                                {{ $comment->user->name }}
+                                                <span class="truncate">{{ $comment->user->name }}</span>
+                                                @if($comment->user->has_active_premium)
+                                                    <x-lucide-crown class="w-3 h-3 text-yellow-500" />
+                                                @endif
                                             </span>
                                             <span class="text-xs text-muted-foreground truncate">{{ $comment->user->email }}</span>
                                         </div>
@@ -222,8 +222,8 @@ new class extends Component
                                 @endif
                             </x-ui.table-cell>
                             <x-ui.table-cell>
-                                <div class="flex flex-col gap-1.5 max-w-[200px]">
-                                    <p class="text-xs text-muted-foreground italic truncate">"{{ $comment->content }}"</p>
+                                <div class="flex flex-col gap-1.5 max-w-[230px]">
+                                    <p class="text-xs text-muted-foreground italic break-words whitespace-normal line-clamp-2">"{{ $comment->content }}"</p>
                                     <div class="flex items-center gap-1.5 flex-wrap">
                                         <x-ui.badge variant="{{ $statusBadge['variant'] }}" size="xs">{{ $statusBadge['label'] }}</x-ui.badge>
                                         @if($reasonEnum)

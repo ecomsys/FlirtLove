@@ -3,6 +3,7 @@
 use App\Models\SubscriptionPlan;
 use App\Models\AdminLog;
 use Livewire\Attributes\Layout;
+use Livewire\Attributes\Url;
 use Livewire\Volt\Component;
 
 new #[Layout('layouts.admin')] class extends Component 
@@ -21,8 +22,11 @@ new #[Layout('layouts.admin')] class extends Component
     public int $sort_order = 0;
     public string $apple_product_id = '';
     public string $google_product_id = '';
-    // Удаляем string $features_json и добавляем массив
     public array $features = [];
+
+    // ФИКС: Добавили свойство поиска
+    #[Url(as: 'q', except: '')]
+    public string $search = '';
 
     public function openPlanModal(?int $planId = null): void
     {
@@ -36,7 +40,6 @@ new #[Layout('layouts.admin')] class extends Component
             $this->currency = $plan->currency;
             $this->price = $plan->price;
             $this->duration_days = $plan->duration_days;
-            // УДАЛИЛИ trial_days
             $this->is_active = $plan->is_active;
             $this->sort_order = $plan->sort_order;
             $this->apple_product_id = $plan->apple_product_id ?? '';
@@ -48,7 +51,6 @@ new #[Layout('layouts.admin')] class extends Component
                 $this->features[$feature->value] = $feature->isBoolean() ? (bool) $dbValue : (int) $dbValue;
             }
         } else {
-            // УДАЛИЛИ trial_days из reset
             $this->reset(['editingPlanId', 'name', 'slug', 'price', 'duration_days', 'is_active', 'sort_order', 'apple_product_id', 'google_product_id']);
             $this->is_active = true;
             $this->price = 0;
@@ -64,9 +66,7 @@ new #[Layout('layouts.admin')] class extends Component
         $this->showPlanModal = true;
     }
 
-
-   
-        public function save(): void
+    public function save(): void
     {
         $this->validate([
             'name' => 'required|string|max:255',
@@ -74,7 +74,6 @@ new #[Layout('layouts.admin')] class extends Component
             'currency' => 'required|string|size:3',
             'price' => 'required|numeric|min:0',
             'duration_days' => 'required|integer|min:1',
-            // УДАЛИЛИ trial_days
             'sort_order' => 'required|integer|min:0',
             'apple_product_id' => 'nullable|string|max:255',
             'google_product_id' => 'nullable|string|max:255',
@@ -96,7 +95,6 @@ new #[Layout('layouts.admin')] class extends Component
             'currency' => $this->currency,
             'price' => $this->price,
             'duration_days' => $this->duration_days,
-            // УДАЛИЛИ trial_days
             'is_active' => $this->is_active,
             'sort_order' => $this->sort_order,
             'apple_product_id' => $this->apple_product_id ?: null,
@@ -130,14 +128,29 @@ new #[Layout('layouts.admin')] class extends Component
 
         AdminLog::record('plan.toggle_active', $plan, auth()->user(), $before, $after);
         
-        // ФИКС: Инвертируем логику, так как $plan->is_active уже обновилось
         $this->dispatch('show-toast', type: 'success', message: $after['is_active'] ? 'Тариф активирован' : 'Тариф скрыт');
     }
 
+    // ФИКС: Добавили логику поиска
     public function with(): array
     {
+        $operator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
+        $search = $this->search;
+
+        $plans = SubscriptionPlan::ordered()
+            ->when($this->search, function ($query) use ($search, $operator) {
+                $query->where(function ($q) use ($search, $operator) {
+                    $q->where('name', $operator, "%{$search}%")
+                      ->orWhere('slug', $operator, "%{$search}%");
+                    if (is_numeric($search)) {
+                        $q->orWhere('id', (int)$search);
+                    }
+                });
+            })
+            ->get();
+
         return [
-            'plans' => SubscriptionPlan::ordered()->get(),
+            'plans' => $plans,
         ];
     }
 }; 
@@ -164,23 +177,38 @@ new #[Layout('layouts.admin')] class extends Component
                 <p class="text-sm text-muted-foreground">Управление планами монетизации</p>
             </div>
         </div>
-        <x-ui.button wire:click="openPlanModal()" variant="default" size="sm">
-            <x-lucide-plus class="w-4 h-4" /> Добавить тариф
-        </x-ui.button>
+        
+        <div class="flex items-center gap-2">
+            {{-- ФИКС: Добавили строку поиска --}}
+            <div class="relative w-48">
+                <x-ui.input wire:model.live.debounce.300ms="search" type="search" placeholder="Поиск по ID или названию..." class="pl-9 pr-8" />
+                <x-lucide-search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            </div>
+            <x-ui.button wire:click="openPlanModal()" variant="default" size="sm">
+                <x-lucide-plus class="w-4 h-4" /> Добавить тариф
+            </x-ui.button>
+        </div>
     </div>
 
     <!-- Список тарифов -->
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         @foreach ($plans as $plan)
-            <div wire:key="plan-{{ $plan->id }}" class="bg-card border {{ $plan->is_active ? 'border-border' : 'border-destructive/30 opacity-70' }} rounded-xl overflow-hidden flex flex-col shadow-sm">
+            @php 
+                // ФИКС: Подсветка искомого тарифа
+                $isHighlighted = is_numeric($this->search) && $plan->id == (int)$this->search;
+            @endphp
+            <div wire:key="plan-{{ $plan->id }}" 
+                 class="bg-card border {{ $isHighlighted ? 'border-primary ring-2 ring-primary/50' : ($plan->is_active ? 'border-border' : 'border-destructive/30 opacity-70') }} rounded-xl overflow-hidden flex flex-col shadow-sm transition-all duration-200 transform {{ $isHighlighted ? 'scale-105 z-10' : '' }}">
                 <div class="p-6 flex-1">
                     <div class="flex items-center justify-between mb-3">
-                        <h3 class="text-lg font-semibold">{{ $plan->name }}</h3>
+                        <div class="flex items-center gap-2">
+                            <h3 class="text-lg font-semibold">{{ $plan->name }}</h3>
+                            <span class="text-xs text-muted-foreground font-mono rounded-sm bg-muted py-0.5 px-1">#{{ $plan->id }}</span>
+                        </div>
                         <x-ui.badge variant="{{ $plan->is_active ? 'success' : 'secondary' }}" size="sm">
                             {{ $plan->is_active ? 'Активен' : 'Скрыт' }}
                         </x-ui.badge>
                     </div>
-
                     <div class="text-3xl font-bold mb-4">
                         {{ number_format($plan->price, 0, ',', ' ') }} {{ $plan->currency }}
                         <span class="text-sm font-normal text-muted-foreground">/ {{ $plan->duration_days }} дн.</span>
@@ -198,27 +226,27 @@ new #[Layout('layouts.admin')] class extends Component
                     </div>
 
                     <!-- Фичи (JSON) -->
-                        @if(!empty($plan->features))
-                            <div class="mt-4 pt-4 border-t border-border space-y-2">
-                                @foreach($plan->features as $key => $value)
-                                    @php 
-                                        $featureEnum = \App\Enums\PlanFeature::tryFrom($key);
-                                        $isAvailable = !($value === false || $value === 0);
-                                    @endphp
-                                    @if($featureEnum)
-                                        <div class="flex items-center justify-between text-xs">
-                                            <span class="flex items-center gap-1.5 {{ $isAvailable ? 'text-foreground' : 'text-muted-foreground/50 line-through' }}">
-                                                <x-dynamic-component component="lucide-{{ $featureEnum->icon() }}" class="w-3.5 h-3.5" />
-                                                {{ $featureEnum->label() }}
-                                            </span>
-                                            <span class="font-medium {{ $isAvailable ? 'text-green-500' : 'text-muted-foreground/50' }}">
-                                                {{ $featureEnum->formatValue($value) }}
-                                            </span>
-                                        </div>
-                                    @endif
-                                @endforeach
-                            </div>
-                        @endif
+                    @if(!empty($plan->features))
+                        <div class="mt-4 pt-4 border-t border-border space-y-2">
+                            @foreach($plan->features as $key => $value)
+                                @php 
+                                    $featureEnum = \App\Enums\PlanFeature::tryFrom($key);
+                                    $isAvailable = !($value === false || $value === 0);
+                                @endphp
+                                @if($featureEnum)
+                                    <div class="flex items-center justify-between text-xs">
+                                        <span class="flex items-center gap-1.5 {{ $isAvailable ? 'text-foreground' : 'text-muted-foreground/50 line-through' }}">
+                                            <x-dynamic-component component="lucide-{{ $featureEnum->icon() }}" class="w-3.5 h-3.5" />
+                                            {{ $featureEnum->label() }}
+                                        </span>
+                                        <span class="font-medium {{ $isAvailable ? 'text-green-500' : 'text-muted-foreground/50' }}">
+                                            {{ $featureEnum->formatValue($value) }}
+                                        </span>
+                                    </div>
+                                @endif
+                            @endforeach
+                        </div>
+                    @endif
 
                     <!-- Apple/Google ID (для мобилок) -->
                     @if($plan->apple_product_id || $plan->google_product_id)
@@ -230,7 +258,6 @@ new #[Layout('layouts.admin')] class extends Component
                 </div>
 
                 <div class="p-4 border-t border-border bg-muted/20 flex items-center justify-between">
-                    {{-- ФИКС: Обычная кнопка UI-компонента, без вложенных тегов, Livewire 3 будет работать идеально --}}
                     <x-ui.button wire:click="toggleActive({{ $plan->id }})" variant="{{ $plan->is_active ? 'outline' : 'success' }}" size="sm" wire:loading.attr="disabled" wire:target="toggleActive({{ $plan->id }})">
                         {{ $plan->is_active ? 'Скрыть' : 'Активировать' }}
                     </x-ui.button>
@@ -243,16 +270,14 @@ new #[Layout('layouts.admin')] class extends Component
         @endforeach
     </div>
 
-        <!-- МОДАЛКА СОЗДАНИЯ/РЕДАКТИРОВАНИЯ -->
+    <!-- МОДАЛКА СОЗДАНИЯ/РЕДАКТИРОВАНИЯ -->
     @if($showPlanModal)
         <div wire:key="plan-modal-{{ $editingPlanId ?? 'new' }}"
              class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
              wire:click="$set('showPlanModal', false)">
              
-            <!-- ФИКС: Сделали шире (max-w-2xl) и добавили flex-col для прижатия футера -->
             <div class="relative bg-card border border-border rounded-lg shadow-2xl max-w-2xl w-full mx-4 overflow-hidden flex flex-col max-h-[90vh] sm:max-h-[85vh]" wire:click.stop>
                  
-                <!-- Шапка -->
                 <div class="flex items-center justify-between p-4 border-b border-border shrink-0">
                     <h2 class="text-lg font-semibold">{{ $editingPlanId ? 'Редактировать тариф' : 'Новый тариф' }}</h2>
                     <x-ui.button variant="ghost" size="icon-sm" wire:click="$set('showPlanModal', false)">
@@ -260,7 +285,6 @@ new #[Layout('layouts.admin')] class extends Component
                     </x-ui.button>
                 </div>
 
-                <!-- Тело (скроллится, если не влезает) -->
                 <div class="p-6 space-y-4 overflow-y-auto little-scroll">
                     <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <div class="flex flex-col gap-2">
@@ -309,7 +333,7 @@ new #[Layout('layouts.admin')] class extends Component
                         </div>
                     </div>
 
-                    <!-- ФИКС: Конструктор фич вместо JSON textarea -->
+                    <!-- Конструктор фич -->
                     <div class="flex flex-col gap-2">
                         <x-ui.label class="text-sm font-medium">Фичи тарифа</x-ui.label>
                         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 border border-border rounded-md bg-muted/10">
@@ -321,13 +345,11 @@ new #[Layout('layouts.admin')] class extends Component
                                     </span>
                                     
                                     @if($feature->isBoolean())
-                                        {{-- Для булевых (Да/Нет) рисуем красивый тумблер --}}
                                         <label class="relative inline-flex items-center cursor-pointer">
                                             <input type="checkbox" wire:model="features.{{ $feature->value }}" class="sr-only peer" />
                                             <div class="w-9 h-5 bg-muted rounded-full peer peer-checked:after:translate-x-full peer-checked:bg-primary after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border after:border-border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:border-primary"></div>
                                         </label>
                                     @else
-                                        {{-- Для чисел (лимитов) рисуем компактный инпут --}}
                                         <input type="number" min="0" wire:model="features.{{ $feature->value }}" class="flex h-8 w-20 rounded-md border border-input bg-background px-2 py-1 text-sm text-center shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring" placeholder="0" />
                                     @endif
                                 </div>
@@ -337,7 +359,7 @@ new #[Layout('layouts.admin')] class extends Component
                     </div>
                 </div>
 
-                <!-- Футер (прижат к низу) -->
+                <!-- Футер -->
                 <div class="flex items-center justify-between p-4 border-t border-border bg-muted/20 shrink-0">
                     <div class="flex items-center gap-3">
                         <label class="relative inline-flex items-center cursor-pointer">

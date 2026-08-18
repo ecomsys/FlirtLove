@@ -4,6 +4,7 @@ namespace Database\Seeders;
 use App\Models\User;
 use App\Models\UserProfile;
 use App\Models\UserPreference;
+use App\Models\UserBalance; // <--- ДОБАВИЛИ
 use App\Models\Album;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Hash;
@@ -42,9 +43,9 @@ class StaffSeeder extends Seeder
                 [
                     'name' => $member['name'],
                     'password' => Hash::make($password),
-                    'role' => $member['role'], // moderator или support
+                    'role' => $member['role'],
                     'status' => 'active',
-                    'is_premium' => true, // Даем им VIP для тестов
+                    'is_premium' => true,
                     'premium_expires_at' => now()->addYears(5),
                     'is_verified' => true,
                     'has_completed_onboarding' => true,
@@ -70,11 +71,11 @@ class StaffSeeder extends Seeder
                     'interests' => ['работа', 'общение', 'кино'],
                     'height' => $member['gender'] === 'male' ? 180 : 165,
                     'weight' => $member['gender'] === 'male' ? 80 : 55,
-                    'zodiac_sign' => 5, // Просто рандомное число                                    
+                    'zodiac_sign' => 5,                                  
                 ]
             );
 
-            // 3. Настройки
+            // 3. Настройки (УБРАЛИ КРЕДИТЫ И ЛАЙКИ)
             UserPreference::updateOrCreate(
                 ['user_id' => $user->id],
                 [
@@ -83,8 +84,6 @@ class StaffSeeder extends Seeder
                     'preferred_gender' => 'any',
                     'preferred_distance_km' => 10000,
                     'hide_from_search' => true, // Не показывать в ленте!
-                    'superlikes_remaining' => 100,
-                    'credits' => 5000,
                     'push_enabled' => true,
                     'email_enabled' => true,
                     'email_settings' => [
@@ -92,7 +91,7 @@ class StaffSeeder extends Seeder
                         'on_like'       => false,
                         'on_view'       => false,
                         'on_gift'       => false,
-                        'on_event'      => true, // Саппорт и модератор должны видеть события
+                        'on_event'      => true, 
                         'on_broadcast'  => true,
                         'sub_new_faces' => false,
                         'sub_popular'   => false,
@@ -100,7 +99,19 @@ class StaffSeeder extends Seeder
                 ]
             );
 
-            // 4. Альбом
+            // 4. Создаем БАЛАНС (НОВОЕ)
+            UserBalance::updateOrCreate(
+                ['user_id' => $user->id],
+                [
+                    'credits' => 5000,
+                    'superlikes_remaining' => 100,
+                    'superlikes_reset_at' => now()->addMonth(),
+                    'boosts_remaining' => 10,
+                    'boosts_reset_at' => now()->addMonth(),
+                ]
+            );
+
+            // 5. Альбом
             Album::updateOrCreate(
                 ['user_id' => $user->id, 'is_default' => true],
                 [

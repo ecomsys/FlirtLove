@@ -25,18 +25,10 @@ class Media extends Model
         'variants' => 'array',
     ];
 
-    // ============================================
-    // СВЯЗИ
-    // ============================================
-
     public function uploader(): BelongsTo
     {
         return $this->belongsTo(User::class, 'uploaded_by');
     }
-
-    // ============================================
-    // СКОПЫ
-    // ============================================
 
     public function scopeOfCollection($query, string $collection)
     {
@@ -48,41 +40,14 @@ class Media extends Model
         return $query->where('type', 'image');
     }
 
-    public function scopeVideos($query)
-    {
-        return $query->where('type', 'video');
-    }
-
-    // ============================================
-    // ХЕЛПЕРЫ
-    // ============================================
-
-    /**
-     * Получить URL конкретного варианта (например, 'sm' или 'cover_lg').
-     * Если варианта нет, вернет основной URL.
-     */
-    public function getVariantUrl(string $key = null): string
-    {
-        if ($key && isset($this->variants[$key])) {
-            return Storage::url($this->variants[$key]);
-        }
-        return $this->url;
-    }
-
-    /**
-     * Безопасное удаление файла с диска и из БД.
-     * Удаляет главный файл и все сгенерированные варианты (variants).
-     */
     public function safeDelete(): bool
     {
         $disk = Storage::disk('public');
 
-        // 1. Удаляем главный файл (если он не временный)
         if ($this->disk_path && !str_starts_with($this->disk_path, 'media/temp/') && $disk->exists($this->disk_path)) {
             $disk->delete($this->disk_path);
         }
 
-        // 2. Удаляем все сгенерированные варианты (sm, lg, cover_sm и т.д.)
         if (!empty($this->variants)) {
             foreach ($this->variants as $variantPath) {
                 if ($disk->exists($variantPath)) {
@@ -93,4 +58,35 @@ class Media extends Model
 
         return $this->delete();
     }  
+
+    /**
+     * Получить URL конкретного варианта (thumb, sm, md, lg, orig).
+     */
+    public function getVariantUrl(string $key = null): string
+    {
+        $variants = $this->variants ?? [];
+        
+        // 1. Если просим конкретный ключ (например 'sm') и он есть — отдаем его
+        if ($key && isset($variants[$key])) {
+            return asset(Storage::url($variants[$key]));
+        }
+        
+        // 2. Если просим 'orig', а его нет — отдаем самый большой сгенерированный (последний в массиве)
+        if ($key === 'orig' && !empty($variants)) {
+            return asset(Storage::url(end($variants)));
+        }
+        
+        // 3. Если просим 'lg', а его нет — отдаем самый большой сгенерированный
+        if ($key === 'lg' && !empty($variants)) {
+            return asset(Storage::url(end($variants)));
+        }
+        
+        // 4. Если просим 'thumb' или 'sm', а их нет — отдаем ПЕРВЫЙ доступный (самый маленький)
+        if (in_array($key, ['thumb', 'sm']) && !empty($variants)) {
+            return asset(Storage::url(reset($variants)));
+        }
+        
+        // 5. Фоллбэк: отдаем то, что лежит в базе (для обрабатываемых файлов)
+        return asset($this->url);
+    }
 }

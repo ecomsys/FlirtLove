@@ -10,6 +10,9 @@ return new class extends Migration
     {
         Schema::create('rubrics', function (Blueprint $table) {
             $table->id();
+
+            //  Кто создал рубрику. Если null — рубрика системная (от админа)
+            $table->foreignId('user_id')->nullable()->constrained('users')->cascadeOnDelete();
             
             // Название рубрики ("Мысли", "Стихи", "Путешествия")
             $table->string('name');
@@ -27,6 +30,9 @@ return new class extends Migration
             $table->unsignedSmallInteger('sort_order')->default(0);
             
             $table->timestamps();
+
+            // Защита: юзер не может создать две рубрики с одинаковым slug у себя
+            $table->unique(['user_id', 'slug']);
         });
     }
 

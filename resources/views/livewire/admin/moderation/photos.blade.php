@@ -180,18 +180,16 @@ new #[Layout('layouts.admin')] class extends Component
             })
             ->excludeStaff()
             ->withCount(['photos as pending_photos_count' => fn($q) => $q->where('status', 'pending')])
+             // Виртуальное поле для сортировки:
+            ->withMax(['photos as latest_pending_photo' => fn($q) => $q->where('status', 'pending')], 'created_at')
             ->with(['photos' => function ($query) {
                 $query->whereIn('status', ['pending', 'approved'])
                       ->orderBy('is_primary', 'desc')
                       ->oldest()
                       ->with('album:id,name'); 
             }])
-            ->orderByDesc(function ($query) {
-                $query->selectRaw('MAX(created_at)')
-                      ->from('photos')
-                      ->whereColumn('photos.user_id', 'users.id')
-                      ->where('photos.status', 'pending');
-            })
+            // Сортируем по виртуальному полю (быстрый JOIN под капотом)
+            ->orderByDesc('latest_pending_photo')
             ->paginate($this->perPage);
         } else {
             $query = Photo::withTrashed()->with([
@@ -370,8 +368,8 @@ new #[Layout('layouts.admin')] class extends Component
                         <div class="p-4 grid grid-cols-3 md:grid-cols-5 gap-3 flex-1 bg-card">
                             @foreach ($user->photos->where('status', 'pending') as $photo)
                                 @php 
-                                    $imgSrc = $photo->medium_url ?: $photo->original_url ?: asset('images/no-image-placeholder.png');
-                                    $fullSrc = $photo->original_url ?: $photo->medium_url ?: '#';
+                                    $imgSrc = $photo->medium_url ?: asset('images/no-image-placeholder.png');
+                                    $fullSrc = $photo->original_url ?: $imgSrc;
                                 @endphp
                                 <div wire:key="photo-{{ $photo->id }}" class="relative aspect-square bg-muted group overflow-hidden rounded-lg">
                                     <a href="{{ $fullSrc }}" data-fancybox="gallery-{{ $user->id }}" data-caption="{{ $user->name }}" class="block w-full h-full">                                        
@@ -558,7 +556,7 @@ new #[Layout('layouts.admin')] class extends Component
                 <p class="text-sm text-muted-foreground">Выберите причину отклонения. Пользователь получит уведомление.</p>
 
                 <div class="space-y-2">
-                    <x-ui.label for="rejectReason" class="text-xs">Причина отклонения</x-ui.label>
+                    <x-ui.label class="text-xs">Причина отклонения</x-ui.label>
                     
                     <x-ui.select wire:model="rejectReason">
                         <x-ui.select-trigger class="w-full"><x-ui.select-value placeholder="Выберите причину..." /></x-ui.select-trigger>

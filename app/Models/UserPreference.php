@@ -1,10 +1,8 @@
 <?php
-
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Illuminate\Support\Facades\DB;
 
 class UserPreference extends Model
 {
@@ -15,7 +13,6 @@ class UserPreference extends Model
         'search_filters',
         'chat_filter_enabled', 'chat_filter_settings',
         'is_invisible', 'hide_intimate', 'disable_photo_comments', 'hide_from_search',
-        'superlikes_remaining', 'superlikes_reset_at', 'credits', // Новые поля лимитов и валюты
         'push_enabled', 'email_enabled', 'email_settings'
     ];
 
@@ -30,17 +27,10 @@ class UserPreference extends Model
         'hide_intimate' => 'boolean',
         'disable_photo_comments' => 'boolean',
         'hide_from_search' => 'boolean',
-        'superlikes_remaining' => 'integer',
-        'superlikes_reset_at' => 'datetime',
-        'credits' => 'integer',
         'push_enabled' => 'boolean',
         'email_enabled' => 'boolean',
         'email_settings' => 'array',
     ];
-
-    // ============================================
-    // СВЯЗИ
-    // ============================================
 
     public function user(): BelongsTo
     {
@@ -51,12 +41,8 @@ class UserPreference extends Model
     // АКСЕССОРЫ С ДЕФОЛТАМИ 
     // ============================================
 
-        /**
-     * Расширенные фильтры поиска (с дефолтами).
-     */
     public function getSearchFiltersAttribute(): array
     {
-        // Читаем напрямую из сырых атрибутов, минуя аксессоры и касты (защита от рекурсии)
         $raw = $this->attributes['search_filters'] ?? null;
         $filters = is_string($raw) ? json_decode($raw, true) : (is_array($raw) ? $raw : []);
 
@@ -73,10 +59,6 @@ class UserPreference extends Model
         ], is_array($filters) ? $filters : []);
     }
 
-    /**
-     * Настройки фильтра чата (с дефолтами).
-     * ВНИМАНИЕ: Имя метода строго getChatFilterSettingsAttribute (так как в БД поле chat_filter_settings)
-     */
     public function getChatFilterSettingsAttribute(): array
     {
         $raw = $this->attributes['chat_filter_settings'] ?? null;
@@ -91,9 +73,6 @@ class UserPreference extends Model
         ], is_array($filters) ? $filters : []);
     }
 
-    /**
-     * Настройки email-уведомлений (с дефолтами).
-     */
     public function getEmailSettingsAttribute(): array
     {
         $raw = $this->attributes['email_settings'] ?? null;
@@ -109,56 +88,5 @@ class UserPreference extends Model
             'sub_new_faces' => true,  
             'sub_popular'   => false, 
         ], is_array($settings) ? $settings : []);
-    }
-
-    // ============================================
-    // ХЕЛПЕРЫ ДЛЯ ВАЛЮТЫ И ЛИМИТОВ
-    // ============================================
-
-    /**
-     * Начислить кредиты юзеру (за покупку или бонус).
-     */
-    public function addCredits(int $amount): bool
-    {
-        if ($amount <= 0) return false;
-        
-        // Делаем через increment, чтобы избежать состояния гонки (Race Condition)
-        return DB::table('user_preferences')
-            ->where('id', $this->id)
-            ->increment('credits', $amount);
-    }
-
-    /**
-     * Списать кредиты у юзера (для покупки подарков).
-     * Возвращает true, если хватило баланса, false — если не хватило.
-     */
-    public function spendCredits(int $amount): bool
-    {
-        if ($amount <= 0) return false;
-
-        // Обновляем только в том случае, если текущий баланс больше или равен сумме списания.
-        // Это атомарный запрос, который защищает от отрицательного баланса при одновременных запросах.
-        $affected = DB::table('user_preferences')
-            ->where('id', $this->id)
-            ->where('credits', '>=', $amount)
-            ->decrement('credits', $amount);
-
-        if ($affected) {
-            // Обновляем модель в памяти, чтобы фронт сразу видел новый баланс
-            $this->credits -= $amount;
-        }
-
-        return (bool) $affected;
-    }
-
-    /**
-     * Сброс лимита суперлайков (вызывается крон-задачей раз в сутки).
-     */
-    public function resetSuperlikes(): void
-    {
-        $this->update([
-            'superlikes_remaining' => 5, // Дефолтный лимит (или берем из настроек тарифа)
-            'superlikes_reset_at' => now()->addDay(),
-        ]);
     }
 }

@@ -43,11 +43,13 @@ return new class extends Migration
             // "А лайкала ли Маша (user_id=2) меня (target_user_id=1)?"
             // Запрос: WHERE target_user_id = 1 AND user_id = 2 AND type = 'like'
             // Этот составной индекс закрывает этот запрос за миллисекунды (Index-Only Scan).
-            $table->index(['target_user_id', 'user_id', 'type']);
+            // $table->index(['target_user_id', 'user_id', 'type']);
             
             // 3. Для статистики и фидов: "Кого я лайкнул?" или сборка ленты (исключить тех, кого уже свайпнул).
             $table->index(['user_id', 'type']);
         });
+         DB::statement("CREATE INDEX swipes_match_check_index ON swipes (target_user_id, user_id) WHERE rewinded_at IS NULL AND type IN ('like', 'superlike')");
+
     }
 
     public function down(): void

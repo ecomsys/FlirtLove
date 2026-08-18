@@ -55,9 +55,24 @@ class ModerateReportAction
      * Используется внутри toggleBan и deletePhoto.
      */
     public function bulkResolveReports($reports, User $admin, ReportResolution $resolution): void
-    {
-        foreach ($reports as $report) {
-            $this->resolve($report, $admin, $resolution, "Автоматическое закрытие при: {$resolution->label()}");
+{
+    // Массив для запоминания, кому мы уже отправили уведомление
+    $notifiedReporters = [];
+
+    foreach ($reports as $report) {
+        // 1. Закрываем жалобу напрямую через модель (чтобы не триггерить отправку письма в resolve())
+        $before = $report->only(['status', 'resolution', 'admin_id', 'resolved_at']);
+        $report->resolve($admin->id, $resolution->value, "Автоматическое закрытие при: {$resolution->label()}");
+        $after = $report->fresh()->only(['status', 'resolution', 'admin_id', 'resolved_at']);
+        
+        // 2. Логируем
+        AdminLog::record('report.resolve', $report, $admin, $before, $after);
+
+        // 3. Отправляем уведомление только если этот юзер еще его не получал
+        if ($report->reporter && !in_array($report->reporter->id, $notifiedReporters)) {
+            $report->reporter->notify(new ReportModerated($report, 'resolved'));
+            $notifiedReporters[] = $report->reporter->id; // Записываем, что Васе уже отправили
         }
     }
+}
 }

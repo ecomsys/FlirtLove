@@ -21,6 +21,9 @@ return new class extends Migration
             // Это убьет базу на тысячах чатов. Поэтому мы храним время последнего сообщения тут.
             // Это поле будет обновляться триггером или обсервером при каждом новом сообщении.
             $table->timestamp('last_message_at')->nullable();
+
+            //  Блокировка чата админом
+            $table->boolean('is_locked')->default(false)->index();
             
             $table->timestamps();
 

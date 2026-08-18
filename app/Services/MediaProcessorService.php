@@ -10,10 +10,6 @@ use Intervention\Image\Drivers\Gd\Driver;
 
 class MediaProcessorService
 {
-    /**
-     * Обрабатывает файл согласно правилам коллекции.
-     * Принимает ОТНОСИТЕЛЬНЫЙ путь к файлу на диске public.
-     */
     public function process(string $relativeTempPath, MediaCollection $collection): array
     {
         $config = config("media.collections.{$collection->value}");
@@ -35,7 +31,6 @@ class MediaProcessorService
             $mimeType = 'application/octet-stream';
         }
 
-        // ФИКС: Строго проверяем, является ли файл КАРТИНКОЙ. Видео не поддерживается!
         if (!str_starts_with($mimeType, 'image/')) {
             throw new \Exception("Неподдерживаемый тип файла: {$mimeType}. Разрешены только изображения.");
         }
@@ -55,9 +50,11 @@ class MediaProcessorService
 
             if ($fit === 'cover' && $width && $height) {
                 $image->cover($width, $height);
-            } elseif ($fit === 'contain' && $width && $height) {
+            } elseif (($fit === 'contain' || $fit === 'inside') && $width && $height) {
+                // Добавили проверку на 'inside'
                 $image->contain($width, $height);
             } elseif ($width && !$height) {
+                // Если передали только ширину (например '800w')
                 if ($image->width() > $width) {
                     $image->scale(width: $width);
                 }
@@ -77,17 +74,25 @@ class MediaProcessorService
             $disk->put($path, $encoded);
             $variants[$key] = $path;
             
-            // Чистим память после каждой итерации
             unset($image, $encoded);
             gc_collect_cycles(); 
         }
 
-        $mainPath = reset($variants);
+        // Берем ПОСЛЕДНИЙ сгенерированный вариант (например, 'lg') как главный путь
+        $mainPath = end($variants);
+        
         if ($config['keep_original'] ?? false) {
             $ext = pathinfo($relativeTempPath, PATHINFO_EXTENSION);
             $fileName = "{$baseName}_orig.{$ext}";
-            $mainPath = "{$dirPath}/{$fileName}";
-            $disk->copy($relativeTempPath, $mainPath);
+            $origPath = "{$dirPath}/{$fileName}";
+            $disk->copy($relativeTempPath, $origPath);
+            
+            // Добавляем оригинал в массив вариантов
+            $variants['orig'] = $origPath;
+        }
+
+        if (empty($mainPath)) {
+            $mainPath = reset($variants);
         }
 
         return [
