@@ -125,7 +125,7 @@ new #[Layout('layouts.admin')] class extends Component
 
         <div class="relative w-72">
             <x-lucide-search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground z-10" />
-            <x-ui.input wire:model.live.debounce.300ms="search" type="search" placeholder="Поиск по имени участника..." class="pl-9" />
+            <x-ui.input wire:model.live.debounce.300ms="search" type="search" placeholder="Поиск по имени, id чата ..." class="pl-9" />
         </div>
     </div>
 

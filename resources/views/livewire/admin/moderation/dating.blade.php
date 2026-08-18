@@ -8,6 +8,7 @@ use App\Models\UserMatch;
 use Illuminate\Support\Facades\Cache;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Layout;
+use Livewire\Attributes\Url;
 use Livewire\Volt\Component;
 use Livewire\WithPagination;
 
@@ -15,47 +16,42 @@ new #[Layout('layouts.admin')] class extends Component
 {
     use WithPagination;
 
+    #[Url(as: 'q', except: '')]
     public string $search = '';
+
+    #[Url(as: 'mode', except: 'swipes')]
+    public string $viewMode = 'swipes'; 
+
+    #[Url(as: 'type', except: 'all')]
+    public string $typeFilter = 'all'; 
+
     public ?string $dateFrom = null;
     public ?string $dateTo = null;
-    public string $typeFilter = 'all'; 
-    public string $viewMode = 'swipes'; 
     public int $perPage = 10;
 
-    /**
-     * Хуки Livewire: сброс пагинации при изменении фильтров.
-     */
     public function updatingSearch(): void { $this->resetPage(); }
     public function updatingDateFrom(): void { $this->resetPage(); }
     public function updatingDateTo(): void { $this->resetPage(); }
     public function updatingTypeFilter(): void { $this->resetPage(); }
-    public function updatingViewMode(): void { $this->resetPage(); }
 
-    /**
-     * Инициализация. Восстанавливаем фильтры из сессии.
-     */
     public function mount(): void
     {
         $saved = session('moderate_dating', []);
-        if (isset($saved['viewMode'])) $this->viewMode = $saved['viewMode'];
         if (isset($saved['typeFilter'])) $this->typeFilter = $saved['typeFilter'];
+        
+        // Если пришли с поиском, очищаем фильтр типа, чтобы не мешал
+        if (!empty($this->search)) {
+            $this->typeFilter = 'all';
+        }
     }
 
-    /**
-     * Переключение режима (Свайпы/Матчи) и сохранение в сессию.
-     * @param string $mode
-     */
     public function setViewMode(string $mode): void
     {
         $this->viewMode = $mode;
-        session(['moderate_dating' => array_merge(session('moderate_dating', []), ['viewMode' => $mode])]);
+        $this->search = ''; // ФИКС: При смене режима очищаем поиск, так как ID из другого режима не найдется
         $this->resetPage();
     }
 
-    /**
-     * Установка фильтра типа свайпа и сохранение в сессию.
-     * @param string $type
-     */
     public function setTypeFilter(string $type): void
     {
         $this->typeFilter = $type;
@@ -63,9 +59,6 @@ new #[Layout('layouts.admin')] class extends Component
         $this->resetPage();
     }
 
-    /**
-     * Сброс всех фильтров к значениям по умолчанию.
-     */
     public function resetFilters(): void
     {
         $this->reset(['search', 'dateFrom', 'dateTo', 'typeFilter']);
@@ -77,19 +70,13 @@ new #[Layout('layouts.admin')] class extends Component
     // ДЕЙСТВИЯ (ДЕЛЕГИРУЕМ В ACTION)
     // ============================================
 
-    /**
-     * Удаление свайпа (HARD DELETE) или разрыв мэтча (SOFT DELETE через статус unmatched).
-     * Делегирует бизнес-логику и логирование в ModerateDatingAction.
-     * @param int $id
-     * @param ModerateDatingAction $action
-     */
     public function deleteItem(int $id, ModerateDatingAction $action): void
     {
         if ($this->viewMode === 'matches') {
             $match = UserMatch::find($id);
             if ($match) {
                 $action->destroyMatch($match, auth()->user());
-                $this->dispatch('show-toast', type: 'warning', message: 'Мэтч принудительно разорван. Пользователи больше не увидят друг друга.');
+                $this->dispatch('show-toast', type: 'warning', message: 'Мэтч принудительно разорван.');
             }
         } else {
             $swipe = Swipe::find($id);
@@ -100,29 +87,19 @@ new #[Layout('layouts.admin')] class extends Component
         }
     }
 
-    /**
-     * Восстановление мэтча администратором.
-     * @param int $id
-     * @param ModerateDatingAction $action
-     */
     public function restoreMatch(int $id, ModerateDatingAction $action): void
     {
         $match = UserMatch::find($id);
         if ($match) {
             $action->restoreMatch($match, auth()->user());
-            $this->dispatch('show-toast', type: 'success', message: 'Мэтч восстановлен. Пользователи снова могут общаться.');
+            $this->dispatch('show-toast', type: 'success', message: 'Мэтч восстановлен.');
         }
     }
     
     // ============================================
-    // ВЫВОД ДАННЫХ (ОПТИМИЗИРОВАННЫЕ ЗАПРОСЫ)
+    // ВЫВОД ДАННЫХ
     // ============================================
 
-    /**
-     * Статистика по свайпам и матчам (кешируется на 1 минуту).
-     * ФИКС: Исключаем только живых сотрудников, но оставляем удаленных юзеров для статистики.
-     * @return array
-     */
     #[Computed]
     public function stats(): array
     {
@@ -147,21 +124,12 @@ new #[Layout('layouts.admin')] class extends Component
         });
     }
 
-    /**
-     * Получение элементов для текущего режима (Свайпы или Матчи).
-     * @return \Illuminate\Contracts\Pagination\LengthAwarePaginator
-     */
     #[Computed]
     public function items()
     {
         return $this->viewMode === 'matches' ? $this->getMatches() : $this->getSwipes();
     }
 
-    /**
-     * Запрос свайпов с фильтрацией (по имени, ID свайпа или ID юзера).
-     * Использует тай-брейкер по 'id' для предотвращения "прыжков" строк.
-     * @return \Illuminate\Contracts\Pagination\LengthAwarePaginator
-     */
     private function getSwipes()
     {
         $searchOperator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
@@ -181,27 +149,17 @@ new #[Layout('layouts.admin')] class extends Component
             ->when($this->search, function ($q) use ($searchOperator) {
                 $search = $this->search;
                 $q->where(function ($innerQ) use ($search, $searchOperator) {
-                    // 1. Поиск по ID самого свайпа (приводим к TEXT для ilike в Postgres)
                     $innerQ->whereRaw("CAST(id AS TEXT) {$searchOperator} ?", ["%{$search}%"])
-                    // 2. Поиск по имени юзера
                     ->orWhereHas('user', fn($q2) => $q2->where('name', $searchOperator, "%{$search}%"))
-                    // 3. Если ввели цифры — ищем по ID юзера (кто свайпнул)
                     ->when(is_numeric($search), fn($q3) => $q3->orWhere('user_id', $search));
                 });
             })
             ->when($this->dateFrom, fn($q) => $q->whereDate('created_at', '>=', $this->dateFrom))
             ->when($this->dateTo, fn($q) => $q->whereDate('created_at', '<=', $this->dateTo))
-            // Стабильная сортировка (тай-брейкер по ID)
-            ->latest('created_at')
-            ->latest('id')
+            ->latest('created_at')->latest('id')
             ->paginate($this->perPage)->onEachSide(2);
     }
 
-    /**
-     * Запрос матчей с фильтрацией (по имени, ID мэтча или ID участников).
-     * Использует тай-брейкер по 'id' для предотвращения "прыжков" строк.
-     * @return \Illuminate\Contracts\Pagination\LengthAwarePaginator
-     */
     private function getMatches()
     {
         $searchOperator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
@@ -220,12 +178,9 @@ new #[Layout('layouts.admin')] class extends Component
             ->when($this->search, function ($q) use ($searchOperator) {
                 $search = $this->search;
                 $q->where(function ($innerQ) use ($search, $searchOperator) {
-                    // 1. Поиск по ID самого мэтча
                     $innerQ->whereRaw("CAST(id AS TEXT) {$searchOperator} ?", ["%{$search}%"])
-                    // 2. Поиск по именам участников
                     ->orWhereHas('user1', fn($q2) => $q2->where('name', $searchOperator, "%{$search}%"))
                     ->orWhereHas('user2', fn($q2) => $q2->where('name', $searchOperator, "%{$search}%"))
-                    // 3. Если ввели цифры — ищем по ID любого из участников мэтча
                     ->when(is_numeric($search), function ($q3) use ($search) {
                         $q3->orWhere('user1_id', $search)->orWhere('user2_id', $search);
                     });
@@ -233,13 +188,12 @@ new #[Layout('layouts.admin')] class extends Component
             })
             ->when($this->dateFrom, fn($q) => $q->whereDate('created_at', '>=', $this->dateFrom))
             ->when($this->dateTo, fn($q) => $q->whereDate('created_at', '<=', $this->dateTo))
-            // Стабильная сортировка (тай-брейкер по ID)
-            ->latest('created_at')
-            ->latest('id')
+            ->latest('created_at')->latest('id')
             ->paginate($this->perPage)->onEachSide(2);
     }
 }; 
 ?>
+
 
 <div class="flex flex-col gap-6">
     <!-- Шапка -->
@@ -330,8 +284,18 @@ new #[Layout('layouts.admin')] class extends Component
         </x-ui.table-header>
         <x-ui.table-body>
             @forelse ($this->items as $item)
-                <x-ui.table-row wire:key="{{ $viewMode }}-{{ $item->id }}-{{ $item->status ?? 'trashed' }}">
-                    <x-ui.table-cell class="text-muted-foreground text-xs font-mono">#{{ $item->id }}</x-ui.table-cell>
+                @php 
+                    // ФИКС: Проверяем, является ли этот элемент искомым (по ID)
+                    $isHighlighted = is_numeric($this->search) && $item->id == (int)$this->search; 
+                @endphp
+
+                <x-ui.table-row 
+                    wire:key="{{ $viewMode }}-{{ $item->id }}-{{ $item->status ?? 'trashed' }}"
+                    class="{{ $isHighlighted ? 'bg-blue-500/10 ring-2 ring-blue-500/50' : '' }}"
+                >
+                    <x-ui.table-cell class="text-xs font-mono whitespace-nowrap {{ $isHighlighted ? 'text-blue-500 font-bold' : 'text-muted-foreground' }}">
+                        #{{ $item->id }}
+                    </x-ui.table-cell>
 
                     @if ($viewMode === 'swipes')
                         <!-- Кто оценил -->
@@ -346,7 +310,7 @@ new #[Layout('layouts.admin')] class extends Component
                                             @if($item->user->has_active_premium)<x-lucide-crown class="w-3 h-3 text-yellow-500" />@endif                                           
                                             <span class="text-xs text-muted-foreground font-normal">(ID: {{ $item->user->id }})</span>                                        
                                         </div>                                        
-                                        <span class="text-xs text-muted-foreground group-hover:text-primary/80 transition-colors">{{ $item->user->email }}</span>
+                                        <span class="text-xs text-muted-foreground">{{ $item->user->email }}</span>
                                     </div>
                                 </a>
                             @else
@@ -366,7 +330,7 @@ new #[Layout('layouts.admin')] class extends Component
                                             @if($item->targetUser->has_active_premium)<x-lucide-crown class="w-3 h-3 text-yellow-500" />@endif                                               
                                             <span class="text-xs text-muted-foreground font-normal">(ID: {{ $item->targetUser->id }})</span>
                                         </div>
-                                        <span class="text-xs text-muted-foreground group-hover:text-primary/80 transition-colors">{{ $item->targetUser->email }}</span>
+                                        <span class="text-xs text-muted-foreground">{{ $item->targetUser->email }}</span>
                                     </div>
                                 </a>
                             @else
@@ -399,7 +363,7 @@ new #[Layout('layouts.admin')] class extends Component
                                             @if($item->user1->has_active_premium)<x-lucide-crown class="w-3 h-3 text-yellow-500" />@endif                                              
                                             <span class="text-xs text-muted-foreground font-normal">(ID: {{ $item->user1->id }})</span>
                                         </div>                                        
-                                        <span class="text-xs text-muted-foreground group-hover:text-primary/80 transition-colors">{{ $item->user1->email }}</span>
+                                        <span class="text-xs text-muted-foreground">{{ $item->user1->email }}</span>
                                     </div>
                                 </a>
                             @else
@@ -419,7 +383,7 @@ new #[Layout('layouts.admin')] class extends Component
                                             @if($item->user2->has_active_premium)<x-lucide-crown class="w-3 h-3 text-yellow-500" />@endif                                              
                                             <span class="text-xs text-muted-foreground font-normal">(ID: {{ $item->user2->id }})</span>
                                         </div>                                              
-                                        <span class="text-xs text-muted-foreground group-hover:text-primary/80 transition-colors">{{ $item->user2->email }}</span>
+                                        <span class="text-xs text-muted-foreground">{{ $item->user2->email }}</span>
                                     </div>
                                 </a>
                             @else
@@ -454,7 +418,6 @@ new #[Layout('layouts.admin')] class extends Component
                             <x-ui.dropdown-menu-content align="end">
                                 @if ($viewMode === 'matches')
                                     @if ($item->status === 'active')
-                                        <!-- Кнопка разрыва мэтча -->
                                         <x-ui.dropdown-menu-item 
                                             variant="destructive" 
                                             wire:click="deleteItem({{ $item->id }})" 
@@ -467,7 +430,6 @@ new #[Layout('layouts.admin')] class extends Component
                                             Разорвать мэтч
                                         </x-ui.dropdown-menu-item>
                                     @else
-                                        <!-- Кнопка восстановления мэтча -->
                                         <x-ui.dropdown-menu-item 
                                             variant="success" 
                                             wire:click="restoreMatch({{ $item->id }})" 
@@ -481,7 +443,6 @@ new #[Layout('layouts.admin')] class extends Component
                                         </x-ui.dropdown-menu-item>
                                     @endif
                                 @else
-                                    <!-- Кнопка удаления свайпа -->
                                     <x-ui.dropdown-menu-item 
                                         variant="destructive" 
                                         wire:click="deleteItem({{ $item->id }})" 
@@ -517,3 +478,15 @@ new #[Layout('layouts.admin')] class extends Component
         {{ $this->items->links('partials.pagination') }}
     </div>
 </div>
+
+{{-- ФИКС: Авто-скролл к подсвеченной строке --}}
+<script>
+document.addEventListener('livewire:navigated', () => {
+    const highlightedRow = document.querySelector('.ring-blue-500\\/50');
+    if (highlightedRow) {
+        setTimeout(() => {
+            highlightedRow.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }, 100);
+    }
+});
+</script>

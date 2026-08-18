@@ -16,7 +16,6 @@ new class extends Component
 
     public int $userId;
 
-    // Раздельные страницы для независимой пагинации
     #[Url(as: 'made_page')] 
     public int $madePage = 1;
     
@@ -28,21 +27,18 @@ new class extends Component
         $this->userId = $userId;
     }
 
-    // Достаем юзера (с удаленными для защиты от 404/500)
     #[Computed]
     public function user(): User
     {
         return User::withTrashed()->findOrFail($this->userId);
     }
 
-    // Хелпер для жадной загрузки аватарок (чтобы не дублировать код)
     private function getAvatarQuery(): \Closure
     {
         return fn($q) => $q->select('id', 'name', 'email', 'status', 'is_premium', 'premium_expires_at', 'last_seen')
             ->with(['photos' => fn($sq) => $sq->select('id', 'user_id', 'is_primary', 'status', 'path_thumb')->orderByDesc('is_primary')->limit(1)]);
     }
 
-    // Жалобы, которые подал этот юзер
     #[Computed]
     public function reportsMade()
     {
@@ -52,7 +48,6 @@ new class extends Component
             ->paginate(5, ['*'], 'madePage');
     }
 
-    // Жалобы, которые подали на этого юзера
     #[Computed]
     public function reportsReceived()
     {
@@ -62,7 +57,6 @@ new class extends Component
             ->paginate(5, ['*'], 'receivedPage');
     }
 
-    // Сбрасываем кэш при обновлении данных
     #[On('user-action-performed')] 
     public function refreshUser(): void
     {
@@ -98,8 +92,8 @@ new class extends Component
                     @foreach($this->reportsMade as $report)
                         @php $targetUser = $report->reported; @endphp
                         <x-ui.table-row wire:key="made-{{ $report->id }}">
-                            <x-ui.table-cell class="text-muted-foreground text-xs font-mono">
-                                <a href="{{ route('admin.moderation.reports', ['q' => $report->id]) }}" wire:navigate class="hover:text-primary" title="Найти в общей очереди">
+                            <x-ui.table-cell class="text-xs font-mono whitespace-nowrap">
+                                <a href="{{ route('admin.moderation.reports', ['q' => $report->id]) }}" wire:navigate class="text-blue-500 hover:underline" title="Найти в общей очереди">
                                     #{{ $report->id }}
                                 </a>
                             </x-ui.table-cell>
@@ -110,7 +104,10 @@ new class extends Component
                                         <div class="flex flex-col min-w-0">
                                             <span class="text-sm font-medium group-hover:text-primary flex items-center gap-1.5">
                                                 <x-user-status-sign :user="$targetUser" />
-                                                {{ $targetUser->name }}
+                                                <span class="truncate">{{ $targetUser->name }}</span>
+                                                @if($targetUser->has_active_premium)
+                                                    <x-lucide-crown class="w-3 h-3 text-yellow-500" />
+                                                @endif
                                             </span>
                                             <span class="text-xs text-muted-foreground truncate">{{ $targetUser->email }}</span>
                                         </div>
@@ -183,8 +180,8 @@ new class extends Component
                     @foreach($this->reportsReceived as $report)
                         @php $targetUser = $report->reporter; @endphp
                         <x-ui.table-row wire:key="received-{{ $report->id }}">
-                            <x-ui.table-cell class="text-muted-foreground text-xs font-mono">
-                                <a href="{{ route('admin.moderation.reports', ['q' => $report->id]) }}" wire:navigate class="hover:text-primary" title="Найти в общей очереди">
+                            <x-ui.table-cell class="text-xs font-mono whitespace-nowrap">
+                                <a href="{{ route('admin.moderation.reports', ['q' => $report->id]) }}" wire:navigate class="text-blue-500 hover:underline" title="Найти в общей очереди">
                                     #{{ $report->id }}
                                 </a>
                             </x-ui.table-cell>
@@ -195,7 +192,10 @@ new class extends Component
                                         <div class="flex flex-col min-w-0">
                                             <span class="text-sm font-medium group-hover:text-primary flex items-center gap-1.5">
                                                 <x-user-status-sign :user="$targetUser" />
-                                                {{ $targetUser->name }}
+                                                <span class="truncate">{{ $targetUser->name }}</span>
+                                                @if($targetUser->has_active_premium)
+                                                    <x-lucide-crown class="w-3 h-3 text-yellow-500" />
+                                                @endif
                                             </span>
                                             <span class="text-xs text-muted-foreground truncate">{{ $targetUser->email }}</span>
                                         </div>

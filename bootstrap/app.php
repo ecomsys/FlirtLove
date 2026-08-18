@@ -53,9 +53,13 @@ return Application::configure(basePath: dirname(__DIR__))
         // Очистка карантина отклоненных фото каждую ночь в 04:00
         $schedule->command('photos:purge-quarantine')->dailyAt('04:00');    
         // $schedule->command('photos:purge-quarantine')->everyMinute()->withoutOverlapping();
+
+        // Очистка отклоненных записей дневников
+        $schedule->command('diaries:purge-rejected')->dailyAt('04:30');
          
         // Очистка архива жалоб 
         $schedule->command('reports:purge-quarantine --days=30')->dailyAt('05:00');
+
         
     })   
     ->create();

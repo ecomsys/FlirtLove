@@ -23,7 +23,8 @@ new #[Layout('layouts.admin')] class extends Component
 
     public function mount(): void
     {
-        if (request()->has('q')) {
+        // Если пришли с поиском (например, по ID коммента), включаем фильтр "Все"
+        if (!empty($this->search)) {
             $this->statusFilter = 'all';
             return;
         }
@@ -35,12 +36,19 @@ new #[Layout('layouts.admin')] class extends Component
 
     public function updatedSearch(): void
     {
+        // Если админ начал вводить текст, переключаемся на "Все", чтобы найти
+        if (!empty($this->search) && $this->statusFilter !== 'all') {
+            $this->statusFilter = 'all';
+        }
         session(['moderate_photo_comments.search' => $this->search]);
         $this->resetPage();
     }
 
+    // ФИКС: При ручной смене фильтра очищаем поиск
     public function updatedStatusFilter(): void
     {
+        $this->search = '';
+        session()->forget('moderate_photo_comments.search');
         session(['moderate_photo_comments.statusFilter' => $this->statusFilter]);
         $this->resetPage();
     }
@@ -48,6 +56,8 @@ new #[Layout('layouts.admin')] class extends Component
     public function setStatusFilter(string $status): void
     {
         $this->statusFilter = $status;
+        $this->search = ''; // ФИКС: Очищаем поиск!
+        session()->forget('moderate_photo_comments.search');
         session(['moderate_photo_comments.statusFilter' => $status]);
         $this->resetPage();
     }
@@ -209,11 +219,9 @@ new #[Layout('layouts.admin')] class extends Component
     #[Computed]
     public function photos()
     {
-        // ФИКС: withTrashed() для юзеров, чтобы видеть имена и аватарки удаленных авторов
         $userAvatarQuery = fn($q) => $q->withTrashed()->select('id', 'name', 'status', 'is_premium', 'premium_expires_at', 'is_verified', 'last_seen')
             ->with(['photos' => fn($sq) => $sq->select('id', 'user_id', 'is_primary', 'status', 'path_thumb', 'path_medium', 'path_large', 'path_original')->orderByDesc('is_primary')->limit(1)]);
 
-        // ФИКС: Photo::withTrashed(), чтобы выводить комменты под удаленными фото
         $query = Photo::withTrashed()->whereHas('comments', fn($q) => $this->applyCommentFilters($q))
         ->with([
             'album:id,name',
@@ -235,8 +243,6 @@ new #[Layout('layouts.admin')] class extends Component
     #[Computed]
     public function counts()
     {
-        // ФИКС: Считаем только те комменты, у которых есть фото (даже если оно в корзине)
-        // И исключаем "сирот" (ответы на удаленные комменты), чтобы счетчик совпадал со списком
         $stats = PhotoComment::whereHas('photo', fn($q) => $q->withTrashed())
             ->where(function ($q) {
                 $q->whereNull('parent_id')
@@ -266,11 +272,10 @@ new #[Layout('layouts.admin')] class extends Component
     <div class="flex items-center justify-between flex-wrap gap-4">
          <div class="flex items-center gap-4">
             @php
-                // Защита от зацикливания кнопки "Назад"
                 $previousUrl = url()->previous();
                 $backUrl = ($previousUrl && $previousUrl !== url()->current()) 
                     ? $previousUrl 
-                    : route('admin.dashboard'); // Фоллбэк на главную админки
+                    : route('admin.moderation.photo-comments');
             @endphp
 
             <a href="{{ $backUrl }}" wire:navigate class="p-2 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors">
@@ -374,7 +379,7 @@ new #[Layout('layouts.admin')] class extends Component
             @foreach ($this->photos as $photo)
                 @php
                       $imgSrc = $photo->thumb_url ?: asset('images/no-image-placeholder.png');
-                      $fullSrc = $photo->original_url ?: $imgSrc; // Для лайтбокса берем оригинал
+                      $fullSrc = $photo->original_url ?: $imgSrc;
                     $pendingCount = $photo->comments->where('status', 'pending')->count() + $photo->comments->flatMap->replies->where('status', 'pending')->count();
                 @endphp
 
@@ -383,7 +388,6 @@ new #[Layout('layouts.admin')] class extends Component
                         <p class="font-semibold text-foreground flex items-center gap-2 flex-wrap">
                             Фото #{{ $photo->id }}
                             
-                            <!-- Унифицированный блок: Автор фото -->
                             <span class="text-xs text-muted-foreground font-normal flex items-center gap-1">
                                 от
                                 @if($photo->user)
@@ -430,15 +434,23 @@ new #[Layout('layouts.admin')] class extends Component
                             @foreach ($photo->comments as $comment)
                                 @php 
                                     $commentDimmed = $this->statusFilter !== 'all' && $comment->status !== $this->statusFilter; 
-                                    $rejectEnum = $comment->reject_reason ? \App\Enums\CommentRejectReason::tryFrom($comment->reject_reason) : null;      
+                                    $rejectEnum = $comment->reject_reason ? \App\Enums\CommentRejectReason::tryFrom($comment->reject_reason) : null;
+                                    // ФИКС: Проверяем, является ли этот коммент искомым
+                                    $isHighlighted = is_numeric($this->search) && $comment->id == (int)$this->search;      
                                 @endphp
 
-                                <div class="flex items-start gap-3 p-3 {{ $comment->status === 'pending' ? 'bg-yellow-500/5 border border-yellow-500/20' : 'bg-muted/10 border border-border' }} rounded-lg {{ $commentDimmed ? 'opacity-50' : '' }}" wire:key="comment-{{ $comment->id }}-{{ $comment->status }}">
+                                <div 
+                                    class="flex items-start gap-3 p-3 {{ $comment->status === 'pending' ? 'bg-yellow-500/5 border border-yellow-500/20' : 'bg-muted/10 border border-border' }} rounded-lg {{ $commentDimmed ? 'opacity-50' : '' }} {{ $isHighlighted ? 'ring-4 ring-primary/60 shadow-lg' : '' }}" 
+                                    wire:key="comment-{{ $comment->id }}-{{ $comment->status }}"
+                                    @if($isHighlighted) x-data x-init="setTimeout(() => { $el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 100)" @endif
+                                >
                                     <x-avatar src="{{ $comment->user?->avatar_url }}" name="{{ $comment->user?->name ?? 'Удален' }}" size="sm" userId="{{ $comment->user?->id }}" showStatus="true" :isOnline="$comment->user?->is_online"/>
 
                                     <div class="flex-1 min-w-0">
                                         <div class="flex items-center gap-2 flex-wrap">
-                                            <!-- Унифицированный блок: Автор комментария -->
+                                            <!-- ФИКС: Вывод ID коммента -->
+                                            <span class="text-[10px] text-muted-foreground font-mono py-0.5 px-1 rounded-sm bg-muted">#{{ $comment->id }}</span>
+                                            
                                             @if($comment->user)
                                                 <x-user-status-sign :user="$comment->user" />
                                                 <a href="{{ route('admin.users.show', $comment->user->id) }}" wire:navigate class="font-medium text-sm hover:text-primary">{{ $comment->user->name }}</a>
@@ -502,13 +514,21 @@ new #[Layout('layouts.admin')] class extends Component
                                             @php 
                                             $replyDimmed = $this->statusFilter !== 'all' && $reply->status !== $this->statusFilter;
                                             $replyRejectEnum = $reply->reject_reason ? \App\Enums\CommentRejectReason::tryFrom($reply->reject_reason) : null;
+                                            // ФИКС: Проверяем, является ли этот ответ искомым
+                                            $isReplyHighlighted = is_numeric($this->search) && $reply->id == (int)$this->search;
                                             @endphp
-                                            <div class="flex items-start gap-2 p-2 {{ $reply->status === 'pending' ? 'bg-yellow-500/5 border border-yellow-500/20' : 'bg-muted/5 border border-border' }} rounded-lg {{ $replyDimmed ? 'opacity-50' : '' }}" wire:key="reply-{{ $reply->id }}-{{ $reply->status }}">
+                                            <div 
+                                                class="flex items-start gap-2 p-2 {{ $reply->status === 'pending' ? 'bg-yellow-500/5 border border-yellow-500/20' : 'bg-muted/5 border border-border' }} rounded-lg {{ $replyDimmed ? 'opacity-50' : '' }} {{ $isReplyHighlighted ? 'ring-4 ring-primary/60 shadow-lg' : '' }}" 
+                                                wire:key="reply-{{ $reply->id }}-{{ $reply->status }}"
+                                                @if($isReplyHighlighted) x-data x-init="setTimeout(() => { $el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 100)" @endif
+                                            >
                                                 <x-avatar src="{{ $reply->user?->avatar_url }}" name="{{ $reply->user?->name ?? 'Удален' }}" size="xs" userId="{{ $reply->user?->id }}" showStatus="true" :isOnline="$reply->user?->is_online" />
 
                                                 <div class="flex-1 min-w-0">
                                                     <div class="flex items-center gap-2 flex-wrap">
-                                                        <!-- Унифицированный блок: Автор ответа -->
+                                                        <!-- ФИКС: Вывод ID ответа -->
+                                                        <span class="text-[10px] text-muted-foreground font-mono">#{{ $reply->id }}</span>
+                                                        
                                                         @if($reply->user)
                                                             <x-user-status-sign :user="$reply->user" />
                                                             <a href="{{ route('admin.users.show', $reply->user->id) }}" wire:navigate class="font-medium text-xs hover:text-primary">{{ $reply->user->name }}</a>
@@ -578,7 +598,6 @@ new #[Layout('layouts.admin')] class extends Component
     @endif
 
     <script>
-    // Безопасная инициализация Fancybox
     document.addEventListener('livewire:navigated', () => {
         if (typeof Fancybox !== 'undefined') {
             Fancybox.defaults.Hash = false; 

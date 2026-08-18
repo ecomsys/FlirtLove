@@ -50,17 +50,20 @@ Route::middleware(['auth', 'verified'])->prefix('admin')->name('admin.')->group(
     Route::middleware('role:admin,moderator')->group(function () {
         // Модерация
         Volt::route('/media', 'admin.media.index')->name('media.index');
-
-        Volt::route('/moderation/photos', 'admin.moderation.photos')->name('moderation.photos');
-        Volt::route('/moderation/comments', 'admin.moderation.comments')->name('moderation.comments');
+        
         Volt::route('/moderation/dating', 'admin.moderation.dating')->name('moderation.dating');
         Volt::route('/moderation/reports', 'admin.moderation.reports')->name('moderation.reports');
+        Volt::route('/moderation/photos', 'admin.moderation.photos')->name('moderation.photos');        
+        Volt::route('/moderation/photo-comments', 'admin.moderation.photo-comments')->name('moderation.photo-comments');
+
+        Volt::route('/moderation/diaries', 'admin.moderation.diary.index')->name('moderation.diary.index');
+        Volt::route('/moderation/diaries/{diary}/moderate', 'admin.moderation.diary.moderate')->name('moderation.diary.moderate');
+        Volt::route('/moderation/diaries/comments', 'admin.moderation.diary.comments')->name('moderation.diary.comments');
 
         // Коммуникация (Модеры проверяют дневники и чаты на спам)
-        Volt::route('/communication/chats', 'admin.communication.chats')->name('communication.chats');
-        Volt::route('/communication/diaries', 'admin.communication.diaries')->name('communication.diaries');
+        Volt::route('/communication/chats', 'admin.communication.chats')->name('communication.chats');        
         Volt::route('/communication/stop-words', 'admin.communication.stop-words')->name('communication.stop-words');
-        Volt::route('/communication//templates', 'admin.communication.templates')->name('communication.templates');
+        Volt::route('/communication/templates', 'admin.communication.templates')->name('communication.templates');
 
         // Безопасность
         Volt::route('/security/blocks', 'admin.security.blocks')->name('security.blocks');
@@ -73,7 +76,7 @@ Route::middleware(['auth', 'verified'])->prefix('admin')->name('admin.')->group(
     Route::middleware('role:admin')->group(function () {
         // Финансы
         Volt::route('/finances/transactions', 'admin.finances.transactions')->name('finances.transactions');
-        Volt::route('/finances/plans', 'admin.finances.plans')->name('finances.plans');
+        Volt::route('/finances/subscriptions', 'admin.finances.subscriptions')->name('finances.subscriptions');
         Volt::route('/finances/gifts', 'admin.finances.gifts')->name('finances.gifts');
 
         // Система

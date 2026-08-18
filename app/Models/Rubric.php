@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Model;
 class Rubric extends Model
 {
     protected $fillable = [
+        'user_id',
         'name',
         'slug',
         'description',
@@ -29,6 +30,11 @@ class Rubric extends Model
     public function diaries()
     {
         return $this->hasMany(Diary::class);
+    }
+
+    public function user()
+    {
+        return $this->belongsTo(User::class);
     }
 
     // ============================================

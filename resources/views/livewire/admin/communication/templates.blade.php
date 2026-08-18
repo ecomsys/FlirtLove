@@ -221,15 +221,15 @@ new #[Layout('layouts.admin')] class extends Component
                     @error('body') <p class="text-xs text-destructive">{{ $message }}</p> @enderror
                 </div>
 
-                <div class="flex items-center gap-6 pt-2">
+                <div class="flex items-center justify-between gap-6 pt-2">
                     <label class="flex items-center gap-2 cursor-pointer">
-                        <input type="checkbox" wire:model="is_active" class="rounded border-border text-primary focus:ring-primary" />
+                        <x-checkbox wire:model="is_active" />                          
                         <span class="text-sm">Активен (виден в чате)</span>
                     </label>
                     
                     <div class="flex items-center gap-2">
                         <x-ui.label for="sort_order" class="text-xs m-0">Порядок:</x-ui.label>
-                        <input type="number" wire:model="sort_order" class="w-16 rounded-md border border-border bg-card px-2 py-1 text-sm" />
+                        <x-ui.input type="number" wire:model="sort_order" class="max-w-[5rem]" />
                     </div>
                 </div>
             </div>

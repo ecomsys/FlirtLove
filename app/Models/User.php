@@ -262,6 +262,18 @@ class User extends Authenticatable implements MustVerifyEmail
         return $this->preferences->email_settings;
     }
 
+    // Юзеры, на которых я подписан (их дневники я читаю)
+    public function subscribedAuthors(): BelongsToMany
+    {
+        return $this->belongsToMany(User::class, 'diary_subscriptions', 'subscriber_id', 'author_id');
+    }
+
+    // Мои подписчики (кто читает мои дневники)
+    public function diarySubscribers(): BelongsToMany
+    {
+        return $this->belongsToMany(User::class, 'diary_subscriptions', 'author_id', 'subscriber_id');
+    }
+
     // ============================================
     // СОБЫТИЯ МОДЕЛИ (Booted)
     // ============================================

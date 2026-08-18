@@ -42,38 +42,31 @@ new #[Layout('layouts.admin')] class extends Component
         $this->moderateReportAction = $moderateReportAction;
     }
 
-        /**
-     * Восстанавливаем фильтры из сессии при загрузке страницы.
-     */
     public function mount(): void
     {
         $saved = session('moderate_reports', []);
         if (isset($saved['statusFilter'])) $this->statusFilter = $saved['statusFilter'];
         if (isset($saved['typeFilter'])) $this->typeFilter = $saved['typeFilter'];
 
-        // ФИКС: Если мы перешли по ссылке с поиском (например, кликнули ID жалобы в профиле),
-        // принудительно включаем фильтр "Все", чтобы жалоба отобразилась, даже если она уже решена.
         if (!empty($this->search)) {
             $this->statusFilter = 'all';
-            // Сохраняем это в сессию, чтобы при перезагрузке фильтр не сбросился обратно на "pending"
             session(['moderate_reports' => array_merge($saved, ['statusFilter' => 'all'])]);
         }
     }
 
     public function updatingSearch(): void { $this->resetPage(); }
-        public function setStatusFilter(string $status): void
+    
+    public function setStatusFilter(string $status): void
     {
         $this->statusFilter = $status;
-        $this->search = ''; // Очищаем поиск при смене вкладки
-        
+        $this->search = '';
         session(['moderate_reports' => array_merge(session('moderate_reports', []), ['statusFilter' => $status])]);
         $this->resetPage();
     }
 
     public function updatedTypeFilter(string $value): void 
     { 
-        $this->search = ''; // Очищаем поиск при смене типа жалобы
-        
+        $this->search = '';
         session(['moderate_reports' => array_merge(session('moderate_reports', []), ['typeFilter' => $value])]);
         $this->resetPage(); 
     }
@@ -87,21 +80,14 @@ new #[Layout('layouts.admin')] class extends Component
         $this->resetPage();
     }
 
-    // ============================================
-    // ДЕЙСТВИЯ МОДЕРАТОРА
-    // ============================================
-
-       public function resolve(int $reportId, string $resolution = 'warn'): void
+    public function resolve(int $reportId, string $resolution = 'warn'): void
     {
         $report = Report::find($reportId);
         if (!$report || $report->status !== 'pending') return;
 
         $resolutionEnum = ReportResolution::tryFrom($resolution) ?? ReportResolution::Warn;
-        
-        // Экшен сам закроет жалобу и отправит жалобщику ReportModerated
         $this->moderateReportAction->resolve($report, auth()->user(), $resolutionEnum, 'Решено модератором');
 
-        // Если это предупреждение — отправляем НАРУШИТЕЛЮ нотификацию (т.к. экшен этого не делает)
         if ($resolutionEnum === ReportResolution::Warn && $report->reported) {
             $reasonText = 'Нарушение правил сервиса';
             $reportReasonEnum = \App\Enums\ReportReason::tryFrom($report->reason ?? '');
@@ -150,7 +136,6 @@ new #[Layout('layouts.admin')] class extends Component
                 default => ReportResolution::Ban
             };
 
-            // Экшен сам закроет все жалобы и отправит жалобщикам ReportModerated
             $this->moderateReportAction->bulkResolveReports($reports, auth()->user(), $resolution);
         }
         
@@ -170,7 +155,6 @@ new #[Layout('layouts.admin')] class extends Component
                 ->get();
 
             if ($reports->isNotEmpty()) {
-                // Экшен сам закроет жалобы и отправит жалобщикам уведомления
                 $this->moderateReportAction->bulkResolveReports($reports, auth()->user(), ReportResolution::PhotoDeleted);
             }
 
@@ -189,24 +173,30 @@ new #[Layout('layouts.admin')] class extends Component
         $this->dispatch('show-toast', type: 'info', message: 'Жалоба отклонена');
     }   
     
-    // ============================================
-    // ВЫВОД ДАННЫХ (ОПТИМИЗИРОВАННЫЕ ЗАПРОСЫ)
-    // ============================================
+    public function reopenReport(int $reportId): void
+    {
+        $report = Report::find($reportId);
+        if (!$report || $report->status === 'pending') return;
+
+        $before = $report->only(['status', 'resolution', 'admin_id', 'resolved_at']);
+        $report->reopen();
+        $after = $report->fresh()->only(['status', 'resolution', 'admin_id', 'resolved_at']);
+        AdminLog::record('report.reopen', $report, auth()->user(), $before, $after);
+        
+        $this->dispatch('show-toast', type: 'info', message: 'Жалоба возвращена в очередь.');
+    }
 
     #[Computed]
     public function reports()
     {
         $searchOperator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
-        
         $avatarQuery = fn($q) => $q->select(['id', 'user_id', 'is_primary', 'status', 'path_thumb', 'path_medium', 'path_large', 'path_original'])->orderByDesc('is_primary')->limit(1);
 
         $reports = Report::query()
             ->with([
-                // ФИКС: withTrashed() чтобы видеть имена/аватарки удаленных юзеров
                 'reporter' => fn($q) => $q->withTrashed()->select('id', 'name', 'email', 'role', 'status', 'is_premium', 'premium_expires_at', 'last_seen', 'deleted_at')->with(['photos' => $avatarQuery]),
                 'reported' => fn($q) => $q->withTrashed()->select('id', 'name', 'email', 'role', 'status', 'is_premium', 'premium_expires_at', 'last_seen', 'deleted_at')->with(['photos' => $avatarQuery]),                
             ])
-            // ФИКС: withTrashed() внутри whereHas, чтобы жалобы не выпадали из выборки
             ->where(function ($q) {
                 $q->whereNull('reporter_id')
                   ->orWhereHas('reporter', fn($q2) => $q2->withTrashed()->excludeStaff());
@@ -247,26 +237,6 @@ new #[Layout('layouts.admin')] class extends Component
         return $reports;
     }
 
-    public function reopenReport(int $reportId): void
-    {
-        $report = Report::find($reportId);
-        if (!$report || $report->status === 'pending') return;
-
-        // Сохраняем состояние до
-        $before = $report->only(['status', 'resolution', 'admin_id', 'resolved_at']);
-        
-        // Вызываем наш метод модели
-        $report->reopen();
-        
-        // Сохраняем состояние после
-        $after = $report->fresh()->only(['status', 'resolution', 'admin_id', 'resolved_at']);
-        
-        // Логируем действие
-        AdminLog::record('report.reopen', $report, auth()->user(), $before, $after);
-        
-        $this->dispatch('show-toast', type: 'info', message: 'Жалоба возвращена в очередь.');
-    }
-
     #[Computed]
     public function counts(): array
     {
@@ -305,11 +275,10 @@ new #[Layout('layouts.admin')] class extends Component
     <!-- Заголовок -->
     <div class="flex items-center gap-4">
         @php
-            // Защита от зацикливания кнопки "Назад"
             $previousUrl = url()->previous();
             $backUrl = ($previousUrl && $previousUrl !== url()->current()) 
                 ? $previousUrl 
-                : route('admin.dashboard'); // Фоллбэк на главную админки
+                : route('admin.dashboard');
         @endphp
 
         <a href="{{ $backUrl }}" wire:navigate class="p-2 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors">
@@ -387,9 +356,18 @@ new #[Layout('layouts.admin')] class extends Component
 
         <x-ui.table-body>
             @forelse ($this->reports as $report)                
-                <!-- ФИКС: Ключ содержит статус жалобы и статус юзера. При любом измененииLivewire перерисовывает строку целиком, сбрасывая состояние Alpine.js (Dropdown) -->
-                <x-ui.table-row wire:key="report-{{ $report->id }}-{{ $report->status }}-{{ $report->reported?->status }}">
-                    <x-ui.table-cell class="text-muted-foreground text-xs">#{{ $report->id }}</x-ui.table-cell>
+                @php 
+                    // ФИКС: Проверяем, является ли эта жалоба искомой (по ID)
+                    $isHighlighted = is_numeric($this->search) && $report->id == (int)$this->search; 
+                @endphp
+
+                <x-ui.table-row 
+                    wire:key="report-{{ $report->id }}-{{ $report->status }}-{{ $report->reported?->status }}"
+                    class="{{ $isHighlighted ? 'bg-blue-500/10 ring-2 ring-blue-500/50' : '' }}"
+                >
+                    <x-ui.table-cell class="text-xs font-mono whitespace-nowrap {{ $isHighlighted ? 'text-blue-500 font-bold' : 'text-muted-foreground' }}">
+                        #{{ $report->id }}
+                    </x-ui.table-cell>
                     
                     <!-- Жалобщик -->
                     <x-ui.table-cell>
@@ -521,54 +499,25 @@ new #[Layout('layouts.admin')] class extends Component
                                     
                                     @if($report->reported && $report->reported->role === 'user')
                                         @if($report->reported->status === 'banned' || $report->reported->status === 'shadowbanned')
-                                            <!-- РАЗБАНИТЬ -->
-                                            <x-ui.dropdown-menu-item 
-                                                wire:key="unban-{{ $report->id }}" 
-                                                wire:click="toggleBan({{ $report->reported->id }}, 'permanent', {{ $report->id }})" 
-                                                wire:confirm="Снять бан с пользователя?"
-                                                wire:target="toggleBan({{ $report->reported->id }}, 'permanent', {{ $report->id }})"
-                                                wire:loading.attr="disabled"
-                                            >
+                                            <x-ui.dropdown-menu-item wire:key="unban-{{ $report->id }}" wire:click="toggleBan({{ $report->reported->id }}, 'permanent', {{ $report->id }})" wire:confirm="Снять бан с пользователя?" wire:target="toggleBan({{ $report->reported->id }}, 'permanent', {{ $report->id }})" wire:loading.attr="disabled">
                                                 <x-lucide-unlock class="w-4 h-4 text-green-500" wire:loading.remove wire:target="toggleBan({{ $report->reported->id }}, 'permanent', {{ $report->id }})" />
                                                 <x-lucide-loader-2 class="w-4 h-4 animate-spin hidden text-green-500" wire:loading wire:target="toggleBan({{ $report->reported->id }}, 'permanent', {{ $report->id }})" />
                                                 Разбанить пользователя
                                             </x-ui.dropdown-menu-item>
                                         @else
-                                            <!-- ТЕНЕВОЙ БАН -->
-                                            <x-ui.dropdown-menu-item 
-                                                wire:key="ban-shadow-{{ $report->id }}" 
-                                                wire:click="toggleBan({{ $report->reported->id }}, 'shadow', {{ $report->id }})" 
-                                                wire:confirm="Применить теневой бан?"
-                                                wire:target="toggleBan({{ $report->reported->id }}, 'shadow', {{ $report->id }})"
-                                                wire:loading.attr="disabled"
-                                            >
+                                            <x-ui.dropdown-menu-item wire:key="ban-shadow-{{ $report->id }}" wire:click="toggleBan({{ $report->reported->id }}, 'shadow', {{ $report->id }})" wire:confirm="Применить теневой бан?" wire:target="toggleBan({{ $report->reported->id }}, 'shadow', {{ $report->id }})" wire:loading.attr="disabled">
                                                 <x-lucide-eye-off class="w-4 h-4 text-purple-500" wire:loading.remove wire:target="toggleBan({{ $report->reported->id }}, 'shadow', {{ $report->id }})" />
                                                 <x-lucide-loader-2 class="w-4 h-4 animate-spin hidden text-purple-500" wire:loading wire:target="toggleBan({{ $report->reported->id }}, 'shadow', {{ $report->id }})" />
                                                 Теневой бан
                                             </x-ui.dropdown-menu-item>
 
-                                            <!-- ВРЕМЕННЫЙ БАН (3 ДНЯ) -->
-                                            <x-ui.dropdown-menu-item 
-                                                wire:key="ban-temp-{{ $report->id }}" 
-                                                wire:click="toggleBan({{ $report->reported->id }}, 'temp', {{ $report->id }})" 
-                                                wire:confirm="Забанить на 3 дня?"
-                                                wire:target="toggleBan({{ $report->reported->id }}, 'temp', {{ $report->id }})"
-                                                wire:loading.attr="disabled"
-                                            >
+                                            <x-ui.dropdown-menu-item wire:key="ban-temp-{{ $report->id }}" wire:click="toggleBan({{ $report->reported->id }}, 'temp', {{ $report->id }})" wire:confirm="Забанить на 3 дня?" wire:target="toggleBan({{ $report->reported->id }}, 'temp', {{ $report->id }})" wire:loading.attr="disabled">
                                                 <x-lucide-clock class="w-4 h-4 text-yellow-500" wire:loading.remove wire:target="toggleBan({{ $report->reported->id }}, 'temp', {{ $report->id }})" />
                                                 <x-lucide-loader-2 class="w-4 h-4 animate-spin hidden text-yellow-500" wire:loading wire:target="toggleBan({{ $report->reported->id }}, 'temp', {{ $report->id }})" />
                                                 Бан на 3 дня
                                             </x-ui.dropdown-menu-item>
 
-                                            <!-- ВЕЧНЫЙ БАН -->
-                                            <x-ui.dropdown-menu-item 
-                                                wire:key="ban-perm-{{ $report->id }}" 
-                                                wire:click="toggleBan({{ $report->reported->id }}, 'permanent', {{ $report->id }})" 
-                                                variant="destructive" 
-                                                wire:confirm="Забанить навсегда?"
-                                                wire:target="toggleBan({{ $report->reported->id }}, 'permanent', {{ $report->id }})"
-                                                wire:loading.attr="disabled"
-                                            >
+                                            <x-ui.dropdown-menu-item wire:key="ban-perm-{{ $report->id }}" wire:click="toggleBan({{ $report->reported->id }}, 'permanent', {{ $report->id }})" variant="destructive" wire:confirm="Забанить навсегда?" wire:target="toggleBan({{ $report->reported->id }}, 'permanent', {{ $report->id }})" wire:loading.attr="disabled">
                                                 <x-lucide-lock class="w-4 h-4 text-red-500" wire:loading.remove wire:target="toggleBan({{ $report->reported->id }}, 'permanent', {{ $report->id }})" />
                                                 <x-lucide-loader-2 class="w-4 h-4 animate-spin hidden text-red-500" wire:loading wire:target="toggleBan({{ $report->reported->id }}, 'permanent', {{ $report->id }})" />
                                                 Вечный бан
@@ -577,28 +526,14 @@ new #[Layout('layouts.admin')] class extends Component
                                     @endif
                                     
                                     @if($report->reportable_type === \App\Models\Photo::class && $report->reportable)
-                                        <!-- ОТКЛОНИТЬ ФОТО -->
-                                        <x-ui.dropdown-menu-item 
-                                            wire:key="reject-photo-{{ $report->id }}" 
-                                            wire:click="rejectPhoto({{ $report->reportable_id }})" 
-                                            variant="destructive" 
-                                            wire:confirm="Отклонить фото (отправить в карантин) и закрыть жалобу?"
-                                            wire:target="rejectPhoto({{ $report->reportable_id }})"
-                                            wire:loading.attr="disabled"
-                                        >
+                                        <x-ui.dropdown-menu-item wire:key="reject-photo-{{ $report->id }}" wire:click="rejectPhoto({{ $report->reportable_id }})" variant="destructive" wire:confirm="Отклонить фото (отправить в карантин) и закрыть жалобу?" wire:target="rejectPhoto({{ $report->reportable_id }})" wire:loading.attr="disabled">
                                             <x-lucide-x-circle class="w-4 h-4" wire:loading.remove wire:target="rejectPhoto({{ $report->reportable_id }})" />
                                             <x-lucide-loader-2 class="w-4 h-4 animate-spin hidden" wire:loading wire:target="rejectPhoto({{ $report->reportable_id }})" />
                                             Отклонить фото
                                         </x-ui.dropdown-menu-item>
                                     @endif
 
-                                    <!-- ПРЕДУПРЕЖДЕНИЕ -->
-                                    <x-ui.dropdown-menu-item 
-                                        wire:key="warn-{{ $report->id }}" 
-                                        wire:click="resolve({{ $report->id }}, 'warn')"
-                                        wire:target="resolve({{ $report->id }}, 'warn')"
-                                        wire:loading.attr="disabled"
-                                    >
+                                    <x-ui.dropdown-menu-item wire:key="warn-{{ $report->id }}" wire:click="resolve({{ $report->id }}, 'warn')" wire:target="resolve({{ $report->id }}, 'warn')" wire:loading.attr="disabled">
                                         <x-lucide-alert-triangle class="w-4 h-4 text-yellow-500" wire:loading.remove wire:target="resolve({{ $report->id }}, 'warn')" />
                                         <x-lucide-loader-2 class="w-4 h-4 animate-spin hidden text-yellow-500" wire:loading wire:target="resolve({{ $report->id }}, 'warn')" />
                                         Вынести предупреждение
@@ -606,13 +541,7 @@ new #[Layout('layouts.admin')] class extends Component
 
                                     <x-ui.dropdown-menu-separator />
 
-                                    <!-- ОТКЛОНИТЬ ЖАЛОБУ -->
-                                    <x-ui.dropdown-menu-item 
-                                        wire:key="reject-{{ $report->id }}" 
-                                        wire:click="reject({{ $report->id }})"
-                                        wire:target="reject({{ $report->id }})"
-                                        wire:loading.attr="disabled"
-                                    >
+                                    <x-ui.dropdown-menu-item wire:key="reject-{{ $report->id }}" wire:click="reject({{ $report->id }})" wire:target="reject({{ $report->id }})" wire:loading.attr="disabled">
                                         <x-lucide-x-circle class="w-4 h-4 text-muted-foreground" wire:loading.remove wire:target="reject({{ $report->id }})" />
                                         <x-lucide-loader-2 class="w-4 h-4 animate-spin hidden text-muted-foreground" wire:loading wire:target="reject({{ $report->id }})" />
                                         Отклонить жалобу (всё ок)
@@ -621,15 +550,7 @@ new #[Layout('layouts.admin')] class extends Component
                                 </x-ui.dropdown-menu-content>
                             </x-ui.dropdown-menu>               
                         @else
-                             <x-ui.button 
-                                variant="ghost" 
-                                size="icon-sm" 
-                                wire:click="reopenReport({{ $report->id }})" 
-                                wire:confirm="Вернуть эту жалобу в очередь на проверку?"
-                                wire:target="reopenReport({{ $report->id }})"
-                                wire:loading.attr="disabled"
-                                title="Вернуть в очередь"
-                            >
+                             <x-ui.button variant="ghost" size="icon-sm" wire:click="reopenReport({{ $report->id }})" wire:confirm="Вернуть эту жалобу в очередь на проверку?" wire:target="reopenReport({{ $report->id }})" wire:loading.attr="disabled" title="Вернуть в очередь">
                                 <x-lucide-rotate-ccw class="w-4 h-4 text-blue-500" wire:loading.remove wire:target="reopenReport({{ $report->id }})" />
                                 <x-lucide-loader-2 class="w-4 h-4 animate-spin hidden text-blue-500" wire:loading wire:target="reopenReport({{ $report->id }})" />
                             </x-ui.button>
@@ -662,3 +583,15 @@ new #[Layout('layouts.admin')] class extends Component
         {{ $this->reports->links('partials.pagination') }}
     </div>
 </div>
+
+{{-- ФИКС: Авто-скролл к подсвеченной строке --}}
+<script>
+document.addEventListener('livewire:navigated', () => {
+    const highlightedRow = document.querySelector('.ring-blue-500\\/50');
+    if (highlightedRow) {
+        setTimeout(() => {
+            highlightedRow.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }, 100);
+    }
+});
+</script>

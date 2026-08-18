@@ -20,9 +20,10 @@ return new class extends Migration
             // Контент
             $table->string('title');
             $table->longText('body'); // HTML или Markdown
-            
-            // Статус: draft (черновик), published (опубликовано)
-            $table->string('status')->default('draft')->index();
+                     
+            // Статус: draft, pending (на модерации), published, rejected
+            $table->enum('status', ['draft', 'pending', 'published', 'rejected'])->default('draft')->index();
+            $table->string('reject_reason')->nullable(); // Причина отклонения модератором
             
             // Дата публикации (для сортировки ленты)
             $table->timestamp('published_at')->nullable();

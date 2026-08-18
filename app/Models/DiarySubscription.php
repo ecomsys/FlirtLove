@@ -15,17 +15,11 @@ class DiarySubscription extends Model
     // СВЯЗИ
     // ============================================
 
-    /**
-     * Кто подписался (читатель)
-     */
     public function subscriber()
     {
         return $this->belongsTo(User::class, 'subscriber_id');
     }
 
-    /**
-     * На кого подписался (автор)
-     */
     public function author()
     {
         return $this->belongsTo(User::class, 'author_id');
@@ -37,7 +31,6 @@ class DiarySubscription extends Model
 
     /**
      * Быстрая проверка, подписан ли юзер А на юзера Б.
-     * Используется в контроллерах перед кнопкой "Подписаться/Отписаться"
      */
     public static function isSubscribed(int $subscriberId, int $authorId): bool
     {

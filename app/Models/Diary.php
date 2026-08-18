@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Diary extends Model
 {
@@ -15,6 +16,7 @@ class Diary extends Model
         'title',
         'body',
         'status',
+        'reject_reason',
         'published_at',
         'is_comments_enabled',
         'views_count',
@@ -42,24 +44,35 @@ class Diary extends Model
         return $this->belongsTo(Rubric::class);
     }
 
+        // Все комментарии поста
+    public function comments(): HasMany
+    {
+        return $this->hasMany(DiaryComment::class);
+    }
+
+    // Только корневые (одобренные) комментарии для вывода под постом на фронте
+    public function approvedComments(): HasMany
+    {
+        return $this->hasMany(DiaryComment::class)->root()->approved()->latest();
+    }
+
     // ============================================
     // СКОПЫ
     // ============================================
 
-    /**
-     * Только опубликованные посты (для ленты и профиля)
-     */
     public function scopePublished($query)
     {
         return $query->where('status', 'published');
     }
 
-    /**
-     * Только черновики
-     */
     public function scopeDraft($query)
     {
         return $query->where('status', 'draft');
+    }
+
+    public function scopePending($query)
+    {
+        return $query->where('status', 'pending');
     }
 
     // ============================================
@@ -67,21 +80,24 @@ class Diary extends Model
     // ============================================
 
     /**
-     * Опубликовать пост (снимает с черновика)
+     * Отправить пост на модерацию (или опубликовать сразу, если премодерация отключена)
      */
     public function publish(): bool
     {
+        $status = config('diary.premoderation', true) ? 'pending' : 'published';
+        
         return $this->update([
-            'status' => 'published',
+            'status' => $status,
             'published_at' => $this->published_at ?? now(),
         ]);
     }
 
     /**
-     * Увеличить счетчик просмотров поста
+     * Увеличить счетчик просмотров поста (без обновления updated_at)
      */
     public function incrementViews(): void
     {
-        $this->increment('views_count');
+        static::where('id', $this->id)->increment('views_count');
+        $this->views_count++;
     }
 }

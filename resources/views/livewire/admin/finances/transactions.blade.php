@@ -8,10 +8,6 @@ use Livewire\Attributes\Url;
 use Livewire\Volt\Component;
 use Livewire\WithPagination;
 
-// Маленький комментарий на будущее: в методе syncTransaction мы кладем provider_transaction_id в массив meta. 
-// Когда подключишь реальный банк, просто не забудь обновить колонку provider_transaction_id в таблице напрямую, 
-// а не только в JSON).
-
 new #[Layout('layouts.admin')] class extends Component 
 {
     use WithPagination;
@@ -40,7 +36,7 @@ new #[Layout('layouts.admin')] class extends Component
     public string $refundReason = '';
 
      /** @var string|null Текстовый комментарий к возврату */
-    public ?string $refundComment = null;
+    public string $refundComment = '';
 
     /**
      * Инициализация. Сбрасываем фильтры, если пришли по прямой ссылке.
@@ -56,8 +52,20 @@ new #[Layout('layouts.admin')] class extends Component
 
     public function updatedSearch(): void { $this->resetPage(); }
     public function updatedStatusFilter(): void { $this->resetPage(); }
-    public function updatedTypeFilter(): void { $this->resetPage(); }
-    public function updatedDateFilter(): void { $this->resetPage(); }
+    
+    // ФИКС: Очищаем поиск при ручной смене фильтра типа
+    public function updatedTypeFilter(): void
+    {
+        $this->search = '';
+        $this->resetPage();
+    }
+    
+    // ФИКС: Очищаем поиск при ручной смене фильтра даты
+    public function updatedDateFilter(): void
+    {
+        $this->search = '';
+        $this->resetPage();
+    }
 
     /**
      * Установка фильтра статуса.
@@ -65,6 +73,7 @@ new #[Layout('layouts.admin')] class extends Component
     public function setStatusFilter(string $status): void
     {
         $this->statusFilter = $status;
+        $this->search = ''; // ФИКС: Очищаем поиск при клике на кнопку статуса!
         $this->resetPage();
     }
 
@@ -95,10 +104,10 @@ new #[Layout('layouts.admin')] class extends Component
     {
         $this->refundingTransactionId = $transactionId;
         $this->refundReason = '';
-        $this->refundComment = null;
+        $this->refundComment = '';
     }
 
-        /**
+    /**
      * Ручная синхронизация статуса платежа с банком (для pending транзакций).
      */
     public function syncTransaction(int $id, \App\Services\Payments\MockAcquiringService $bank): void
@@ -106,23 +115,20 @@ new #[Layout('layouts.admin')] class extends Component
         $transaction = Transaction::find($id);
         if (!$transaction || $transaction->status !== 'pending') return;
 
-        // Спрашиваем у банка, что там с платежом
         $bankResponse = $bank->checkStatus($transaction);
 
         if ($bankResponse['status'] === 'success') {
-            // Банк говорит: оплата прошла!
             $transaction->markAsSuccess([
                 'synced_by' => auth()->user()->name,
                 'bank_message' => $bankResponse['message'],
                 'provider_transaction_id' => $bankResponse['provider_transaction_id']
             ]);
 
-            // НАЧИСЛЯЕМ БОНУСЫ (Имитация успешной покупки)
             if ($transaction->user) {
                 if ($transaction->type === 'subscription') {
                     $transaction->user->update([
                         'is_premium' => true,
-                        'premium_expires_at' => now()->addDays(30), // Даем 30 дней VIP
+                        'premium_expires_at' => now()->addDays(30),
                     ]);
                 } elseif ($transaction->type === 'credits' && $transaction->credits_amount) {
                     $pref = $transaction->user->preferences;
@@ -131,16 +137,15 @@ new #[Layout('layouts.admin')] class extends Component
             }
 
             AdminLog::record('transaction.sync_success', $transaction, auth()->user(), ['status' => 'pending'], ['status' => 'success']);
-            $this->dispatch('show-toast', type: 'success', message: 'Синхронизация успешна! Платеж подтвержден, бонусы начислены.');
+            $this->dispatch('show-toast', type: 'success', message: 'Синхронизация успешна! Платеж подтвержден.');
         } else {
-            // Банк говорит: платеж отклонен
             $transaction->markAsFailed($bankResponse['message']);
             AdminLog::record('transaction.sync_failed', $transaction, auth()->user(), ['status' => 'pending'], ['status' => 'failed']);
             $this->dispatch('show-toast', type: 'error', message: 'Банк отклонил платеж: ' . $bankResponse['message']);
         }
     }
 
-        /**
+    /**
      * Обработка возврата (Refund) - отправка в очередь.
      */
     public function processRefund(): void
@@ -153,7 +158,6 @@ new #[Layout('layouts.admin')] class extends Component
         $transaction = Transaction::find($this->refundingTransactionId);
         if (!$transaction || $transaction->status !== 'success') return;
 
-        // 1. Сразу пишем причину возврата и логируем действие модератора
         $reasonEnum = \App\Enums\RefundReason::tryFrom($this->refundReason);
         
         $transaction->update([
@@ -166,21 +170,16 @@ new #[Layout('layouts.admin')] class extends Component
 
         AdminLog::record('transaction.refund', $transaction, auth()->user(), ['status' => 'success'], ['status' => 'pending_refund', 'reason' => $reasonEnum?->label()]);
 
-        // 2. Отправляем джобу в очередь (которая уже сама позвонит в банк и снесет VIP)
         \App\Jobs\ProcessRefundJob::dispatch($transaction->id);
 
-        // 3. Закрываем модалку и показываем тост модератору
         $this->refundingTransactionId = null;
-        $this->dispatch('show-toast', type: 'success', message: 'Заявка на возврат отправлена в банк. Ожидайте ответа.');
+        $this->dispatch('show-toast', type: 'success', message: 'Заявка на возврат отправлена в банк.');
     }
 
     // ============================================
     // ВЫВОД ДАННЫХ
     // ============================================
 
-    /**
-     * Хелпер для применения фильтра периода.
-     */
     private function applyDateFilter($q): void
     {
         if ($this->dateFilter !== 'all') {
@@ -194,9 +193,6 @@ new #[Layout('layouts.admin')] class extends Component
         }
     }
 
-    /**
-     * Счетчики для кнопок фильтров статусов.
-     */
     #[Computed]
     public function counts(): array
     {
@@ -212,9 +208,6 @@ new #[Layout('layouts.admin')] class extends Component
         ];
     }
 
-    /**
-     * Получение списка транзакций.
-     */
     #[Computed]
     public function transactions()
     {
@@ -244,9 +237,6 @@ new #[Layout('layouts.admin')] class extends Component
         return $query->latest('created_at')->latest('id')->paginate(15);
     }
 
-    /**
-     * Сумма выручки за выбранный период.
-     */
     #[Computed]
     public function totalRevenue(): string
     {
@@ -256,9 +246,6 @@ new #[Layout('layouts.admin')] class extends Component
         return number_format($sum, 2, '.', ' ') . ' ₽';
     }
 
-    /**
-     * Данные для модалки просмотра.
-     */     
     #[Computed]
     public function viewingTransaction()
     {
@@ -295,7 +282,7 @@ new #[Layout('layouts.admin')] class extends Component
             </div>
         </div>
 
-        {{-- ФИКС: Блок выручки --}}
+        {{-- Блок выручки --}}
         <div class="bg-emerald-500/10 text-emerald-600 px-4 py-2 rounded-lg border border-emerald-500/20 flex items-center gap-2">
             <x-lucide-trending-up class="w-5 h-5" />
             <span>Выручка за период: <span class="font-bold">{{ $this->totalRevenue }}</span></span>
@@ -323,7 +310,7 @@ new #[Layout('layouts.admin')] class extends Component
         </div>
 
         <div class="flex items-center justify-between gap-2">
-            {{-- ФИКС: Фильтр периода --}}
+            {{-- ФИЛЬТР ПЕРИОДА --}}
             <div class="flex gap-1 mr-2">
                 <x-ui.button wire:click="$set('dateFilter', 'all')" variant="{{ $dateFilter == 'all' ? 'default' : 'secondary' }}" size="sm">За все время</x-ui.button>
                 <x-ui.button wire:click="$set('dateFilter', 'day')" variant="{{ $dateFilter == 'day' ? 'default' : 'secondary' }}" size="sm">Сегодня</x-ui.button>
@@ -376,17 +363,21 @@ new #[Layout('layouts.admin')] class extends Component
                         'refund' => ['variant' => 'destructive', 'label' => 'Возврат'],
                         default => ['variant' => 'outline', 'label' => $transaction->type]
                     };
-                    // ФИКС: Динамический цвет суммы в зависимости от статуса
-                        $amountClass = match($transaction->status) {
-                            'refunded' => 'text-destructive font-medium', // Красный (возврат)
-                            'failed' => 'text-muted-foreground/50',      // Серый (ошибка, деньги не дошли)
-                            'pending' => 'text-muted-foreground',        // Серый (в ожидании)
-                            default => 'text-green-500 font-medium'      // Обычный (успех)
-                        };
-                        $amountSign = $transaction->status === 'refunded' ? '-' : '';
+                    $amountClass = match($transaction->status) {
+                        'refunded' => 'text-destructive font-medium',
+                        'failed' => 'text-muted-foreground/50',
+                        'pending' => 'text-muted-foreground',
+                        default => 'text-green-500 font-medium'
+                    };
+                    $amountSign = $transaction->status === 'refunded' ? '-' : '';
+                    // ФИКС: Подсветка искомой транзакции
+                    $isHighlighted = is_numeric($this->search) && $transaction->id == (int)$this->search;
                 @endphp
-                <x-ui.table-row wire:key="trans-{{ $transaction->id }}-{{ $transaction->status }}">
-                    <x-ui.table-cell class="text-muted-foreground text-xs font-mono">
+                <x-ui.table-row 
+                    wire:key="trans-{{ $transaction->id }}-{{ $transaction->status }}"
+                    class="{{ $isHighlighted ? 'bg-blue-500/10 ring-2 ring-blue-500/50' : '' }}"
+                >
+                    <x-ui.table-cell class="text-xs font-mono whitespace-nowrap {{ $isHighlighted ? 'text-blue-500 font-bold' : 'text-muted-foreground' }}">
                         #{{ $transaction->id }}
                     </x-ui.table-cell>
                     <x-ui.table-cell>
@@ -428,7 +419,7 @@ new #[Layout('layouts.admin')] class extends Component
                                 <x-lucide-eye class="w-4 h-4" />
                             </x-ui.button>
                             
-                            {{-- ФИКС: Кнопка ручной синхронизации для зависших платежей --}}
+                            {{-- Кнопка ручной синхронизации для зависших платежей --}}
                             @if($transaction->status === 'pending')
                                 <x-ui.button wire:click="syncTransaction({{ $transaction->id }})" variant="ghost" size="icon-sm" title="Проверить в банке" wire:loading.attr="disabled" wire:target="syncTransaction({{ $transaction->id }})">
                                     <span wire:loading.remove wire:target="syncTransaction({{ $transaction->id }})"><x-lucide-refresh-cw class="w-4 h-4 text-blue-500" /></span>
@@ -500,7 +491,6 @@ new #[Layout('layouts.admin')] class extends Component
                     </div>
 
                     <div class="grid grid-cols-2 gap-4 text-sm">
-                        {{-- Убрали блок "Пользователь" отсюда, так как он теперь сверху --}}
                         <div>
                             <p class="text-xs text-muted-foreground">Сумма</p>
                             <p class="font-medium">{{ $this->viewingTransaction->formatted_amount }}</p>
@@ -551,7 +541,7 @@ new #[Layout('layouts.admin')] class extends Component
              wire:click="$set('refundingTransactionId', null)">
              
             <div class="relative bg-card border border-border rounded-lg shadow-2xl max-w-md w-full mx-4 overflow-hidden" wire:click.stop>
-                 
+                
                 <div class="flex items-center justify-between p-4 border-b border-border">
                     <h2 class="text-lg font-semibold text-destructive flex items-center gap-2">
                         <x-lucide-alert-triangle class="w-5 h-5" /> Оформить возврат
@@ -567,7 +557,7 @@ new #[Layout('layouts.admin')] class extends Component
                     </p>
                     
                     <div class="space-y-3">
-                        <!-- ФИКС: Селект причины возврата (Enum) -->
+                        <!-- Селект причины возврата (Enum) -->
                         <div>
                             <x-ui.label class="text-sm font-medium">Причина возврата (обязательно)</x-ui.label>
                             <x-ui.select wire:model="refundReason" class="w-full mt-1">
@@ -581,7 +571,7 @@ new #[Layout('layouts.admin')] class extends Component
                             @error('refundReason') <p class="text-xs text-destructive mt-1">{{ $message }}</p> @enderror
                         </div>
 
-                        <!-- ФИКС: Текстовый комментарий (опционально) -->
+                        <!-- Текстовый комментарий (опционально) -->
                         <div>
                             <x-ui.label class="text-sm font-medium">Комментарий / Детали (опционально)</x-ui.label>
                             <textarea wire:model="refundComment" rows="2" placeholder="Например: Банк отклонил 3-D Secure..." class="flex min-h-[60px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring mt-1"></textarea>
@@ -601,4 +591,17 @@ new #[Layout('layouts.admin')] class extends Component
             </div>
         </div>
     @endif
+
+    {{-- ФИКС: Авто-скролл к подсвеченной строке --}}
+<script>
+document.addEventListener('livewire:navigated', () => {
+    const highlightedRow = document.querySelector('.ring-blue-500\\/50');
+    if (highlightedRow) {
+        setTimeout(() => {
+            highlightedRow.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }, 100);
+    }
+});
+</script>
 </div>
+
