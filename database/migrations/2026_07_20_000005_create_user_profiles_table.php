@@ -14,6 +14,7 @@ return new class extends Migration
 
             // === БАЗОВАЯ ИНФА ===
             $table->enum('gender', ['male', 'female'])->nullable()->index();
+            $table->unsignedTinyInteger('age')->nullable()->index(); 
             $table->date('birth_date')->nullable()->index();
             $table->enum('dating_goal', ['friends', 'romantic', 'family', 'casual', 'travel'])->nullable()->index();
             $table->string('city')->nullable()->index();

@@ -62,12 +62,13 @@ Route::middleware(['auth', 'verified'])->prefix('admin')->name('admin.')->group(
 
         // Коммуникация (Модеры проверяют дневники и чаты на спам)
         Volt::route('/communication/chats', 'admin.communication.chats')->name('communication.chats');        
-        Volt::route('/communication/stop-words', 'admin.communication.stop-words')->name('communication.stop-words');
+        Volt::route('/communication/stop-words', 'admin.communication.stop-words.index')->name('communication.stop-words.index');
         Volt::route('/communication/templates', 'admin.communication.templates')->name('communication.templates');
 
         // Безопасность
         Volt::route('/security/blocks', 'admin.security.blocks')->name('security.blocks');
         Volt::route('/security/fraud-alerts', 'admin.security.fraud-alerts')->name('security.fraud-alerts');
+       
     });
 
     // ============================================
@@ -95,8 +96,13 @@ Route::middleware(['auth', 'verified'])->prefix('admin')->name('admin.')->group(
         Volt::route('/system/journal-logs', 'admin.system.journal-logs')->name('system.journal-logs');
         Volt::route('/system/laravel-logs', 'admin.system.laravel-logs')->name('system.laravel-logs');
         
-        // НОВАЯ СТРАНИЦА: Управление персоналом
+        // Управление персоналом
         Volt::route('/system/roles', 'admin.system.roles')->name('system.roles');
+
+         // Блог
+        Volt::route('/system/blog', 'admin.system.blog.index')->name('system.blog.index');
+        Volt::route('/system/blog/create', 'admin.system.blog.form')->name('system.blog.create');
+        Volt::route('/system/blog/{post}/edit', 'admin.system.blog.form')->name('system.blog.edit');
     });
 });
 

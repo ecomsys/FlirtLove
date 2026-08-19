@@ -17,6 +17,7 @@ class UserSubscription extends Model
         'provider_subscription_id', // ID подписки в Stripe/YooKassa/Apple
         'status',                   // active, expired, canceled, failed
         'canceled_at',
+        'expires_notified_at'
     ];
 
     protected $casts = [
@@ -24,6 +25,7 @@ class UserSubscription extends Model
         'ends_at' => 'datetime',
         'canceled_at' => 'datetime',
         'is_auto_renew' => 'boolean',
+        'expires_notified_at' => 'datetime'
     ];
 
     // ============================================

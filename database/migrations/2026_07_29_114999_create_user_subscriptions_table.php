@@ -45,15 +45,17 @@ return new class extends Migration
             // Подписка при этом продолжает работать до ends_at! (Это требование Apple/Google)
             $table->timestamp('canceled_at')->nullable();
 
+            $table->timestamp('expires_notified_at')->nullable();
+
             $table->timestamps();
             
             // === ИНДЕКСЫ ===
             
-            // 1. Для проверки, есть ли у юзера активная подписка (и для кэширования в users.is_premium)
-            $table->index(['user_id', 'status']);
-            
-            // 2. Для крон-задачи: каждый день искать подписки, которые скоро истекают, чтобы слать пуши "Продлите VIP"
-            $table->index('ends_at');
+       // 1. Для обсервера: поиск активной подписки конкретного юзера
+        $table->index(['user_id', 'status', 'ends_at']);
+
+        // 2. Для крон-задач: глобальный поиск истекающих/просроченных подписок
+        $table->index(['status', 'ends_at']);
         });
     }
 

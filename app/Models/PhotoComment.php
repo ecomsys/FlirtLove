@@ -155,5 +155,12 @@ class PhotoComment extends Model
     {
         // Просто вызываем reject с причиной 'spam'
         $this->reject($adminId, 'spam');
+
+    //      $this->update([
+    //     'status' => 'spam',          // <--- ПРАВИЛЬНЫЙ СТАТУС
+    //     'moderated_by' => $adminId,
+    //     'moderated_at' => now(),
+    //     'reject_reason' => 'spam',   // Дублируем для удобства фильтров
+    // ]);
     }
 }

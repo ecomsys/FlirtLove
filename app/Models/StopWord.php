@@ -2,46 +2,42 @@
 
 namespace App\Models;
 
+use App\Enums\StopWordAction;
+use App\Enums\StopWordCategory;
 use Illuminate\Database\Eloquent\Model;
 
 class StopWord extends Model
 {
     protected $fillable = [
-        'word',         // Само слово, фраза или регулярка
-        'category',     // mat, scam, prostitution, drugs, contacts
-        'action',       // mask, reject, alert
-        'replacement',  // На что заменять (по умолчанию '***')
-        'is_active',    // Флаг включения/выключения
+        'word',
+        'category',
+        'action',
+        'replacement',
+        'is_active',
     ];
 
+    // ВАЖНО: Добавляем касты для Enum
     protected $casts = [
         'is_active' => 'boolean',
+        'category' => StopWordCategory::class,
+        'action' => StopWordAction::class,
     ];
 
     // ============================================
     // СКОПЫ
     // ============================================
 
-    /**
-     * Только активные слова (для загрузки в кэш ContentFilter).
-     */
     public function scopeActive($query)
     {
         return $query->where('is_active', true);
     }
 
-    /**
-     * Фильтр по категории (для админки).
-     */
-    public function scopeOfCategory($query, string $category)
+    public function scopeOfCategory($query, StopWordCategory $category)
     {
         return $query->where('category', $category);
     }
 
-    /**
-     * Фильтр по действию (например, вывести все слова, которые блокируют сообщения).
-     */
-    public function scopeOfAction($query, string $action)
+    public function scopeOfAction($query, StopWordAction $action)
     {
         return $query->where('action', $action);
     }
@@ -52,33 +48,29 @@ class StopWord extends Model
 
     public function isMask(): bool
     {
-        return $this->action === 'mask';
+        return $this->action === StopWordAction::Mask;
     }
 
     public function isReject(): bool
     {
-        return $this->action === 'reject';
+        return $this->action === StopWordAction::Reject;
     }
 
     public function isAlert(): bool
     {
-        return $this->action === 'alert';
+        return $this->action === StopWordAction::Alert;
     }
 
     // ============================================
     // АКСЕССОРЫ ДЛЯ UI
     // ============================================
 
-    /**
-     * Бейдж для поля "Действие" в таблице админки.
-     */
     public function getActionBadgeAttribute(): array
     {
         return match ($this->action) {
-            'mask'   => ['variant' => 'secondary', 'label' => 'Маскировать'],
-            'reject' => ['variant' => 'destructive', 'label' => 'Блокировать'],
-            'alert'  => ['variant' => 'warning', 'label' => 'Тревога (Антифрод)'],
-            default  => ['variant' => 'secondary', 'label' => 'Неизвестно'],
+            StopWordAction::Mask   => ['variant' => 'secondary', 'label' => StopWordAction::Mask->label()],
+            StopWordAction::Reject => ['variant' => 'destructive', 'label' => StopWordAction::Reject->label()],
+            StopWordAction::Alert  => ['variant' => 'warning', 'label' => StopWordAction::Alert->label()],
         };
     }
 }

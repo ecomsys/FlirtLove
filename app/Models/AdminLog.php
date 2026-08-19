@@ -103,15 +103,18 @@ class AdminLog extends Model
      * Универсальный метод для записи действия в лог.
      * Автоматически вычисляет дифф, если переданы массивы before и after.
      */
-    public static function record(string $action, ?Model $model = null, ?User $admin = null, ?array $before = null, ?array $after = null): self
+    public static function record(string $action, ?Model $model = null, ?User $admin = null, ?array $before = null, ?array $after = null): ?self
     {
+        // Если админ не передан явно, берем текущего авторизованного (если есть)
+        $admin = $admin ?? auth()->user();
+
         // УМНАЯ ОБРАБОТКА: Если переданы оба состояния, чистим их
         if (is_array($before) && is_array($after)) {
             [$before, $after] = self::calculateDiff($before, $after);
             
-            // Если ничего не изменилось (кроме updated_at), не пишем пустой лог
+            // Если ничего не изменилось (кроме updated_at), не пишем пустой лог в БД
             if (empty($before) && empty($after)) {
-                return new self(); // Возвращаем пустую модель, чтобы не падать
+                return null; // <--- ИСПРАВЛЕНО: Возвращаем null, а не пустую модель
             }
         }
 
@@ -122,7 +125,7 @@ class AdminLog extends Model
             'loggable_id'   => $model?->id,
             'before'        => $before,
             'after'         => $after,
-            'ip_address'    => app()->runningInConsole() ? null : Request::ip(),
+            'ip_address'    => app()->runningInConsole() ? 'CLI' : Request::ip(), // Пишем 'CLI' для крон-задач
             'user_agent'    => app()->runningInConsole() ? null : Request::userAgent(),
         ]);
     }

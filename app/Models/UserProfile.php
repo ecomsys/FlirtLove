@@ -10,7 +10,7 @@ class UserProfile extends Model
 {
     protected $fillable = [
         'user_id', 
-        'gender', 'birth_date', 'dating_goal', 'city', 'country',
+        'gender', 'age', 'birth_date', 'dating_goal', 'city', 'country',
         'headline', 'bio', 'looking_for', 'interests', 'self_portrait',
         'body_type', 'eye_color', 'hair_color', 'height', 'weight',
         'relationship_status', 'children_status', 'pets', 'housing', 'has_car', 'smoking', 'alcohol',
@@ -100,20 +100,18 @@ class UserProfile extends Model
        /**
      * Фильтр по возрасту (от и до). Защита от null.
      */
+    // Переписываем скоуп на молниеносный:
     public function scopeBetweenAges($query, ?int $minAge = 18, ?int $maxAge = 99)
     {
-        // Защита от null и переворота (если мин больше макса)
         $minAge = $minAge ?? 18;
         $maxAge = $maxAge ?? 99;
         
         if ($minAge > $maxAge) {
-            [$minAge, $maxAge] = [$maxAge, $minAge]; // Свапаем местами
+            [$minAge, $maxAge] = [$maxAge, $minAge];
         }
 
-        $minDate = now()->subYears($maxAge)->startOfDay()->format('Y-m-d');
-        $maxDate = now()->subYears($minAge)->endOfDay()->format('Y-m-d');
-        
-        return $query->whereBetween('birth_date', [$minDate, $maxDate]);
+        // Теперь использует ИНДЕКС!
+        return $query->whereBetween('age', [$minAge, $maxAge]);
     }
 
     // ============================================

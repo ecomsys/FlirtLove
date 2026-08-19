@@ -248,8 +248,8 @@ new #[Layout('layouts.admin')] class extends Component
         </div>
 
         <div class="flex items-center gap-2 flex-1 justify-end ml-auto">
-            <div class="relative w-48">
-                <x-ui.input wire:model.live.debounce.300ms="search" type="search" placeholder="Поиск по имени или ID..." class="pl-9 pr-8" />
+            <div class="relative w-55">
+                <x-ui.input wire:model.live.debounce.300ms="search" type="search" placeholder="Поиск по имени или ID..." class="pl-9 " />
                 <x-lucide-search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                 @if (!empty($search))
                     <button wire:click="$set('search', '')" class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"><x-lucide-x class="w-4 h-4" /></button>

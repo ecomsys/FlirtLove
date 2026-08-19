@@ -32,8 +32,14 @@ class AppServiceProvider extends ServiceProvider
     /**
      * Bootstrap any application services.
      */
-    public function boot(): void
+    public function boot(): void        
     {   
+        // счетчик непрочитанных сообшений
+        \App\Models\Message::observe(\App\Observers\MessageObserver::class);
+
+        // Высчитываем возраст юзера
+        \App\Models\UserProfile::observe(\App\Observers\UserProfileObserver::class);
+
         // наблюдаем за измененимя чтобы сразу обновлять таблицу
         Photo::observe(PhotoObserver::class);
 

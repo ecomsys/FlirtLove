@@ -44,6 +44,9 @@ return Application::configure(basePath: dirname(__DIR__))
             ->everyMinute()
             ->withoutOverlapping(10)
             ->onOneServer();
+
+        // Запускаем каждый час
+        $schedule->command('subscriptions:process')->hourly()->withoutOverlapping();
         
         // КАРАНТИННЫЕ СЛУЖБЫ    
 
