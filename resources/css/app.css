@@ -1,6 +1,7 @@
 /* resources/css/app.css */
 @import "./blatui.css";
 @import "./components.css";
+@import "./tiny.css";
 
 /* Решение проблемы с автокомплитом (фон и цвет текста) */
 input:-webkit-autofill,

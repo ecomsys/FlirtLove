@@ -30,16 +30,29 @@ class UserMatch extends Model
      * Меньший ID всегда идет в user1_id, больший в user2_id.
      * Это защищает от багов, когда Вася лайкает Машу (10-5), а Маша Васю (5-10).
      */
-    public static function createMatch(int $userA, int $userB): self
+   public static function createMatch(int $userA, int $userB): self
     {
         $user1Id = min($userA, $userB);
         $user2Id = max($userA, $userB);
 
-        // firstOrCreate безопасно создаст мэтч, если его еще нет
-        return self::firstOrCreate(
-            ['user1_id' => $user1Id, 'user2_id' => $user2Id],
-            ['status' => 'active']
-        );
+        try {
+            // Пытаемся создать. Если параллельный процесс уже создал - БД выдаст ошибку дубля.
+            return self::create([
+                'user1_id' => $user1Id,
+                'user2_id' => $user2Id,
+                'status' => 'active'
+            ]);
+        } catch (\Illuminate\Database\QueryException $e) {
+            // Код 23505 - ошибка уникального индекса в PostgreSQL
+            // Если упали именно из-за дубля (состояние гонки) - просто забираем существующий мэтч
+            if ($e->errorInfo[1] === 23505) { 
+                return self::where('user1_id', $user1Id)
+                    ->where('user2_id', $user2Id)
+                    ->firstOrFail();
+            }
+            // Если ошибка другая - пробрасываем дальше
+            throw $e;
+        }
     }
 
     // ============================================

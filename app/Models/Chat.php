@@ -95,21 +95,23 @@ class Chat extends Model
      */
     public static function getOrCreateBetween(int $userAId, int $userBId): self
     {
-        // Ищем чат, где оба юзера являются участниками.
-        // Это безопаснее, чем хардкодить user1/user2 в таблице chats.
-        $chat = self::where('type', 'private')
-            ->whereHas('participants', fn($q) => $q->where('user_id', $userAId))
-            ->whereHas('participants', fn($q) => $q->where('user_id', $userBId))
-            ->first();
+        $hash = md5(min($userAId, $userBId) . '-' . max($userAId, $userBId));
 
-        if (!$chat) {
-            $chat = self::create(['type' => 'private', 'last_message_at' => now()]);
+        try {
+            $chat = self::create([
+                'participants_hash' => $hash,
+                'type' => 'private',
+                'last_message_at' => now()
+            ]);
             self::ensureParticipantsExist($chat, $userAId, $userBId);
+            return $chat;
+        } catch (\Illuminate\Database\QueryException $e) {
+            if ($e->errorInfo[1] === 23505) { // Дубль! Чат уже создан параллельно
+                return self::where('participants_hash', $hash)->firstOrFail();
+            }
+            throw $e;
         }
-
-        return $chat;
     }
-
     /**
      * Создать или получить чат поддержки.
      */

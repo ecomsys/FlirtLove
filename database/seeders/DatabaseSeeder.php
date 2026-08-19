@@ -2,7 +2,7 @@
 
 namespace Database\Seeders;
 
-use App\Models\{AdminLog, Broadcast, Chat, ChatParticipant, FraudAlert, Gift, Media, Message, Photo, PhotoComment, Album, Report, StopWord, SubscriptionPlan, Swipe, Transaction, User, UserGift, UserMatch, UserPreference, UserProfile, UserSubscription, Setting, Diary, DiaryComment, DiarySubscription, Rubric};
+use App\Models\{AdminLog, BlogCategory, BlogPost, Broadcast, Chat, ChatParticipant, FraudAlert, Gift, Media, Message, Photo, PhotoComment, Album, Report, StopWord, SubscriptionPlan, Swipe, Transaction, User, UserGift, UserMatch, UserPreference, UserProfile, UserSubscription, Setting, Diary, DiaryComment, DiarySubscription, Rubric};
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -34,7 +34,7 @@ class DatabaseSeeder extends Seeder
         // ============================================
         // 3. ОЧИСТКА КЕША НАСТРОЕК
         // ============================================
-        Cache::forget('settings_all'); // Ключ из нашей новой модели Setting
+        Cache::forget('settings_all'); 
         $this->command->info('🗑️ Кеш настроек очищен');
         $this->command->info('');
 
@@ -53,14 +53,15 @@ class DatabaseSeeder extends Seeder
             SettingSeeder::class,
         ]);
 
-        // ЭТАП 2: СПРАВОЧНИКИ
-        $this->command->info('📌 ЭТАП 2: Справочники');
+        // ЭТАП 2: СПРАВОЧНИКИ И БЛОГ
+        $this->command->info('📌 ЭТАП 2: Справочники и Блог');
         $this->call([
             SubscriptionPlanSeeder::class,
             GiftSeeder::class,
             StopWordSeeder::class,
             PageSeeder::class,  
             RubricSeeder::class,
+            BlogSeeder::class, // <--- ДОБАВЛЕНО СЮДА
         ]);
 
         // ЭТАП 3: КОНТЕНТ ЮЗЕРОВ
@@ -131,6 +132,11 @@ class DatabaseSeeder extends Seeder
         $this->command->info('   │ 📔 Дневников              │ ' . str_pad(Diary::count(), 8, ' ', STR_PAD_LEFT) . ' │');
         $this->command->info('   │ 💬 Комментариев (дневник) │ ' . str_pad(DiaryComment::count(), 8, ' ', STR_PAD_LEFT) . ' │');
         $this->command->info('   │ 📁 Рубрик                 │ ' . str_pad(Rubric::count(), 8, ' ', STR_PAD_LEFT) . ' │');
+        
+        // ДОБАВЛЕННАЯ СТАТИСТИКА БЛОГА
+        $this->command->info('   │ 📰 Рубрик (блог)         │ ' . str_pad(BlogCategory::count(), 8, ' ', STR_PAD_LEFT) . ' │');
+        $this->command->info('   │ 📝 Статей (блог)         │ ' . str_pad(BlogPost::count(), 8, ' ', STR_PAD_LEFT) . ' │');
+
         $this->command->info('   │ 👉 Свайпов                │ ' . str_pad(Swipe::count(), 8, ' ', STR_PAD_LEFT) . ' │');
         $this->command->info('   │ ❤️ Матчей                 │ ' . str_pad(UserMatch::count(), 8, ' ', STR_PAD_LEFT) . ' │');
         $this->command->info('   │ 💌 Чатов                  │ ' . str_pad(Chat::count(), 8, ' ', STR_PAD_LEFT) . ' │');
@@ -161,10 +167,11 @@ class DatabaseSeeder extends Seeder
         $driver = DB::connection()->getDriverName();
 
         if ($driver === 'pgsql') {
-            // ✅ PostgreSQL: правильный порядок очистки с каскадом
             DB::statement('TRUNCATE TABLE 
                 admin_logs,
                 broadcasts,
+                blog_posts,     
+                blog_categories, 
                 chat_participants,
                 chats,
                 fraud_alerts,
@@ -186,7 +193,6 @@ class DatabaseSeeder extends Seeder
                 gifts,
                 settings,
                 users,
-                -- ФИКС: Добавили таблицы дневников!
                 diary_comments,
                 diary_subscriptions,
                 diaries,
@@ -194,12 +200,12 @@ class DatabaseSeeder extends Seeder
                 RESTART IDENTITY CASCADE'
             );
         } else {
-            // ✅ MySQL: отключаем проверку ключей
             DB::statement('SET FOREIGN_KEY_CHECKS=0');
             
-            // Удаляем все данные
             AdminLog::query()->delete();
             Broadcast::query()->delete();
+            BlogPost::query()->delete();     
+            BlogCategory::query()->delete(); 
             ChatParticipant::query()->delete();
             Message::query()->delete();
             Chat::query()->delete();
@@ -222,20 +228,19 @@ class DatabaseSeeder extends Seeder
             Setting::query()->delete();
             User::query()->delete();
             
-            // ФИКС: Добавили очистку таблиц дневников!
             DiaryComment::query()->delete();
             DiarySubscription::query()->delete();
             Diary::query()->delete();
             Rubric::query()->delete();
             
-            // Сброс автоинкремента
             $tables = [
                 'users', 'user_profiles', 'user_preferences', 'albums', 'photos', 
                 'photo_comments', 'reports', 'stop_words', 'swipes', 'user_matches', 
                 'chats', 'chat_participants', 'messages', 'gifts', 'user_gifts', 
                 'subscription_plans', 'user_subscriptions', 'transactions', 'fraud_alerts', 
                 'admin_logs', 'broadcasts', 'settings', 'media',
-                // ФИКС: Добавили таблицы дневников!
+                'blog_categories', 
+                'blog_posts',      
                 'diary_comments', 'diary_subscriptions', 'diaries', 'rubrics'
             ];
             
@@ -261,7 +266,6 @@ class DatabaseSeeder extends Seeder
             }
         }
         
-        // Создаем папки заново
         foreach ($directories as $dir) {
             if (!Storage::disk('public')->exists($dir)) {
                 Storage::disk('public')->makeDirectory($dir);

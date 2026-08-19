@@ -15,7 +15,7 @@ class User extends Authenticatable implements MustVerifyEmail
     use HasFactory, Notifiable, SoftDeletes;
 
     protected $fillable = [
-        'name', 'email', 'password',
+        'name', 'email', 'password', 'phone',
         'role', 'status', 'ban_reason', 'banned_until',
         'is_premium', 'premium_expires_at',
         'is_verified', 'has_completed_onboarding',
@@ -31,13 +31,14 @@ class User extends Authenticatable implements MustVerifyEmail
         return [
             'password' => 'hashed',
             'email_verified_at' => 'datetime',
+            'phone_verified_at' => 'datetime',
             'last_login_at' => 'datetime',
             'last_seen' => 'datetime',
             'premium_expires_at' => 'datetime',
             'banned_until' => 'datetime',
             'is_premium' => 'boolean',
             'is_verified' => 'boolean',
-            'has_completed_onboarding' => 'boolean',
+            'has_completed_onboarding' => 'boolean',            
         ];
     }
 

@@ -54,11 +54,9 @@ return new class extends Migration
             // Когда юзер открывает экран "Мэтчи", запрос выглядит так:
             // SELECT * FROM user_matches WHERE (user1_id = ? OR user2_id = ?) AND status = 'active'
             // Без этих двух индексов база будет сканировать всю таблицу (Full Table Scan).
-            $table->index('user1_id');
-            $table->index('user2_id');
-            
-            // 3. Для быстрой фильтрации только активных мэтчей
-            $table->index('status');
+            // Заменяем три одиночных индекса на два составных + один по статусу для админки
+            $table->index(['user1_id', 'status']);
+            $table->index(['user2_id', 'status']);
         });
     }
 

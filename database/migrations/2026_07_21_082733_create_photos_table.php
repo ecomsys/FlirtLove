@@ -48,6 +48,9 @@ return new class extends Migration
             // Порядок сортировки фото внутри альбома/профиля (ручная сортировка юзером)
             $table->unsignedInteger('position')->default(0);
 
+            // Он считает "отпечаток" картинки. Если хэши совпадают или почти совпадают — это одно и то же фото.
+            $table->string('phash', 16)->nullable()->index(); // Perceptual hash (64 bit -> 16 hex chars)
+
             $table->timestamps();
             
             // Мягкое удаление. В дейтинге критически важно: фото не удаляется с диска и из БД физически, 

@@ -24,6 +24,7 @@ class Photo extends Model
         'reject_reason',     // Новое: причина отклонения
         'moderated_by',      // Новое: ID админа
         'moderated_at',      // Новое: Время проверки
+        'phash',
         'is_primary',
         'is_intimate',
         'position'

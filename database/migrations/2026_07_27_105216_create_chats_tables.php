@@ -14,6 +14,8 @@ return new class extends Migration
             // === ТИП ЧАТА ===
             // private (личный чат между юзерами), support (чат с техподдержкой)
             $table->enum('type', ['private', 'support'])->default('private');
+
+            $table->string('participants_hash', 32)->nullable()->unique(); // MD5 хэш
             
             // === КЭШ ПОСЛЕДНЕГО СООБЩЕНИЯ (Денормализация) ===
             // Чтобы вывести список чатов юзера (сортировка по последнему сообщению),

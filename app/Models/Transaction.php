@@ -115,20 +115,25 @@ class Transaction extends Model
     }
 
     /**
-     * Оформить возврат (Refund).
-     * В идеале здесь также должна быть логика снятия VIP/кредитов у юзера,
-     * но лучше это делать в сервис-классе BillingService, чтобы не нагружать модель.
+     * Оформить возврат (Refund).    
      */
-    public function markAsRefunded(array $metaData = []): bool
+   public function markAsRefunded(array $metaData = []): bool
     {
         if ($this->status !== 'success') {
             return false; // Нельзя вернуть деньги за платеж, который не прошел
         }
 
-        return $this->update([
+        $updated = $this->update([
             'status' => 'refunded',
             'meta' => array_merge($this->meta ?? [], $metaData),
         ]);
+
+        // Если статус успешно обновлен — запускам событие, которое снимет VIP/кредиты!
+        if ($updated) {
+            event(new \App\Events\TransactionRefunded($this));
+        }
+
+        return $updated;
     }
 
     // ============================================

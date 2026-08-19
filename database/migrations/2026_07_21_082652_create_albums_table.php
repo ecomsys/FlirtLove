@@ -30,6 +30,8 @@ return new class extends Migration
             $table->unsignedInteger('photos_count')->default(0);
             
             $table->timestamps();
+
+            $table->softDeletes();
             
             // Индекс для быстрого вывода публичных/приватных альбомов конкретного юзера
             $table->index(['user_id', 'is_private']);

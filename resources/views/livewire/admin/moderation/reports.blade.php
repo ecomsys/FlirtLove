@@ -371,7 +371,7 @@ new #[Layout('layouts.admin')] class extends Component
                     
                     <!-- Жалобщик -->
                     <x-ui.table-cell>
-                       <a href="{{ route('admin.users.show', $report->reporter?->id) }}" class="flex items-center gap-2 block group" wire:navigate>                                                 
+                       <a href="{{ route('admin.users.show', $report->reporter?->id) }}" class="flex items-center gap-2 group" wire:navigate>                                                 
                             <x-avatar src="{{ $report->reporter?->avatar_url }}" name="{{ $report->reporter?->name ?? 'Удален' }}" size="sm" userId="{{ $report->reporter_id }}" showStatus="true" :isOnline="$report->reporter?->is_online" />
                             <div>
                                 <div class="flex gap-2 items-center group-hover:text-primary transition-colors">
@@ -389,7 +389,7 @@ new #[Layout('layouts.admin')] class extends Component
                     <!-- Объект жалобы -->
                     <x-ui.table-cell>
                         @if($report->reportable_type === \App\Models\User::class)
-                            <a href="{{ route('admin.users.show', $report->reported?->id) }}" class="flex items-center gap-2 block group" wire:navigate>                           
+                            <a href="{{ route('admin.users.show', $report->reported?->id) }}" class="flex items-center gap-2 group" wire:navigate>                           
                                 <x-avatar src="{{ $report->reported?->avatar_url }}" name="{{ $report->reported?->name ?? 'Удален' }}" size="sm" userId="{{ $report->reported_id }}" showStatus="true" :isOnline="$report->reported?->is_online" />
                                 <div>
                                     <div class="flex gap-2 items-center group-hover:text-primary transition-colors">

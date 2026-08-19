@@ -59,11 +59,15 @@ new class extends Component {
     /**
      * Обработка загруженных файлов: валидация, сохранение во temp и отправка в очередь.
      */
-    public function updatedFiles(): void
+        public function updatedFiles(): void
     {
+        // ФИКС: Защита от двойного срабатывания при очистке массива files
+        if (empty($this->files)) {
+            return;
+        }
+
         $maxSize = config("media.collections.{$this->collection->value}.max_file_size_kb", 5120);
         
-        // ФИКС: Строго только картинки! Никаких видео и svg.
         $this->validate([
             'files.*' => "file|mimes:jpg,jpeg,png,webp,gif|max:{$maxSize}",
         ]);
@@ -327,10 +331,20 @@ new class extends Component {
                 $hasProcessing = $this->mediaItems->contains(fn($m) => $m->type === 'image' && empty($m->variants));
             @endphp
 
-            <div x-data="{ activeMedia: { id: null, url: '' } }" 
+                        <div x-data="{ activeMedia: { id: null, url: '' } }" 
                  class="p-4 overflow-y-auto min-h-[15rem] max-h-[calc(100vh-10rem)] flex-1 bg-muted/10"
                  @if($hasProcessing) wire:poll.3s @endif>
                 
+                @php 
+                    // Вычисляем пропорции тумбнейла для текущей коллекции
+                    $thumbConfig = collect($this->cropRules['variants'])->firstWhere('key', 'thumb');
+                    $thumbSize = $thumbConfig['size'] ?? '300x300';
+                    $parts = explode('x', strtolower($thumbSize));
+                    $ratioW = (int) rtrim($parts[0] ?? '300', 'w');
+                    // Если указан только один размер (например '800w'), делаем квадрат
+                    $ratioH = isset($parts[1]) ? (int) $parts[1] : $ratioW;
+                @endphp
+
                 @if($this->mediaItems->isEmpty())
                     <div class="flex flex-col items-center justify-center py-12 text-muted-foreground">
                         <x-lucide-image-off class="w-12 h-12 opacity-30 mb-2" />
@@ -345,7 +359,8 @@ new class extends Component {
                                     <div wire:click="{{ $isProcessing ? '' : 'selectMedia(' . $media->id . ')' }}" 
                                          wire:key="media-{{ $media->id }}" 
                                          @contextmenu.prevent="activeMedia = { id: {{ $media->id }}, url: '{{ asset($media->url) }}' }"
-                                         class="relative group aspect-square rounded-lg overflow-hidden transition-all {{ $isProcessing ? 'opacity-50 cursor-wait' : 'cursor-pointer ' . ($selectedMediaId === $media->id ? 'ring-2 ring-primary ring-offset-2 ring-offset-card border-transparent' : 'border border-border hover:border-primary/50') }} bg-background">                                        
+                                         class="relative group rounded-lg overflow-hidden transition-all {{ $isProcessing ? 'opacity-50 cursor-wait' : 'cursor-pointer ' . ($selectedMediaId === $media->id ? 'ring-2 ring-primary ring-offset-2 ring-offset-card border-transparent' : 'border border-border hover:border-primary/50') }} bg-background" 
+                                         style="aspect-ratio: {{ $ratioW }} / {{ $ratioH }};">                                        
                                         
                                         <div class="w-full h-full block" title="{{ $isProcessing ? 'Идет обработка...' : 'Выбрать: ' . $media->file_name }}">
                                             <x-media-image src="{{ $media->getVariantUrl('thumb') }}" class="w-full h-full object-cover {{ $selectedMediaId === $media->id ? 'opacity-90' : 'group-hover:scale-110 transition-transform' }}"/>

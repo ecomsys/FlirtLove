@@ -104,10 +104,16 @@ class MediaProcessorService
 
     private function parseSize(string $size): array
     {
+        $size = strtolower(trim($size));
+        
         if (str_ends_with($size, 'w')) {
             return [(int) rtrim($size, 'w'), null];
         }
+        
         $parts = explode('x', $size);
-        return [(int) $parts[0], (int) ($parts[1] ?? 0)];
+        $width = (int) ($parts[0] ?? 0);
+        $height = (int) ($parts[1] ?? 0);
+        
+        return [$width, $height];
     }
 }

@@ -14,6 +14,8 @@ return new class extends Migration
             $table->string('name')->nullable(); 
             $table->string('email')->unique();
             $table->timestamp('email_verified_at')->nullable();
+             $table->string('phone', 20)->nullable()->unique(); // Верификация по SMS
+            $table->timestamp('phone_verified_at')->nullable(); 
             $table->string('password')->nullable(); // nullable для соцсетей
             $table->rememberToken();
             $table->timestamps();

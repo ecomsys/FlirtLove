@@ -334,184 +334,119 @@ new #[Layout('layouts.admin')] class extends Component
         </div>
     </div>
 
-    <style>
-        .tinymce-wrapper .tox.tox-tinymce {
-            border: 1px solid var(--border) !important;
-            border-radius: 6px !important;
-            height: 100% !important; 
-            display: flex !important;
-            flex-direction: column !important;
-        }
-        .tinymce-wrapper .tox .tox-editor-container {
-            flex: 1 !important;
-            display: flex !important;
-            flex-direction: column !important;
-        }
-        .tinymce-wrapper .tox .tox-edit-area {
-            flex: 1 !important;
-            border-top: none !important;
-        }
-        .tinymce-wrapper .tox .tox-toolbar-overlord,
-        .tinymce-wrapper .tox .tox-toolbar__primary {
-            background: var(--card) !important;
-            border-bottom: 1px solid var(--border) !important;
-        }
-        .tinymce-wrapper .tox .tox-tbtn {
-            color: var(--muted-foreground) !important;
-        }
-        .tinymce-wrapper .tox .tox-tbtn svg {
-            fill: currentColor !important;
-        }
-        .tinymce-wrapper .tox .tox-tbtn:hover {
-            background: var(--accent) !important;
-            color: var(--accent-foreground) !important;
-        }
-        .tinymce-wrapper .tox .tox-tbtn--enabled,
-        .tinymce-wrapper .tox .tox-tbtn--enabled:hover {
-            background: var(--primary) !important;
-            color: var(--primary-foreground) !important;
-        }
-        .tinymce-wrapper .tox .tox-tbtn--select span {
-            color: var(--foreground) !important;
-        }       
-    </style>
+   <!-- Подключаем TinyMCE и наш внешний файл конфигурации -->
+    <script src="https://cdn.jsdelivr.net/npm/tinymce@6.8.4/tinymce.min.js"></script>
+    <script src="{{ asset('js/tinymce.config.js') }}"></script>
 
-<script src="https://cdn.jsdelivr.net/npm/tinymce@6.8.4/tinymce.min.js"></script>
-<script>
-    window.pageForm = function () {
-        return {
-            sidebarOpen: true,
-            themeObserver: null,
-            currentTheme: 'light',
-            isEditorLoaded: false,
-            textareaElement: null,
-            typingTimer: null, // Переменная для дебаунса (задержки отправки данных)
+    <script>
+        window.pageForm = function () {
+            return {
+                sidebarOpen: true,
+                themeObserver: null,
+                currentTheme: 'light',
+                isEditorLoaded: false,
+                textareaElement: null,
+                typingTimer: null,
 
-            init() {
-                // Ждем отрисовки DOM перед инициализацией редактора
-                this.$nextTick(() => {
-                    this.textareaElement = document.getElementById('tinyMceBody');
-                    this.waitForTinyMCE();
-                    this.setupThemeWatcher();
-                });
-            },
+                init() {
+                    // ФИКС: Небольшая задержка (150мс), чтобы DOM от Livewire успел полностью "осесть" после wire:navigate
+                    setTimeout(() => {
+                        this.$nextTick(() => {
+                            this.textareaElement = document.getElementById('tinyMceBody');
+                            if (this.textareaElement) {
+                                this.waitForTinyMCE();
+                            }
+                            this.setupThemeWatcher();
+                        });
+                    }, 150);
+                },
 
-            // Ждем, пока глобальный объект tinymce будет доступен (нужно для wire:navigate)
-            waitForTinyMCE() {
-                if (typeof tinymce !== 'undefined' && this.textareaElement) {
-                    this.initTinyMCE();
-                } else {
-                    // Если скрипт еще не загрузился, проверяем снова через 100мс
-                    setTimeout(() => this.waitForTinyMCE(), 100);
-                }
-            },
+                waitForTinyMCE() {
+                    if (typeof tinymce !== 'undefined' && this.textareaElement) {
+                        this.initTinyMCE();
+                    } else {
+                        setTimeout(() => this.waitForTinyMCE(), 100);
+                    }
+                },
 
-            getTheme() {
-                return document.documentElement.classList.contains('dark') ? 'dark' : 'light';
-            },
+                getTheme() {
+                    return document.documentElement.classList.contains('dark') ? 'dark' : 'light';
+                },
 
-            getCssVar(name) {
-                return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-            },
+                getCssVar(name) {
+                    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+                },
 
-            initTinyMCE() {
-                if (typeof tinymce === 'undefined' || !this.textareaElement) return;
-                if (tinymce.get('tinyMceBody')) return;
-
-                this.currentTheme = this.getTheme();
-                const isDark = this.currentTheme === 'dark';
-
-                const bgColor = this.getCssVar('--background');
-                const textColor = this.getCssVar('--foreground');
-                const borderColor = this.getCssVar('--border');
-                const mutedColor = this.getCssVar('--muted-foreground');
-                const mutedBgColor = this.getCssVar('--muted');
-
-                tinymce.init({
-                    selector: '#tinyMceBody',
-                    license_key: 'gpl',
-                    menubar: false,
-                    height: '100%',
-                    icons: 'default',
-                    plugins: 'lists link table image autolink wordcount code fullscreen quickbars',
-                    toolbar: 'undo redo | blocks | bold italic underline strikethrough | alignleft aligncenter alignright | bullist numlist outdent indent | link table image | code fullscreen',
-                    skin: isDark ? 'oxide-dark' : 'oxide',
-                    content_css: isDark ? 'dark' : 'default',
-                    statusbar: false, 
-                    placeholder: '',
+                initTinyMCE() {
+                    if (typeof tinymce === 'undefined' || !this.textareaElement) return;
                     
-                    content_style: `
-                        body { 
-                            background-color: ${bgColor} !important; 
-                            color: ${textColor} !important;
-                            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; 
-                            font-size: 14px; 
-                            line-height: 1.6; 
-                            padding: 16px; 
-                            margin: 0 !important;
-                        }
-                        h1, h2, h3, h4 { color: ${textColor} !important; }
-                        h1 { font-size: 24px; font-weight: 700; margin-top: 16px; margin-bottom: 8px; }
-                        h2 { font-size: 20px; font-weight: 600; margin-top: 16px; margin-bottom: 8px; }
-                        p { margin: 0 0 1rem 0; }
-                        a { color: #3b82f6; text-decoration: underline; }
-                        blockquote { border-left: 4px solid ${borderColor}; padding-left: 16px; color: ${mutedColor}; font-style: italic; margin: 1rem 0; }
-                        pre { background-color: ${mutedBgColor}; color: ${textColor}; padding: 1rem; border-radius: 6px; font-family: monospace; overflow-x: auto; }
-                        table { border-collapse: collapse; width: 100%; }
-                        th, td { border: 1px solid ${borderColor}; padding: 8px; }
-                    `,
+                    // ФИКС: Жестко убиваем старые инстансы, если они зависли, чтобы не было гонок
+                    if (tinymce.get('tinyMceBody')) {
+                        tinymce.get('tinyMceBody').remove();
+                    }
+
+                    this.currentTheme = this.getTheme();
+                    const isDark = this.currentTheme === 'dark';
+
+                    const bgColor = this.getCssVar('--background');
+                    const textColor = this.getCssVar('--foreground');
+                    const borderColor = this.getCssVar('--border');
+                    const mutedColor = this.getCssVar('--muted-foreground');
+                    const mutedBgColor = this.getCssVar('--muted');
+
+                    // Достаем настройки из внешнего файла
+                    const config = window.getTinyMceConfig(isDark, textColor, bgColor, borderColor, mutedColor, mutedBgColor);
                     
-                    setup: (editor) => {
+                    // Добавляем селектор и коллбэки
+                    config.selector = '#tinyMceBody';
+                    config.setup = (editor) => {
                         editor.on('init', () => {
                             this.isEditorLoaded = true; 
                         });
 
                         editor.on('input change keyup undo redo SetContent', () => {
-                            // ФИКС ПРОИЗВОДИТЕЛЬНОСТИ: Обновляем Livewire не чаще раза в 500мс
-                            // Это предотвращает DDoS сервера при быстром наборе текста
                             clearTimeout(this.typingTimer);
                             this.typingTimer = setTimeout(() => {
-                                if (this.textareaElement) {
-                                    this.textareaElement.value = editor.getContent();
-                                    this.textareaElement.dispatchEvent(new Event('input', { bubbles: true }));
-                                }
+                                // ФИКС: Напрямую пушим в Livewire, минуя баги с textarea
+                                this.$wire.set('body', editor.getContent());
                             }, 500);
                         });
+                    };
+
+                    tinymce.init(config);
+                },
+
+                destroyTinyMCE() {
+                    if (typeof tinymce !== 'undefined' && tinymce.get('tinyMceBody')) {
+                        this.isEditorLoaded = false; 
+                        clearTimeout(this.typingTimer);
+                        tinymce.get('tinyMceBody').remove();
                     }
-                });
-            },
+                },
 
-            destroyTinyMCE() {
-                if (typeof tinymce !== 'undefined' && tinymce.get('tinyMceBody')) {
-                    this.isEditorLoaded = false; 
-                    clearTimeout(this.typingTimer); // Сбрасываем таймер при уничтожении
-                    tinymce.get('tinyMceBody').remove();
-                }
-            },
-
-            setupThemeWatcher() {
-                this.themeObserver = new MutationObserver((mutations) => {
-                    mutations.forEach((mutation) => {
-                        if (mutation.attributeName === 'class') {
-                            const newTheme = this.getTheme();
-                            if (newTheme !== this.currentTheme) {
-                                this.destroyTinyMCE();
-                                setTimeout(() => this.initTinyMCE(), 50);
+                setupThemeWatcher() {
+                    this.themeObserver = new MutationObserver((mutations) => {
+                        mutations.forEach((mutation) => {
+                            if (mutation.attributeName === 'class') {
+                                const newTheme = this.getTheme();
+                                if (newTheme !== this.currentTheme) {
+                                    this.destroyTinyMCE();
+                                    setTimeout(() => this.initTinyMCE(), 50);
+                                }
                             }
-                        }
+                        });
                     });
-                });
-                this.themeObserver.observe(document.documentElement, { attributes: true });
-            },
+                    this.themeObserver.observe(document.documentElement, { attributes: true });
+                },
 
-            destroy() {
-                if (this.themeObserver) {
-                    this.themeObserver.disconnect();
-                    this.themeObserver = null;
+                destroy() {
+                    if (this.themeObserver) {
+                        this.themeObserver.disconnect();
+                        this.themeObserver = null;
+                    }
+                    this.destroyTinyMCE();
                 }
-                this.destroyTinyMCE();
-            }
+            };
         };
-    };
-</script>
+    </script>
 </div>

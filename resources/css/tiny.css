@@ -1,0 +1,39 @@
+.tinymce-wrapper .tox.tox-tinymce {
+    border: 0.0625rem solid var(--border) !important;
+    border-radius: 0.4rem !important;
+    height: 100% !important;
+    display: flex !important;
+    flex-direction: column !important;
+}
+.tinymce-wrapper .tox .tox-editor-container {
+    flex: 1 !important;
+    display: flex !important;
+    flex-direction: column !important;
+}
+.tinymce-wrapper .tox .tox-edit-area {
+    flex: 1 !important;
+    border-top: none !important;
+}
+.tinymce-wrapper .tox .tox-toolbar-overlord,
+.tinymce-wrapper .tox .tox-toolbar__primary {
+    background: var(--card) !important;
+    border-bottom: 0.0625rem solid var(--border) !important;
+}
+.tinymce-wrapper .tox .tox-tbtn {
+    color: var(--muted-foreground) !important;
+}
+.tinymce-wrapper .tox .tox-tbtn svg {
+    fill: currentColor !important;
+}
+.tinymce-wrapper .tox .tox-tbtn:hover {
+    background: var(--accent) !important;
+    color: var(--accent-foreground) !important;
+}
+.tinymce-wrapper .tox .tox-tbtn--enabled,
+.tinymce-wrapper .tox .tox-tbtn--enabled:hover {
+    background: var(--primary) !important;
+    color: var(--primary-foreground) !important;
+}
+.tinymce-wrapper .tox .tox-tbtn--select span {
+    color: var(--foreground) !important;
+}
