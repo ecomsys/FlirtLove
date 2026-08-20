@@ -66,8 +66,8 @@ Route::middleware(['auth', 'verified'])->prefix('admin')->name('admin.')->group(
         Volt::route('/communication/templates', 'admin.communication.templates')->name('communication.templates');
 
         // Безопасность
-        Volt::route('/security/blocks', 'admin.security.blocks')->name('security.blocks');
-        Volt::route('/security/fraud-alerts', 'admin.security.fraud-alerts')->name('security.fraud-alerts');
+        Volt::route('/security/block-signals', 'admin.security.block-signals.index')->name('security.block-signals.index');
+        Volt::route('/security/fraud-alerts', 'admin.security.fraud-alerts.index')->name('security.fraud-alerts.index');
        
     });
 
@@ -94,6 +94,9 @@ Route::middleware(['auth', 'verified'])->prefix('admin')->name('admin.')->group(
         Volt::route('/system/broadcasts/{broadcast}/edit', 'admin.system.broadcasts.form')->name('system.broadcasts.edit');
        
         Volt::route('/system/journal-logs', 'admin.system.journal-logs')->name('system.journal-logs');
+
+        Volt::route('/system/geo-locations', 'admin.system.geo-locations.index')->name('system.geo-locations.index');
+
         Volt::route('/system/laravel-logs', 'admin.system.laravel-logs')->name('system.laravel-logs');
         
         // Управление персоналом

@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Actions;
+namespace App\Actions\Web;
 
 use App\Models\Swipe;
 use App\Models\User;

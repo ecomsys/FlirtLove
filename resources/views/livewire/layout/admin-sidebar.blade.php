@@ -168,21 +168,21 @@ new class extends Component {
     <!-- 🚨 Безопасность (Только Admin, Moderator) -->
     <p class="px-3 text-xs uppercase text-muted-foreground/60 mt-4 mb-1">Безопасность</p>
     
-    @php $route = 'admin.security.fraud-alerts'; $exists = Route::has($route); @endphp
+    @php $route = 'admin.security.fraud-alerts.index'; $exists = Route::has($route); @endphp
     <a href="{{ $exists ? route($route) : '#' }}" {{ $exists ? 'wire:navigate' : '' }}
-        class="flex items-start gap-2 px-3 py-2 rounded-md text-sm font-medium {{ request()->routeIs('admin.security.fraud-alerts') ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-accent hover:text-foreground' }}">
+        class="flex items-start gap-2 px-3 py-2 rounded-md text-sm font-medium {{ request()->routeIs($route) ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-accent hover:text-foreground' }}">
         <x-lucide-siren class="w-4 h-4" />
         Антифрод
-        @if (($highSeverityAlerts ?? 0) > 0 && $exists)
+        {{-- @if (($highSeverityAlerts ?? 0) > 0 && $exists)
             <span class="ml-auto text-xs bg-destructive text-white px-2 py-0.5 rounded-full animate-pulse">{{ $highSeverityAlerts }}</span>
-        @endif
+        @endif --}}
     </a>
 
-    @php $route = 'admin.security.blocks'; $exists = Route::has($route); @endphp
+    @php $route = 'admin.security.block-signals.index'; $exists = Route::has($route); @endphp
     <a href="{{ $exists ? route($route) : '#' }}" {{ $exists ? 'wire:navigate' : '' }}
-        class="flex items-start gap-2 px-3 py-2 rounded-md text-sm font-medium {{ request()->routeIs('admin.security.blocks') ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-accent hover:text-foreground' }}">
+        class="flex items-start gap-2 px-3 py-2 rounded-md text-sm font-medium {{ request()->routeIs($route) ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-accent hover:text-foreground' }}">
         <x-lucide-user-x class="w-4 h-4" />
-        Блокировки
+        Сигналы блокировки
     </a>
     @endif
 
@@ -233,6 +233,13 @@ new class extends Component {
         class="flex items-start gap-2 px-3 py-2 rounded-md text-sm font-medium {{ request()->routeIs('admin.system.journal-logs') ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-accent hover:text-foreground' }}">
         <x-lucide-scroll-text class="w-4 h-4" />
         Журнал действий
+    </a>
+
+      @php $route = 'admin.system.geo-locations.index'; $exists = Route::has($route); @endphp
+    <a href="{{ $exists ? route($route) : '#' }}" {{ $exists ? 'wire:navigate' : '' }}
+        class="flex items-start gap-2 px-3 py-2 rounded-md text-sm font-medium {{ request()->routeIs($route) ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-accent hover:text-foreground' }}">
+        <x-lucide-scroll-text class="w-4 h-4" />
+        Блокировка по Geo IP
     </a>
 
     @php $route = 'admin.system.blog.index'; $exists = Route::has($route); @endphp

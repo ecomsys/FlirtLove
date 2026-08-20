@@ -120,6 +120,17 @@
       0 => 'Carbon\\Laravel\\ServiceProvider',
     ),
   ),
+  'nnjeim/world' => 
+  array (
+    'aliases' => 
+    array (
+      'Country' => 'Nnjeim\\World\\World',
+    ),
+    'providers' => 
+    array (
+      0 => 'Nnjeim\\World\\WorldServiceProvider',
+    ),
+  ),
   'nunomaduro/collision' => 
   array (
     'providers' => 
@@ -139,6 +150,17 @@
     'providers' => 
     array (
       0 => 'Pest\\Laravel\\PestServiceProvider',
+    ),
+  ),
+  'stevebauman/location' => 
+  array (
+    'aliases' => 
+    array (
+      'Location' => 'Stevebauman\\Location\\Facades\\Location',
+    ),
+    'providers' => 
+    array (
+      0 => 'Stevebauman\\Location\\LocationServiceProvider',
     ),
   ),
 );
