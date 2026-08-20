@@ -35,7 +35,8 @@ class DatabaseSeeder extends Seeder
         // 3. ОЧИСТКА КЕША НАСТРОЕК
         // ============================================
         Cache::forget('settings_all'); 
-        $this->command->info('🗑️ Кеш настроек очищен');
+        Cache::forget('stop_words_active'); // Сбрасываем кэш стоп-слов  
+        $this->command->info('🗑️ Кеш настроек и безопасности очищен');
         $this->command->info('');
 
         // ============================================
@@ -105,11 +106,11 @@ class DatabaseSeeder extends Seeder
             UserBlockSeeder::class,
         ]);
 
-        // ЭТАП 8: МАРКЕТИНГ И ЛОГИ
-        $this->command->info('📌 ЭТАП 8: Рассылки и логи');
+        // ЭТАП 8: МАРКЕТИНГ, ЛОГИ И ГЕО
+        $this->command->info('📌 ЭТАП 8: Рассылки, логи и гео-справочники');
         $this->call([
             BroadcastSeeder::class,
-            TestLogsSeeder::class,
+            TestLogsSeeder::class,            
         ]);
 
         $this->command->info('');
@@ -209,7 +210,7 @@ class DatabaseSeeder extends Seeder
             ChatParticipant::query()->delete();
             Message::query()->delete();
             Chat::query()->delete();
-            FraudAlert::query()->delete();
+            FraudAlert::query()->delete();         
             Media::query()->delete(); 
             PhotoComment::query()->delete();
             Photo::query()->delete();
@@ -241,7 +242,7 @@ class DatabaseSeeder extends Seeder
                 'admin_logs', 'broadcasts', 'settings', 'media',
                 'blog_categories', 
                 'blog_posts',      
-                'diary_comments', 'diary_subscriptions', 'diaries', 'rubrics'
+                'diary_comments', 'diary_subscriptions', 'diaries', 'rubrics'               
             ];
             
             foreach ($tables as $table) {

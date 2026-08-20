@@ -5,6 +5,8 @@ namespace App\Providers;
 use App\Models\User;
 use App\Models\Photo;
 
+use App\Services\ContentFilterService;
+
 use App\Models\UserSubscription;
 use App\Observers\UserSubscriptionObserver;
 use App\Observers\PhotoObserver;
@@ -26,7 +28,11 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        //
+         $this->app->useLangPath(base_path('lang'));
+
+          $this->app->singleton(ContentFilterService::class, function ($app) {
+        return new ContentFilterService();
+    });
     }
 
     /**

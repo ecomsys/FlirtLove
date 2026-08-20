@@ -17,7 +17,7 @@ new #[Layout('layouts.admin')] class extends Component
     #[Url(as: 'tab', except: 'profile', history: true)]
     public string $activeTab = 'profile';
 
-    private array $allowedTabs = ['profile', 'bans', 'reports', 'photos', 'photo-comments', 'finance', 'social', 'diaries', 'diary-comments', 'dating', 'finances'];
+    private array $allowedTabs = ['profile', 'bans', 'reports','blocks', 'photos', 'photo-comments', 'finance', 'social', 'diaries', 'diary-comments', 'dating', 'finances'];
 
     public function mount(int $user): void
     {
@@ -209,6 +209,9 @@ new #[Layout('layouts.admin')] class extends Component
                 <button wire:click="setTab('reports')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {{ $activeTab === 'reports' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
                     <x-lucide-flag class="w-4 h-4 inline mr-1" /> Жалобы
                 </button>
+                <button wire:click="setTab('blocks')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {{ $activeTab === 'blocks' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
+                    <x-lucide-ban class="w-4 h-4 inline mr-1" /> Блокировки
+                </button>
                 <button wire:click="setTab('photos')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {{ $activeTab === 'photos' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
                     <x-lucide-image class="w-4 h-4 inline mr-1" /> Фото
                 </button>       
@@ -241,6 +244,8 @@ new #[Layout('layouts.admin')] class extends Component
                 <livewire:admin.users.tabs.status-bans :userId="$this->userId" :key="'bans-'.$this->userId" />
             @elseif($activeTab === 'reports')
                 <livewire:admin.users.tabs.reports :userId="$this->userId" :key="'reports-'.$this->userId" />                    
+            @elseif($activeTab === 'blocks')
+                <livewire:admin.users.tabs.blocks :userId="$this->userId" :key="'blocks-'.$this->userId" />
             @elseif($activeTab === 'photos')        
                 <livewire:admin.users.tabs.photos :userId="$this->userId" :key="'photos-'.$this->userId" />
             @elseif($activeTab === 'photo-comments')

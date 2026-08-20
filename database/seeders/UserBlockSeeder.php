@@ -2,83 +2,91 @@
 
 namespace Database\Seeders;
 
-use App\Models\UserBlock;
+use App\Enums\UserBlockReason;
 use App\Models\User;
+use App\Models\UserBlock;
 use Illuminate\Database\Seeder;
+use Illuminate\Support\Facades\DB;
 
 class UserBlockSeeder extends Seeder
 {
     public function run(): void
     {
+        DB::table('user_blocks')->truncate();
         $this->command->info('🚫 Генерируем черный список (блокировки)...');
 
         $users = User::where('role', 'user')->get();
 
-        if ($users->count() < 3) {
-            $this->command->warn('⚠️ Нужно минимум 3 пользователя для блокировок!');
-            return;
+        if ($users->count() < 20) {
+            $this->command->warn('⚠️ Нужно минимум 20 пользователей! Создаем...');
+            User::factory()->count(20 - $users->count())->create();
+            $users = User::where('role', 'user')->get();
         }
 
-        // Очистка старых блокировок
-        $deletedCount = UserBlock::count();
-        if ($deletedCount > 0) {
-            UserBlock::query()->delete();
-            $this->command->info("🗑️ Удалено {$deletedCount} старых блокировок");
-        }
-
-        $reasons = ['spam', 'insult', 'creepy', 'scam', null]; // null - без причины, просто не нравится
-
-        $totalToCreate = 15; // Создадим 15 блокировок
-        $bar = $this->command->getOutput()->createProgressBar($totalToCreate);
+        $reasons = UserBlockReason::cases();
         $createdCount = 0;
 
         // ============================================
-        // 1. СЛУЧАЙНЫЕ БЛОКИРОВКИ (10 шт)
+        // 1. СЛУЧАЙНЫЕ БЛОКИРОВКИ (50 шт)
         // ============================================
-        for ($i = 0; $i < 10; $i++) {
+        $this->command->info('🔀 Генерируем случайные блокировки...');
+        for ($i = 0; $i < 50; $i++) {
             $blocker = $users->random();
             $blocked = $users->where('id', '!=', $blocker->id)->random();
 
-            $block = UserBlock::updateOrCreate(
+            // ФИКС: Используем firstOrCreate, чтобы избежать ошибки UniqueConstraint
+            $block = UserBlock::firstOrCreate(
                 ['blocker_id' => $blocker->id, 'blocked_id' => $blocked->id],
-                ['reason' => $reasons[array_rand($reasons)]]
+                [
+                    'reason'     => $reasons[array_rand($reasons)]->value,
+                    'created_at' => now()->subDays(rand(1, 30)),
+                ]
             );
 
             if ($block->wasRecentlyCreated) {
                 $createdCount++;
             }
-            $bar->advance();
         }
 
         // ============================================
-        // 2. МАССОВЫЕ БЛОКИРОВКИ (Маркер проблемного юзера)
-        // Один юзер получает 5 блокировок от разных людей (спамер)
+        // 2. МАССОВЫЕ БЛОКИРОВКИ (Создаем 3-х проблемных юзеров)
         // ============================================
-        $this->command->newLine();
-        $this->command->info('   🚨 Создаем массовика (спамера, которого блокируют все)...');
-        
-        $spammer = $users->random();
-        $innocentUsers = $users->where('id', '!=', $spammer->id)->random(5);
+        $this->command->info('🚨 Создаем массовиков...');
 
-        foreach ($innocentUsers as $innocentUser) {
-            $block = UserBlock::updateOrCreate(
-                ['blocker_id' => $innocentUser->id, 'blocked_id' => $spammer->id],
-                ['reason' => 'spam'] // Все жалуются на спам
-            );
+        $spammers = $users->random(3);
 
-            if ($block->wasRecentlyCreated) {
-                $createdCount++;
+        foreach ($spammers as $index => $spammer) {
+            $blocksCount = [5, 7, 12][$index] ?? 5;
+            
+            // Случайные "жертвы", которые его заблокируют
+            $innocentUsers = $users->where('id', '!=', $spammer->id)->random(min($blocksCount, $users->count() - 1));
+
+            $isRecent = true;
+            foreach ($innocentUsers as $innocentUser) {
+                $reason = $index === 2 ? UserBlockReason::Scam : UserBlockReason::Spam;
+
+                // ФИКС: Тоже firstOrCreate
+                $block = UserBlock::firstOrCreate(
+                    ['blocker_id' => $innocentUser->id, 'blocked_id' => $spammer->id],
+                    [
+                        'reason'     => $reason->value,
+                        'created_at' => $isRecent ? now()->subDays(rand(0, 6)) : now()->subDays(rand(10, 25)),
+                    ]
+                );
+
+                if ($block->wasRecentlyCreated) {
+                    $createdCount++;
+                }
+                $isRecent = !$isRecent;
             }
-            $bar->advance();
         }
 
-        $bar->finish();
         $this->command->newLine(2);
 
         // ============================================
         // СТАТИСТИКА
         // ============================================
-        $mostBlocked = UserBlock::select('blocked_id', \DB::raw('count(*) as blocks_count'))
+        $mostBlocked = UserBlock::select('blocked_id', DB::raw('count(*) as blocks_count'))
             ->groupBy('blocked_id')
             ->orderByDesc('blocks_count')
             ->first();

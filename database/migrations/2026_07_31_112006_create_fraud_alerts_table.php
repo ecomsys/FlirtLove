@@ -14,7 +14,7 @@ return new class extends Migration
             // === КТО ПОДОЗРИТЕЛЕН ===
             // Юзер, на которого сработал триггер. 
             // Без cascade! Если скаммер успеет удалить аккаунт, алерт должен остаться для аналитики.
-            $table->foreignId('user_id')->constrained('users')->nullable()->nullOnDelete();
+             $table->foreignId('user_id')->nullable()->constrained('users')->nullOnDelete();
             
             // === СУТЬ НАРУШЕНИЯ ===
             // Тип триггера (что именно заметила система):

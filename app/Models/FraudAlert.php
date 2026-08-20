@@ -2,6 +2,9 @@
 
 namespace App\Models;
 
+use App\Enums\FraudAlertSeverity;
+use App\Enums\FraudAlertStatus;
+use App\Enums\FraudTriggerType;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
@@ -11,63 +14,47 @@ class FraudAlert extends Model
 
     protected $fillable = [
         'user_id',
-        'trigger_type',  // Тип: same_device, mass_messaging, links_in_chat, prostitute
-        'severity',      // low, medium, high
-        'meta',          // JSON: Доказательства (лог сообщений, IP, сработавшее правило)
-        'status',        // open, resolved, false_positive
-        'admin_id',      // Кто разобрал алерт
+        'trigger_type',
+        'severity',
+        'meta',
+        'status',
+        'admin_id',
         'resolved_at',
     ];
 
     protected $casts = [
         'meta' => 'array',
         'resolved_at' => 'datetime',
+        'status' => FraudAlertStatus::class,
+        'severity' => FraudAlertSeverity::class,
+        'trigger_type' => FraudTriggerType::class, // НОВЫЙ КАСТ
     ];
 
     // ============================================
     // СВЯЗИ
     // ============================================
 
-    // Юзер, на которого сработал триггер (подозреваемый)
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
     }
 
-    // Админ, который принял решение по алерту
     public function admin(): BelongsTo
     {
         return $this->belongsTo(User::class, 'admin_id');
     }
 
     // ============================================
-    // СКОПЫ (Для очереди модерации в админке)
+    // СКОПЫ
     // ============================================
 
-    public function scopeOpen($query)
-    {
-        return $query->where('status', 'open');
-    }
-
-    public function scopeResolved($query)
-    {
-        return $query->where('status', 'resolved');
-    }
-
-    public function scopeFalsePositive($query)
-    {
-        return $query->where('status', 'false_positive');
-    }
-
-    public function scopeHighSeverity($query)
-    {
-        return $query->where('severity', 'high');
-    }
-
-    public function scopeOfTrigger($query, string $type)
-    {
-        return $query->where('trigger_type', $type);
-    }
+    public function scopeOpen($query) { return $query->where('status', FraudAlertStatus::Open); }
+    public function scopeResolved($query) { return $query->where('status', FraudAlertStatus::Resolved); }
+    public function scopeFalsePositive($query) { return $query->where('status', FraudAlertStatus::FalsePositive); }
+    public function scopeHighSeverity($query) { return $query->where('severity', FraudAlertSeverity::High); }
+    
+    // Скоп теперь строго принимает Enum
+    public function scopeOfTrigger($query, FraudTriggerType $type) { return $query->where('trigger_type', $type); }
 
     // ============================================
     // ХЕЛПЕРЫ БИЗНЕС-ЛОГИКИ
@@ -75,38 +62,25 @@ class FraudAlert extends Model
 
     public function isOpen(): bool
     {
-        return $this->status === 'open';
+        // Теперь нам не нужны проверки на строку, так как каст гарантирует Enum
+        return $this->status === FraudAlertStatus::Open;
     }
 
-    /**
-     * Разобрать алерт (подтвердить нарушение).
-     * Вызывается, когда админ решает забанить юзера на основе алерта.
-     */
     public function resolve(int $adminId): bool
     {
-        if (!$this->isOpen()) {
-            return true;
-        }
-
+        if (!$this->isOpen()) return true;
         return $this->update([
-            'status' => 'resolved',
+            'status' => FraudAlertStatus::Resolved,
             'admin_id' => $adminId,
             'resolved_at' => now(),
         ]);
     }
 
-    /**
-     * Отметить как ложное срабатывание (False Positive).
-     * Вызывается, если алгоритм ошибся и юзер чист.
-     */
     public function markAsFalsePositive(int $adminId): bool
     {
-        if (!$this->isOpen()) {
-            return true;
-        }
-
+        if (!$this->isOpen()) return true;
         return $this->update([
-            'status' => 'false_positive',
+            'status' => FraudAlertStatus::FalsePositive,
             'admin_id' => $adminId,
             'resolved_at' => now(),
         ]);
@@ -116,28 +90,28 @@ class FraudAlert extends Model
     // АКСЕССОРЫ ДЛЯ UI
     // ============================================
 
+    public function getTriggerLabelAttribute(): string
+    {
+        // Если вдруг в базе старые данные, которые не совпали с Enum, fallback спасет от 500 ошибки
+        return $this->trigger_type?->label() ?? ucfirst(str_replace('_', ' ', $this->getRawOriginal('trigger_type')));
+    }
+
     public function getStatusBadgeAttribute(): array
     {
-        return match ($this->status) {
-            'open'           => ['variant' => 'warning', 'label' => 'Открыт'],
-            'resolved'       => ['variant' => 'success', 'label' => 'Подтвержден'],
-            'false_positive' => ['variant' => 'secondary', 'label' => 'Ложняк'],
-            default          => ['variant' => 'secondary', 'label' => 'Неизвестно'],
-        };
+        return [
+            'variant' => $this->status->badgeVariant(),
+            'label' => $this->status->label()
+        ];
     }
 
     public function getSeverityBadgeAttribute(): array
     {
-        return match ($this->severity) {
-            'low'    => ['variant' => 'secondary', 'label' => 'Низкий'],
-            'medium' => ['variant' => 'warning', 'label' => 'Средний'],
-            'high'   => ['variant' => 'destructive', 'label' => 'Высокий'],
-            default  => ['variant' => 'secondary', 'label' => 'Неизвестно'],
-        };
+        return [
+            'variant' => $this->severity->badgeVariant(),
+            'label' => $this->severity->label()
+        ];
     }
 }
-
-
 
 // модель FraudAlert — это иммунная система платформы. В дейтинге скаммеры и боты — это главная причина оттока нормальных юзеров. 
 // Если девушка заходит в аппку и получает 10 сообщений от ботов "кинь на карту 500 рублей", она удалит приложение навсегда.

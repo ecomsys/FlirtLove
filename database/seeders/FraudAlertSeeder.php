@@ -14,151 +14,97 @@ namespace Database\Seeders;
 use App\Models\FraudAlert;
 use App\Models\User;
 use Illuminate\Database\Seeder;
+use Illuminate\Support\Facades\DB;
 
 class FraudAlertSeeder extends Seeder
 {
     public function run(): void
     {
-        $this->command->info('🚨 Генерируем антифрод-алерты и улики мошенников...');
+        // Очищаем старые алерты, чтобы не было дублей при повторном сидировании
+        DB::table('fraud_alerts')->truncate();
 
-        $users = User::where('role', 'user')->get();
-        $admin = User::where('role', 'admin')->first();
+        // Находим админа (или любого первого юзера), который будет "разбирать" алерты
+        $admin = User::first();
 
-        if ($users->isEmpty()) {
-            $this->command->warn('⚠️ Нет пользователей для генерации алертов!');
-            return;
-        }
-
-        // Очистка старых алертов
-        $deletedCount = FraudAlert::count();
-        if ($deletedCount > 0) {
-            FraudAlert::query()->delete();
-            $this->command->info("🗑️ Удалено {$deletedCount} старых алертов");
-        }
-
-        $triggers = [
-            'same_device',      // 10 аккаунтов с одного телефона
-            'mass_messaging',   // Спам одинаковыми сообщениями
-            'links_in_chat',    // Кинул ссылку на телеграм (Сработал StopWord Honeypot)
-            'prostitute',       // Стоп-слова проституции
-            'scam_keywords',    // Стоп-слова мошенничества (крипта, инвестиции)
-            'photo_nudity',     // ИИ распознал 18+ в основной фотке
-            'minor',            // ИИ или модератор заподозрил несовершеннолетнего
+        // Массив реалистичных триггеров и соответствующих им улик (meta)
+        $triggerTemplates = [
+            [
+                'trigger_type' => 'links_in_chat',
+                'severity' => 'high',
+                'meta' => fn() => [
+                    'ip' => '194.' . rand(0, 255) . '.' . rand(0, 255) . '.' . rand(1, 254),
+                    'message_text' => 'Пиши мне в тг @scammer_' . rand(100, 999),
+                    'matched_rule' => 'tg_link_regex',
+                ]
+            ],
+            [
+                'trigger_type' => 'mass_messaging',
+                'severity' => 'medium',
+                'meta' => fn() => [
+                    'messages_sent_5min' => rand(25, 80),
+                    'identical_message' => 'Привет! Давай познакомимся, я ищу щедрого мужчину...',
+                    'ip' => '188.' . rand(0, 255) . '.' . rand(0, 255) . '.' . rand(1, 254),
+                ]
+            ],
+            [
+                'trigger_type' => 'prostitute',
+                'severity' => 'high',
+                'meta' => fn() => [
+                    'field' => 'about_me',
+                    'matched_words' => ['массаж', 'выезд', 'индивидуалка'],
+                    'profile_url' => '/users/' . rand(1, 100),
+                ]
+            ],
+            [
+                'trigger_type' => 'same_device',
+                'severity' => 'medium',
+                'meta' => fn() => [
+                    'device_id' => 'DEV-' . strtoupper(\Str::random(12)),
+                    'accounts_count' => rand(3, 10),
+                    'ip' => '45.' . rand(0, 255) . '.' . rand(0, 255) . '.' . rand(1, 254),
+                ]
+            ],
+            [
+                'trigger_type' => 'scam_phrase',
+                'severity' => 'low',
+                'meta' => fn() => [
+                    'message_text' => 'Переведи мне 500 рублей на карту, я скину фотки',
+                    'matched_rule' => 'money_request_regex',
+                ]
+            ],
         ];
 
-        $bar = $this->command->getOutput()->createProgressBar(30);
-        $createdCount = 0;
+        $users = User::limit(20)->get();
 
-        for ($i = 0; $i < 30; $i++) {
-            $user = $users->random();
-            $trigger = $triggers[array_rand($triggers)];
+        // Генерируем 50 алертов
+        for ($i = 0; $i < 50; $i++) {
+            // Случайно выбираем шаблон триггера
+            $template = $triggerTemplates[array_rand($triggerTemplates)];
+            
+            // Генерируем дату в последние 30 дней
+            $createdAt = now()->subDays(rand(0, 30))->subHours(rand(0, 23));
+            
+            // Рандомизируем статус (70% - open, 20% - resolved, 10% - false_positive)
+            $statusRoll = rand(1, 100);
+            $status = $statusRoll <= 70 ? 'open' : ($statusRoll <= 90 ? 'resolved' : 'false_positive');
+            
+            // Если алерт открыт, admin_id и resolved_at должны быть null
+            $isAdminResolved = $status !== 'open';
 
-            // Определяем уровень опасности и статус на основе триггера
-            [$severity, $status, $meta] = $this->getScenarioData($trigger, $user);
-
-            $resolvedAt = null;
-            $adminId = null;
-
-            // Если статус resolved или false_positive — нужен админ и дата
-            if ($status !== 'open' && $admin) {
-                $adminId = $admin->id;
-                $resolvedAt = now()->subDays(rand(0, 5));
-            }
+            // 15% шанс, что аккаунт скаммера уже удален (user_id = null)
+            $isUserDeleted = rand(1, 100) <= 15;
 
             FraudAlert::create([
-                'user_id' => $user->id,
-                'trigger_type' => $trigger,
-                'severity' => $severity,
-                'meta' => $meta,
+                'user_id' => $isUserDeleted ? null : ($users->isNotEmpty() ? $users->random()->id : null),
+                'trigger_type' => $template['trigger_type'],
+                'severity' => $template['severity'],
+                'meta' => $template['meta'](), // Вызываем замыкание для генерации униканых данных
                 'status' => $status,
-                'admin_id' => $adminId,
-                'resolved_at' => $resolvedAt,
-                'created_at' => now()->subDays(rand(0, 15)),
-                'updated_at' => now()->subDays(rand(0, 5)),
+                'admin_id' => $isAdminResolved ? ($admin->id ?? null) : null,
+                'resolved_at' => $isAdminResolved ? $createdAt->copy()->addHours(rand(1, 48)) : null,
+                'created_at' => $createdAt,
+                'updated_at' => $isAdminResolved ? $createdAt->copy()->addHours(rand(1, 48)) : $createdAt,
             ]);
-
-            $createdCount++;
-            $bar->advance();
         }
-
-        $bar->finish();
-        $this->command->newLine(2);
-
-        // ============================================
-        // СТАТИСТИКА
-        // ============================================
-        $stats = [
-            'total' => FraudAlert::count(),
-            'open' => FraudAlert::where('status', 'open')->count(),
-            'resolved' => FraudAlert::where('status', 'resolved')->count(),
-            'false_positive' => FraudAlert::where('status', 'false_positive')->count(),
-            'high' => FraudAlert::where('severity', 'high')->count(),
-            'medium' => FraudAlert::where('severity', 'medium')->count(),
-            'low' => FraudAlert::where('severity', 'low')->count(),
-        ];
-
-        $this->command->info('✅ Создано антифрод-алертов: ' . $stats['total']);
-        $this->command->info('');
-        $this->command->info('📊 Статистика угроз:');
-        $this->command->info("   ┌─────────────────────────┬──────────┐");
-        $this->command->info("   │ Показатель              │ Кол-во   │");
-        $this->command->info("   ├─────────────────────────┼──────────┤");
-        $this->command->info("   │ Всего алертов           │ {$stats['total']}        │");
-        $this->command->info("   │ 🔴 Ожидают проверки     │ {$stats['open']}        │");
-        $this->command->info("   │ 🟢 Подтверждены (Бан)   │ {$stats['resolved']}        │");
-        $this->command->info("   │ ⚪ Ложные срабатывания   │ {$stats['false_positive']}        │");
-        $this->command->info("   ├─────────────────────────┼──────────┤");
-        $this->command->info("   │ Опасность: High 🔥      │ {$stats['high']}        │");
-        $this->command->info("   │ Опасность: Medium ⚠️    │ {$stats['medium']}        │");
-        $this->command->info("   │ Опасность: Low 🧊       │ {$stats['low']}        │");
-        $this->command->info("   └─────────────────────────┴──────────┘");
-    }
-
-    /**
-     * Генерация реалистичного сценария на основе типа триггера.
-     * Возвращает [severity, status, meta]
-     */
-    private function getScenarioData(string $trigger, User $user): array
-    {
-        $ip = '185.23.' . rand(1, 255) . '.' . rand(1, 255);
-
-        return match ($trigger) {
-            'same_device' => [
-                rand(0, 1) ? 'high' : 'medium',
-                rand(0, 1) ? 'resolved' : 'open',
-                ['device_id' => 'dev_' . substr(md5($ip), 0, 10), 'ip' => $ip, 'accounts_found' => rand(3, 15)]
-            ],
-            'mass_messaging' => [
-                'medium',
-                rand(0, 1) ? 'open' : 'false_positive', // Часто бывает что юзер просто активный
-                ['messages_sent_1h' => rand(30, 150), 'sample_text' => 'Привет! Пиши мне в телеграм @scammer']
-            ],
-            'links_in_chat' => [
-                'medium',
-                'open',
-                ['matched_rule' => 'telegram_link', 'message_text' => 'Давай перейдем в тг, тут неудобно', 'chat_id' => rand(1, 50)]
-            ],
-            'prostitute' => [
-                'high',
-                rand(0, 1) ? 'resolved' : 'open',
-                ['matched_rule' => 'prostitution_keywords', 'profile_text' => 'Предлагаю досуг...']
-            ],
-            'scam_keywords' => [
-                'high',
-                'open',
-                ['matched_rule' => 'crypto_investment', 'message_text' => 'Заработок на крипте, вкладывай сюда']
-            ],
-            'photo_nudity' => [
-                'high',
-                rand(0, 1) ? 'resolved' : 'open',
-                ['photo_id' => rand(1, 100), 'ai_confidence' => rand(85, 99) . '%', 'model' => 'NSFW_Detector_v2']
-            ],
-            'minor' => [
-                'high', // Самый высокий приоритет!
-                'resolved', // Обычно банят мгновенно
-                ['photo_id' => rand(1, 100), 'estimated_age' => rand(12, 16), 'model' => 'Age_Estimator_v1']
-            ],
-            default => ['low', 'open', []]
-        };
     }
 }
