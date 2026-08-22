@@ -1,7 +1,7 @@
 <?php
 
-use App\Actions\Admin\GeoLocationAction;
-use App\Models\GeoLocation;
+use App\Actions\Admin\GeoIPLocationAction;
+use App\Models\GeoIPLocation;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Session;
@@ -20,7 +20,13 @@ new #[Layout('layouts.admin')] class extends Component
     public int $perPage = 50;
 
     public function updatedSearch(): void { $this->resetPage(); }
-    public function updatedTypeFilter(): void { $this->resetPage(); }
+
+    // НОВЫЙ МЕТОД: Переключение фильтра кнопками
+    public function setTypeFilter(string $type): void 
+    { 
+        $this->typeFilter = $type; 
+        $this->resetPage(); 
+    }
 
     public function clearFilters(): void
     {
@@ -34,7 +40,7 @@ new #[Layout('layouts.admin')] class extends Component
     {
         $searchOperator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
 
-        return GeoLocation::query()
+        return GeoIPLocation::query()
             ->when($this->search, function ($q) use ($searchOperator) {
                 $q->where('name', $searchOperator, "%{$this->search}%")
                   ->orWhere('iso_code', $searchOperator, "%{$this->search}%");
@@ -45,20 +51,35 @@ new #[Layout('layouts.admin')] class extends Component
             ->paginate(min(max($this->perPage, 10), 200));
     }
 
-    // Тумблер: Запретить регистрацию (через Action)
-    public function toggleRegistration(int $id, GeoLocationAction $action): void
+    // НОВЫЙ МЕТОД: Счетчики для кнопок
+    #[Computed]
+    public function counts(): array
     {
-        $loc = GeoLocation::find($id);
+        $stats = GeoIPLocation::query()
+            ->selectRaw("COUNT(*) as total")
+            ->selectRaw("SUM(CASE WHEN type = 'country' THEN 1 ELSE 0 END) as country")
+            ->selectRaw("SUM(CASE WHEN type = 'region' THEN 1 ELSE 0 END) as region")
+            ->first();
+
+        return [
+            'total' => $stats->total ?? 0,
+            'country' => $stats->country ?? 0,
+            'region' => $stats->region ?? 0,
+        ];
+    }
+
+    public function toggleRegistration(int $id, GeoIPLocationAction $action): void
+    {
+        $loc = GeoIPLocation::find($id);
         if ($loc) {
             $action->toggleRegistration($loc);
             $this->dispatch('show-toast', type: 'success', message: 'Правило регистрации обновлено');
         }
     }
 
-    // Тумблер: Скрыть из ленты (через Action)
-    public function toggleFeed(int $id, GeoLocationAction $action): void
+    public function toggleFeed(int $id, GeoIPLocationAction $action): void
     {
-        $loc = GeoLocation::find($id);
+        $loc = GeoIPLocation::find($id);
         if ($loc) {
             $action->toggleFeed($loc);
             $this->dispatch('show-toast', type: 'success', message: 'Правило ленты обновлено');
@@ -77,7 +98,7 @@ new #[Layout('layouts.admin')] class extends Component
             <div>
                 <h1 class="text-2xl font-semibold flex items-center gap-2">
                     <x-lucide-globe class="w-6 h-6" />
-                    Блокировка по Geo IP 
+                    Geo IP локации
                 </h1>
                 <p class="text-sm text-muted-foreground mt-1">
                     Управление блокировками стран и регионов. Отсекает бот-фермы на этапе регистрации или скрывает в ленте.
@@ -86,21 +107,21 @@ new #[Layout('layouts.admin')] class extends Component
         </div>
     </div>
 
-    <!-- ФИЛЬТРЫ -->
+    <!-- ФИЛЬТРЫ (КНОПКИ) -->
     <div class="flex flex-wrap items-center justify-between gap-3">
-        <div class="flex flex-wrap gap-2 items-center">
-            <x-ui.select wire:key="geo-type-select" wire:model.live="typeFilter">
-                <x-ui.select-trigger class="w-40"><x-ui.select-value placeholder="Тип" /></x-ui.select-trigger>
-                <x-ui.select-content>
-                    <x-ui.select-item value="country">Страны</x-ui.select-item>
-                    <x-ui.select-item value="region">Регионы</x-ui.select-item>
-                    <x-ui.select-item value="city">Города</x-ui.select-item>
-                    <x-ui.select-item value="all">Все типы</x-ui.select-item>
-                </x-ui.select-content>
-            </x-ui.select>
+        <div class="flex flex-wrap gap-1.5 items-center">
+            <x-ui.button wire:key="btn-all" wire:click="setTypeFilter('all')" variant="{{ $typeFilter === 'all' ? 'default' : 'secondary' }}" size="sm">
+                Все <x-ui.badge size="xs">{{ $this->counts['total'] }}</x-ui.badge>
+            </x-ui.button>
+            <x-ui.button wire:key="btn-country" wire:click="setTypeFilter('country')" variant="{{ $typeFilter === 'country' ? 'default' : 'secondary' }}" size="sm">
+                Страны <x-ui.badge size="xs" variant="success">{{ $this->counts['country'] }}</x-ui.badge>
+            </x-ui.button>
+            <x-ui.button wire:key="btn-region" wire:click="setTypeFilter('region')" variant="{{ $typeFilter === 'region' ? 'default' : 'secondary' }}" size="sm">
+                Регионы СНГ <x-ui.badge size="xs" variant="warning">{{ $this->counts['region'] }}</x-ui.badge>
+            </x-ui.button>
 
             @if($search || $typeFilter !== 'country')
-                <x-ui.button wire:key="geo-clear-btn" wire:click="clearFilters" variant="ghost" size="sm" class="text-muted-foreground">
+                <x-ui.button wire:key="geo-clear-btn" wire:click="clearFilters" variant="ghost" size="sm" class="text-muted-foreground ml-2">
                     <x-lucide-x class="w-4 h-4" /> Сбросить
                 </x-ui.button>
             @endif
@@ -127,8 +148,19 @@ new #[Layout('layouts.admin')] class extends Component
         <x-ui.table-body>
             @forelse ($this->locations as $loc)
                 <x-ui.table-row wire:key="geo-row-{{ $loc->id }}" class="{{ $loc->is_registration_blocked ? 'bg-destructive/5' : '' }}">
-                    <x-ui.table-cell class="font-medium">
-                        {{ $loc->name }}
+                   <x-ui.table-cell class="font-medium">
+                        @php
+                            // Если это страна, переводим через вендор-неймспейс: world::country.RU
+                            // Важно: файл называется country.php (в единственном числе!)
+                            if ($loc->type === 'country' && $loc->iso_code) {
+                                $key = 'world::country.' . $loc->iso_code;
+                                $translated = __($key);
+                                $displayName = ($translated === $key) ? $loc->name : $translated;
+                            } else {
+                                $displayName = $loc->name;
+                            }
+                        @endphp
+                        {{ $displayName }}
                     </x-ui.table-cell>
                     
                     <x-ui.table-cell>

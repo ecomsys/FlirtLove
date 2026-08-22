@@ -8,7 +8,7 @@ use App\Jobs\CreateFraudAlertJob;
 use App\Models\StopWord;
 use Illuminate\Support\Facades\Cache;
 
-class ContentFilterService
+class StopWordsFilterService
 {
     private const CACHE_KEY = 'stop_words_active';
 
@@ -57,7 +57,11 @@ class ContentFilterService
             switch ($action) {
                 case StopWordAction::Mask->value:
                     $replacement = $stopWord['replacement'] ?? '***';
-                    $text = preg_replace($pattern, $replacement, $text);
+                    $replacedText = preg_replace($pattern, $replacement, $text);
+                    // Если регулярка не сломалась и вернула строку — применяем. Иначе оставляем как есть.
+                    if (!is_null($replacedText)) {
+                        $text = $replacedText;
+                    }
                     break;
 
                 case StopWordAction::Reject->value:
@@ -95,18 +99,18 @@ class ContentFilterService
 
 //  Подготовить ядро (сервисы и джобы) заранее — это разделение ответственности. Когда дойдет до веба, в контроллерах и Livewire у нас будет всего 1-2 строки кода.
 
-// Мы создадим ContentFilterService (сам фильтр) и CreateFraudAlertJob (очередь для создания алертов), чтобы не тормозить ответ сервера юзеру.
+// Мы создадим StopWordsFilterService (сам фильтр) и CreateFraudAlertJob (очередь для создания алертов), чтобы не тормозить ответ сервера юзеру.
 
 // Шаг 1: Создаем CreateFraudAlertJob
 // Воркер, который создает алерт. Здесь есть важная защита: мы проверяем, нет ли уже открытого алерта у этого юзера по такому же триггеру. Если бот шлет 10 сообщений подряд со ссылкой, мы создадим только 1 алерт, чтобы не засрать базу.
 
 // Создай файл app/Jobs/CreateFraudAlertJob.php:
 
-// Шаг 2: Создаем ядро — ContentFilterService
+// Шаг 2: Создаем ядро — StopWordsFilterService
 // Этот сервис будет кэшировать стоп-слова и проверять текст.
 // Важно: я добавил безопасную обработку регулярок. Если админ криво напишет регулярку в админке, preg_match не упадет с 500 ошибкой, а просто пропустит правило.
 
-// Создай файл app/Services/ContentFilterService.php:
+// Создай файл app/Services/StopWordsFilterService.php:
 
 // Шаг 3: Регистрируем сервис в Провайдере
 // Чтобы сервис можно было легко внедрять (Dependency Injection) в любые контроллеры или Livewire компоненты, зарегистрируй его.
@@ -118,9 +122,9 @@ class ContentFilterService
 
 // php
 
-// use App\Services\ContentFilterService;
+// use App\Services\StopWordsFilterService;
 
-// public function sendMessage(Request $request, ContentFilterService $filter)
+// public function sendMessage(Request $request, StopWordsFilterService $filter)
 // {
 //     $text = $request->input('text');
 //     $userId = auth()->id();

@@ -5,11 +5,13 @@ namespace App\Providers;
 use App\Models\User;
 use App\Models\Photo;
 
-use App\Services\ContentFilterService;
+use App\Services\GeoIPBlockService;
+use App\Services\StopWordsFilterService;
 
 use App\Models\UserSubscription;
 use App\Observers\UserSubscriptionObserver;
 use App\Observers\PhotoObserver;
+
 
 use Illuminate\Auth\Events\Login;
 use Illuminate\Support\Facades\Event;
@@ -30,8 +32,14 @@ class AppServiceProvider extends ServiceProvider
     {
          $this->app->useLangPath(base_path('lang'));
 
-          $this->app->singleton(ContentFilterService::class, function ($app) {
-        return new ContentFilterService();
+         // Регистрируем Гео-сервис как Singleton (один экземпляр на весь жизненный цикл запроса)
+        $this->app->singleton(GeoIPBlockService::class, function ($app) {
+            return new GeoIPBlockService();
+        });
+
+        
+        $this->app->singleton(StopWordsFilterService::class, function ($app) {
+        return new StopWordsFilterService();
     });
     }
 

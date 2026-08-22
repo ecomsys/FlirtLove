@@ -4,51 +4,58 @@ namespace App\Observers;
 
 use App\Models\UserSubscription;
 use App\Models\User;
-use App\Jobs\SendVipExpiredNotification;
+use App\Jobs\SendSubscribeExpiredNotification;
+use Illuminate\Support\Facades\Log;
 
 class UserSubscriptionObserver
 {
     public function saved(UserSubscription $subscription): void
     {
-        $this->syncUserPremiumCache($subscription->user_id);
+        // Синхронизируем оба типа подписок независимо друг от друга
+        $this->syncUserCache($subscription->user_id, 'premium');
+        $this->syncUserCache($subscription->user_id, 'vip');
     }
 
     public function deleted(UserSubscription $subscription): void
     {
-        $this->syncUserPremiumCache($subscription->user_id);
+        $this->syncUserCache($subscription->user_id, 'premium');
+        $this->syncUserCache($subscription->user_id, 'vip');
     }
 
-    private function syncUserPremiumCache(int $userId): void
+    private function syncUserCache(int $userId, string $tier): void
     {
+        // Ищем самую дальнюю активную подписку конкретного типа (tier)
         $activeSubscription = UserSubscription::where('user_id', $userId)
+            ->where('tier', $tier)
             ->where('status', 'active')
             ->where('ends_at', '>', now())
             ->orderByDesc('ends_at')
             ->first();
 
+        $isField = $tier === 'premium' ? 'is_premium' : 'is_vip';
+        $expiresField = $tier === 'premium' ? 'premium_expires_at' : 'vip_expires_at';
+
         if ($activeSubscription) {
-            // VIP есть — обновляем кэш
+            // Подписка есть — обновляем кэш
             User::where('id', $userId)->update([
-                'is_premium' => true,
-                'premium_expires_at' => $activeSubscription->ends_at,
+                $isField => true,
+                $expiresField => $activeSubscription->ends_at,
             ]);
         } else {
-            // VIP нет. Проверяем, был ли он только что снят?
-            // Используем direct update, чтобы избежать лишнего SELECT
-            $affectedRows = User::where('id', $userId)
-                ->where('is_premium', true) // Если был VIP
-                ->update([
-                    'is_premium' => false,
-                    'premium_expires_at' => null,
+            // Подписки нет. Проверяем, был ли статус активен до этого?
+            $user = User::find($userId);
+            
+            if ($user && $user->{$isField}) {
+                // Статус был активен, а теперь нет. Снимаем его
+                User::where('id', $userId)->update([
+                    $isField => false,
+                    $expiresField => null,
                 ]);
 
-            // Если мы обновили строку (сняли VIP), значит юзер только что его потерял. Шлем FOMO-пуш
-            if ($affectedRows > 0) {
-                $user = User::find($userId);
-                if ($user) {
-                    // ИСПРАВЛЕНО: Вызываем правильную джобу для ИСТЕКШЕЙ подписки!
-                    SendVipExpiredNotification::dispatch($user, 'VIP');
-                }
+                // Отправляем уведомление (FOMO-пуш)
+                $planName = ucfirst($tier); // "Premium" или "Vip"
+                SendSubscribeExpiredNotification::dispatch($user, $planName, $tier);
+                Log::info("Статус {$tier} снят с юзера ID {$userId}. Отправлено уведомление.");
             }
         }
     }

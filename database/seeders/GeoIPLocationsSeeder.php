@@ -1,23 +1,22 @@
 <?php
+ namespace Database\Seeders;
 
-namespace Database\Seeders;
-
-use App\Models\GeoLocation;
+use App\Models\GeoIPLocation;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\DB;
 
 // Выполни чтобы создать все страны мира и рускоязычные регионы
 // php artisan world:install
-// php artisan db:seed --class=GeoSyncSeeder
+// php artisan db:seed --class=GeoIPLocationsSeeder
 
-class GeoSyncSeeder extends Seeder
+class GeoIPLocationsSeeder extends Seeder
 {
     public function run(): void
     {
         $this->command->info('🌍 Синхронизируем гео-данные из таблиц пакета nnjeim/world...');
 
-        // Очищаем нашу таблицу
-        DB::table('geo_locations')->truncate();
+        // Очищаем нашу таблицу   
+        DB::table('geoip_locations')->truncate();
 
         // Проверяем, существуют ли таблицы пакета
         if (!DB::getSchemaBuilder()->hasTable('countries')) {
@@ -33,7 +32,7 @@ class GeoSyncSeeder extends Seeder
         foreach ($countries as $country) {
             $isBlocked = in_array($country->iso2, array_keys($blockedIso));
             
-            $geoCountry = GeoLocation::create([
+            $geoCountry = GeoIPLocation::create([
                 'parent_id' => null,
                 'type' => 'country',
                 'name' => $country->name,
@@ -63,7 +62,7 @@ class GeoSyncSeeder extends Seeder
             $states = DB::table('states')->where('country_id', $cisCountry->id)->get();
 
             foreach ($states as $state) {
-                GeoLocation::create([
+                GeoIPLocation::create([
                     'parent_id' => $ourCountryId,
                     'type' => 'region',
                     'name' => $state->name,

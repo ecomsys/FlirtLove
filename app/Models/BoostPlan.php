@@ -1,27 +1,24 @@
-<?php 
-
+<?php
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
-class SubscriptionPlan extends Model
+class BoostPlan extends Model
 {
     protected $fillable = [
-        'tier', 'name', 'slug', 'price', 'old_price', 'currency', 
-        'duration_days', 'apple_product_id', 'google_product_id', 'is_active', 'sort_order'
+        'type', 'name', 'price', 'currency', 'duration_minutes', 'is_active', 'sort_order'
     ];
 
     protected $casts = [
         'price' => 'decimal:2',
-        'old_price' => 'decimal:2',
-        'duration_days' => 'integer',
+        'duration_minutes' => 'integer',
         'is_active' => 'boolean',
         'sort_order' => 'integer',
     ];
 
-    public function subscriptions(): HasMany {
-        return $this->hasMany(UserSubscription::class);
+    public function userBoosts(): HasMany {
+        return $this->hasMany(UserBoost::class);
     }
 
     public function scopeActive($query) { return $query->where('is_active', true); }

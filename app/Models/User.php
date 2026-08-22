@@ -17,7 +17,10 @@ class User extends Authenticatable implements MustVerifyEmail
     protected $fillable = [
         'name', 'email', 'password', 'phone',
         'role', 'status', 'ban_reason', 'banned_until',
+        
         'is_premium', 'premium_expires_at',
+        'is_vip', 'vip_expires_at',
+
         'is_verified', 'has_completed_onboarding',
         'last_seen', 'last_login_at', 'last_login_ip', 'device_id', 'device_os'
     ];
@@ -33,10 +36,12 @@ class User extends Authenticatable implements MustVerifyEmail
             'email_verified_at' => 'datetime',
             'phone_verified_at' => 'datetime',
             'last_login_at' => 'datetime',
-            'last_seen' => 'datetime',
-            'premium_expires_at' => 'datetime',
+            'last_seen' => 'datetime',            
             'banned_until' => 'datetime',
             'is_premium' => 'boolean',
+            'premium_expires_at' => 'datetime',
+            'is_vip' => 'boolean',
+            'vip_expires_at' => 'datetime',
             'is_verified' => 'boolean',
             'has_completed_onboarding' => 'boolean',            
         ];
@@ -45,6 +50,10 @@ class User extends Authenticatable implements MustVerifyEmail
     // ============================================
     // СВЯЗИ (ОТНОШЕНИЯ)
     // ============================================
+        // Связи
+    public function subscriptions(): HasMany { return $this->hasMany(UserSubscription::class); }
+    public function boosts(): HasMany { return $this->hasMany(UserBoost::class); }
+
 
     public function adminLogs(): HasMany
     {
@@ -112,12 +121,7 @@ class User extends Authenticatable implements MustVerifyEmail
     public function transactions(): HasMany  
     {
         return $this->hasMany(Transaction::class);
-    }
-
-    public function subscriptions(): HasMany 
-    {
-        return $this->hasMany(UserSubscription::class);
-    }
+    }  
 
     public function reportsMade(): HasMany
     {
@@ -169,6 +173,14 @@ class User extends Authenticatable implements MustVerifyEmail
         return $this->hasMany(Verification::class); 
     }
 
+    // Аксессоры для чистой проверки в коде (O(1) скорость)
+    public function getHasActivePremiumAttribute(): bool {
+        return $this->is_premium && $this->premium_expires_at?->isFuture();
+    }
+    public function getHasActiveVipAttribute(): bool {
+        return $this->is_vip && $this->vip_expires_at?->isFuture();
+    }
+
     // ============================================
     // СКОПЫ (SCOPES)
     // ============================================
@@ -198,14 +210,7 @@ class User extends Authenticatable implements MustVerifyEmail
             return false;
         }
         return is_null($this->banned_until) || $this->banned_until->isFuture();
-    }
-
-    public function getHasActivePremiumAttribute(): bool
-    {
-        return $this->is_premium 
-            && !is_null($this->premium_expires_at) 
-            && $this->premium_expires_at->isFuture();
-    }
+    } 
 
     public function getIsOnlineAttribute(): bool
     {

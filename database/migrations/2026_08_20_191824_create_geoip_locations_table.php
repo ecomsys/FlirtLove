@@ -8,13 +8,13 @@ return new class extends Migration
 {
     public function up(): void
     {
-        Schema::create('geo_locations', function (Blueprint $table) {
+        Schema::create('geoip_locations', function (Blueprint $table) {
             $table->id();
             
             // Иерархия: null = Страна, ID = Регион/Город
             $table->foreignId('parent_id')
                 ->nullable()
-                ->constrained('geo_locations')
+                ->constrained('geoip_locations')
                 ->cascadeOnDelete(); // Если удаляем страну, удаляются и её регионы
             
             $table->enum('type', ['country', 'region', 'city'])->index();
@@ -36,6 +36,6 @@ return new class extends Migration
 
     public function down(): void
     {
-        Schema::dropIfExists('geo_locations');
+        Schema::dropIfExists('geoip_locations');
     }
 };

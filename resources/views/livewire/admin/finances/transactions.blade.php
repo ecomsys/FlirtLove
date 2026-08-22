@@ -1,7 +1,9 @@
 <?php
 
+use App\Actions\Admin\TransactionAction;
+use App\Enums\RefundReason;
 use App\Models\Transaction;
-use App\Models\AdminLog;
+use App\Services\Payments\MockAcquiringService;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Url;
@@ -12,35 +14,21 @@ new #[Layout('layouts.admin')] class extends Component
 {
     use WithPagination;
 
-    /** @var string Поиск (ID, Email, ID провайдера) */
     #[Url(as: 'q', except: '')]
     public string $search = '';
 
-    /** @var string Фильтр статуса */
     public string $statusFilter = 'all';
-
-    /** @var string Фильтр типа операции */
     public string $typeFilter = 'all';
 
-    /** @var string Фильтр периода */
     #[Url(as: 'period', except: 'all')]
     public string $dateFilter = 'all';
 
-    /** @var int|null ID транзакции для модалки просмотра */
     public ?int $viewingTransactionId = null;
-    
-    /** @var int|null ID транзакции для модалки возврата */
     public ?int $refundingTransactionId = null;
     
-    /** @var string Причина возврата */
     public string $refundReason = '';
-
-     /** @var string|null Текстовый комментарий к возврату */
     public string $refundComment = '';
 
-    /**
-     * Инициализация. Сбрасываем фильтры, если пришли по прямой ссылке.
-     */
     public function mount(): void
     {
         if (request()->has('q')) {
@@ -50,36 +38,19 @@ new #[Layout('layouts.admin')] class extends Component
         }
     }
 
-    public function updatedSearch(): void { $this->resetPage(); }
-    public function updatedStatusFilter(): void { $this->resetPage(); }
-    
-    // ФИКС: Очищаем поиск при ручной смене фильтра типа
-    public function updatedTypeFilter(): void
-    {
-        $this->search = '';
-        $this->resetPage();
-    }
-    
-    // ФИКС: Очищаем поиск при ручной смене фильтра даты
-    public function updatedDateFilter(): void
-    {
-        $this->search = '';
-        $this->resetPage();
-    }
+    // ФИКС РЕАКТИВНОСТИ: Сбрасываем кэш при любом изменении фильтров
+    public function updatedSearch(): void { $this->resetPage(); $this->clearComputedCache(); }
+    public function updatedStatusFilter(): void { $this->resetPage(); $this->clearComputedCache(); }
+    public function updatedTypeFilter(): void { $this->resetPage(); $this->clearComputedCache(); }
+    public function updatedDateFilter(): void { $this->resetPage(); $this->clearComputedCache(); }
 
-    /**
-     * Установка фильтра статуса.
-     */
     public function setStatusFilter(string $status): void
     {
         $this->statusFilter = $status;
-        $this->search = ''; // ФИКС: Очищаем поиск при клике на кнопку статуса!
         $this->resetPage();
+        $this->clearComputedCache();
     }
 
-    /**
-     * Сброс всех фильтров.
-     */
     public function resetFilters(): void
     {
         $this->reset(['search', 'statusFilter', 'typeFilter', 'dateFilter']);
@@ -87,19 +58,11 @@ new #[Layout('layouts.admin')] class extends Component
         $this->typeFilter = 'all';
         $this->dateFilter = 'all';
         $this->resetPage();
+        $this->clearComputedCache();
     }
 
-    /**
-     * Открыть модалку просмотра деталей.
-     */
-    public function viewTransaction(int $id): void
-    {
-        $this->viewingTransactionId = $id;
-    }
+    public function viewTransaction(int $id): void { $this->viewingTransactionId = $id; }
 
-    /**
-     * Открыть модалку возврата.
-     */
     public function openRefundModal(int $transactionId): void
     {
         $this->refundingTransactionId = $transactionId;
@@ -107,73 +70,50 @@ new #[Layout('layouts.admin')] class extends Component
         $this->refundComment = '';
     }
 
-    /**
-     * Ручная синхронизация статуса платежа с банком (для pending транзакций).
-     */
-    public function syncTransaction(int $id, \App\Services\Payments\MockAcquiringService $bank): void
+    public function syncTransaction(int $id, TransactionAction $action, MockAcquiringService $bank): void
     {
         $transaction = Transaction::find($id);
         if (!$transaction || $transaction->status !== 'pending') return;
 
-        $bankResponse = $bank->checkStatus($transaction);
+        $result = $action->syncWithBank($transaction, $bank);
 
-        if ($bankResponse['status'] === 'success') {
-            $transaction->markAsSuccess([
-                'synced_by' => auth()->user()->name,
-                'bank_message' => $bankResponse['message'],
-                'provider_transaction_id' => $bankResponse['provider_transaction_id']
-            ]);
-
-            if ($transaction->user) {
-                if ($transaction->type === 'subscription') {
-                    $transaction->user->update([
-                        'is_premium' => true,
-                        'premium_expires_at' => now()->addDays(30),
-                    ]);
-                } elseif ($transaction->type === 'credits' && $transaction->credits_amount) {
-                    $pref = $transaction->user->preferences;
-                    if ($pref) $pref->increment('credits', $transaction->credits_amount);
-                }
-            }
-
-            AdminLog::record('transaction.sync_success', $transaction, auth()->user(), ['status' => 'pending'], ['status' => 'success']);
-            $this->dispatch('show-toast', type: 'success', message: 'Синхронизация успешна! Платеж подтвержден.');
-        } else {
-            $transaction->markAsFailed($bankResponse['message']);
-            AdminLog::record('transaction.sync_failed', $transaction, auth()->user(), ['status' => 'pending'], ['status' => 'failed']);
-            $this->dispatch('show-toast', type: 'error', message: 'Банк отклонил платеж: ' . $bankResponse['message']);
-        }
+        $this->dispatch('show-toast', type: $result['success'] ? 'success' : 'error', message: $result['message']);
+        $this->clearComputedCache();
     }
 
-    /**
-     * Обработка возврата (Refund) - отправка в очередь.
-     */
-    public function processRefund(): void
+        #[Computed]
+    public function refundingTransaction()
+    {
+        if (!$this->refundingTransactionId) return null;
+        
+        return Transaction::find($this->refundingTransactionId);
+    }
+
+    public function processRefund(TransactionAction $action): void
     {
         $this->validate([
-            'refundReason' => ['required', 'in:' . implode(',', array_column(\App\Enums\RefundReason::cases(), 'value'))],
+            'refundReason' => ['required', 'in:' . implode(',', array_column(RefundReason::cases(), 'value'))],
             'refundComment' => 'nullable|string|min:3',
         ]);
 
         $transaction = Transaction::find($this->refundingTransactionId);
         if (!$transaction || $transaction->status !== 'success') return;
 
-        $reasonEnum = \App\Enums\RefundReason::tryFrom($this->refundReason);
+        $reasonEnum = RefundReason::tryFrom($this->refundReason);
         
-        $transaction->update([
-            'meta' => array_merge($transaction->meta ?? [], [
-                'refund_reason' => $reasonEnum?->label(),
-                'refund_comment' => $this->refundComment,
-                'refund_initiated_by' => auth()->user()->name,
-            ])
-        ]);
-
-        AdminLog::record('transaction.refund', $transaction, auth()->user(), ['status' => 'success'], ['status' => 'pending_refund', 'reason' => $reasonEnum?->label()]);
-
-        \App\Jobs\ProcessRefundJob::dispatch($transaction->id);
+        $action->processRefund($transaction, $reasonEnum, $this->refundComment);
 
         $this->refundingTransactionId = null;
         $this->dispatch('show-toast', type: 'success', message: 'Заявка на возврат отправлена в банк.');
+        $this->clearComputedCache();
+    }
+
+    private function clearComputedCache(): void
+    {
+        unset($this->transactions);
+        unset($this->counts);
+        unset($this->totalRevenue);
+        unset($this->viewingTransaction);
     }
 
     // ============================================
@@ -290,8 +230,38 @@ new #[Layout('layouts.admin')] class extends Component
     </div>
 
     <!-- Фильтры -->
-    <div class="flex flex-col gap-2">
-        <div class="flex flex-wrap gap-1.5">
+    <div class="flex flex-col gap-2">      
+
+        <div class="flex items-center justify-between gap-2">
+            {{-- ФИЛЬТР ПЕРИОДА --}}
+            <div class="flex gap-1 mr-2">
+                <x-ui.button wire:click="$set('dateFilter', 'all')" variant="{{ $dateFilter == 'all' ? 'default' : 'secondary' }}" size="sm">За все время</x-ui.button>
+                <x-ui.button wire:click="$set('dateFilter', 'day')" variant="{{ $dateFilter == 'day' ? 'default' : 'secondary' }}" size="sm">Сегодня</x-ui.button>
+                <x-ui.button wire:click="$set('dateFilter', 'week')" variant="{{ $dateFilter == 'week' ? 'default' : 'secondary' }}" size="sm">Неделя</x-ui.button>
+                <x-ui.button wire:click="$set('dateFilter', 'month')" variant="{{ $dateFilter == 'month' ? 'default' : 'secondary' }}" size="sm">Месяц</x-ui.button>                
+            </div>
+
+            <div class="flex items-center gap-2">
+                <x-ui.select wire:key="type-filter-select" wire:model.live="typeFilter">
+                    <x-ui.select-trigger class="w-40"><x-ui.select-value placeholder="Тип операции" /></x-ui.select-trigger>
+                    <x-ui.select-content>
+                        <x-ui.select-item value="all">Все типы</x-ui.select-item>
+                        <x-ui.select-item value="subscription">Подписки</x-ui.select-item>
+                        <x-ui.select-item value="credits">Кредиты</x-ui.select-item>                   
+                    </x-ui.select-content>
+                </x-ui.select>
+
+                <div class="relative w-64">
+                    <x-ui.input wire:model.live.debounce.300ms="search" type="search" placeholder="ID, Email или ID от банка..." class="pl-9 pr-8" />
+                    <x-lucide-search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                    @if(!empty($search))
+                        <button wire:click="$set('search', '')" class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"><x-lucide-x class="w-4 h-4" /></button>
+                    @endif
+                </div>
+            </div>    
+         </div>
+
+           <div class="flex flex-wrap gap-1.5">
             <x-ui.button wire:click="setStatusFilter('all')" variant="{{ $statusFilter === 'all' ? 'default' : 'secondary' }}" size="sm">
                 Все <x-ui.badge size="xs" class="ml-1">{{ $this->counts['all'] }}</x-ui.badge>
             </x-ui.button>
@@ -308,35 +278,6 @@ new #[Layout('layouts.admin')] class extends Component
                 <x-lucide-rotate-ccw class="w-4 h-4 inline mr-1 text-blue-500" /> Возвраты <x-ui.badge size="xs" class="ml-1">{{ $this->counts['refunded'] }}</x-ui.badge>
             </x-ui.button>
         </div>
-
-        <div class="flex items-center justify-between gap-2">
-            {{-- ФИЛЬТР ПЕРИОДА --}}
-            <div class="flex gap-1 mr-2">
-                <x-ui.button wire:click="$set('dateFilter', 'all')" variant="{{ $dateFilter == 'all' ? 'default' : 'secondary' }}" size="sm">За все время</x-ui.button>
-                <x-ui.button wire:click="$set('dateFilter', 'day')" variant="{{ $dateFilter == 'day' ? 'default' : 'secondary' }}" size="sm">Сегодня</x-ui.button>
-                <x-ui.button wire:click="$set('dateFilter', 'week')" variant="{{ $dateFilter == 'week' ? 'default' : 'secondary' }}" size="sm">Неделя</x-ui.button>
-                <x-ui.button wire:click="$set('dateFilter', 'month')" variant="{{ $dateFilter == 'month' ? 'default' : 'secondary' }}" size="sm">Месяц</x-ui.button>                
-            </div>
-
-            <div class="flex items-center gap-2">
-            <x-ui.select wire:model.live="typeFilter" >
-                    <x-ui.select-trigger class="w-40"><x-ui.select-value placeholder="Тип операции" /></x-ui.select-trigger>
-                    <x-ui.select-content>
-                        <x-ui.select-item value="all">Все типы</x-ui.select-item>
-                        <x-ui.select-item value="subscription">Подписки</x-ui.select-item>
-                        <x-ui.select-item value="credits">Кредиты</x-ui.select-item>                    
-                    </x-ui.select-content>
-                </x-ui.select>
-
-                <div class="relative w-64">
-                    <x-ui.input wire:model.live.debounce.300ms="search" type="search" placeholder="ID, Email или ID от банка..." class="pl-9 pr-8" />
-                    <x-lucide-search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                    @if(!empty($search))
-                        <button wire:click="$set('search', '')" class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"><x-lucide-x class="w-4 h-4" /></button>
-                    @endif
-                </div>
-            </div>    
-         </div>
     </div>     
     <!-- Таблица -->
     <x-ui.table>
@@ -355,14 +296,20 @@ new #[Layout('layouts.admin')] class extends Component
 
         <x-ui.table-body>
             @forelse ($this->transactions as $transaction)
-                @php 
+                          @php 
                     $statusBadge = $transaction->status_badge;
+                    
+                    // ФИКС: Контрастные цвета. Premium - success (зеленый), VIP - info (синий), Кредиты - warning (желтый)
                     $typeBadge = match($transaction->type) {
-                        'subscription' => ['variant' => 'default', 'label' => 'Подписка'],
-                        'credits' => ['variant' => 'secondary', 'label' => 'Кредиты'],
+                        'subscription' => [
+                            'variant' => ($transaction->meta['tier'] ?? 'sub') === 'vip' ? 'default' : 'outline', 
+                            'label' => ($transaction->meta['tier'] ?? 'sub') === 'vip' ? 'VIP' : 'Premium'
+                        ],
+                        'credits' => ['variant' => 'warning', 'label' => 'Кредиты'],
                         'refund' => ['variant' => 'destructive', 'label' => 'Возврат'],
-                        default => ['variant' => 'outline', 'label' => $transaction->type]
+                        default => ['variant' => 'secondary', 'label' => $transaction->type]
                     };
+                    
                     $amountClass = match($transaction->status) {
                         'refunded' => 'text-destructive font-medium',
                         'failed' => 'text-muted-foreground/50',
@@ -370,7 +317,6 @@ new #[Layout('layouts.admin')] class extends Component
                         default => 'text-green-500 font-medium'
                     };
                     $amountSign = $transaction->status === 'refunded' ? '-' : '';
-                    // ФИКС: Подсветка искомой транзакции
                     $isHighlighted = is_numeric($this->search) && $transaction->id == (int)$this->search;
                 @endphp
                 <x-ui.table-row 
@@ -413,7 +359,7 @@ new #[Layout('layouts.admin')] class extends Component
                     <x-ui.table-cell class="text-xs text-muted-foreground whitespace-nowrap">
                         {{ $transaction->created_at->format('d.m.Y H:i') }}
                     </x-ui.table-cell>
-                                        <x-ui.table-cell class="text-right">
+                    <x-ui.table-cell class="text-right">
                         <div class="flex gap-1 justify-end">
                             <x-ui.button wire:click="viewTransaction({{ $transaction->id }})" variant="ghost" size="icon-sm" title="Посмотреть детали">
                                 <x-lucide-eye class="w-4 h-4" />
@@ -495,9 +441,20 @@ new #[Layout('layouts.admin')] class extends Component
                             <p class="text-xs text-muted-foreground">Сумма</p>
                             <p class="font-medium">{{ $this->viewingTransaction->formatted_amount }}</p>
                         </div>
-                        <div>
+                                               <div>
                             <p class="text-xs text-muted-foreground">Тип</p>
-                            <p class="font-medium uppercase">{{ $this->viewingTransaction->type }}</p>
+                            @php
+                                $modalTypeVariant = 'secondary';
+                                $modalTypeLabel = ucfirst($this->viewingTransaction->type);
+                                if ($this->viewingTransaction->type === 'subscription') {
+                                    $isVip = ($this->viewingTransaction->meta['tier'] ?? '') === 'vip';
+                                    $modalTypeVariant = $isVip ? 'default' : 'outline';
+                                    $modalTypeLabel = $isVip ? 'VIP' : 'Premium';
+                                } elseif ($this->viewingTransaction->type === 'credits') {
+                                    $modalTypeVariant = 'warning';
+                                }
+                            @endphp
+                            <x-ui.badge variant="{{ $modalTypeVariant }}" size="sm">{{ $modalTypeLabel }}</x-ui.badge>
                         </div>
                         <div>
                             <p class="text-xs text-muted-foreground">Статус</p>
@@ -534,7 +491,7 @@ new #[Layout('layouts.admin')] class extends Component
         </div>
     @endif
 
-    <!-- МОДАЛКА ВОЗВРАТА (Refund) -->
+       <!-- МОДАЛКА ВОЗВРАТА (Refund) -->
     @if($refundingTransactionId)
         <div wire:key="refund-modal-{{ $refundingTransactionId }}"
              class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
@@ -552,16 +509,47 @@ new #[Layout('layouts.admin')] class extends Component
                 </div>
 
                 <div class="p-6 space-y-4">
+                    
+                    {{-- НОВОЕ: Плашка с данными транзакции --}}
+                    @if($this->refundingTransaction)
+                        <div class="bg-muted/30 border border-border rounded-md p-4 space-y-2 mb-2">
+                            <div class="flex justify-between items-center text-sm">
+                                <span class="text-muted-foreground">ID транзакции:</span>
+                                <span class="font-mono font-bold">#{{ $this->refundingTransaction->id }}</span>
+                            </div>
+                            <div class="flex justify-between items-center text-sm">
+                                <span class="text-muted-foreground">Сумма:</span>
+                                <span class="font-bold text-foreground">{{ $this->refundingTransaction->formatted_amount }}</span>
+                            </div>
+                            <div class="flex justify-between items-center text-sm">
+                                <span class="text-muted-foreground">Тип операции:</span>
+                                @php
+                                    $refundTypeBadge = match($this->refundingTransaction->type) {
+                                        'subscription' => [
+                                            'variant' => ($this->refundingTransaction->meta['tier'] ?? 'sub') === 'vip' ? 'default' : 'outline', 
+                                            'label' => ($this->refundingTransaction->meta['tier'] ?? 'sub') === 'vip' ? 'VIP' : 'Premium'
+                                        ],
+                                        'credits' => ['variant' => 'warning', 'label' => 'Кредиты'],
+                                        default => ['variant' => 'secondary', 'label' => ucfirst($this->refundingTransaction->type)]
+                                    };
+                                @endphp
+                                <x-ui.badge variant="{{ $refundTypeBadge['variant'] }}" size="sm">{{ $refundTypeBadge['label'] }}</x-ui.badge>
+                            </div>
+                        </div>
+                    @endif
+
                     <p class="text-sm text-muted-foreground">
-                        Вы уверены? Деньги будут возвращены пользователю. В реальном приложении будет вызван API платежной системы.
+                        Вы уверены? Деньги будут возвращены пользователю. В приложении будет вызван API платежной системы.
                     </p>
                     
                     <div class="space-y-3">
                         <!-- Селект причины возврата (Enum) -->
                         <div>
                             <x-ui.label class="text-sm font-medium">Причина возврата (обязательно)</x-ui.label>
-                            <x-ui.select wire:model="refundReason" class="w-full mt-1">
-                                <x-ui.select-trigger><x-ui.select-value placeholder="Выберите причину..." /></x-ui.select-trigger>
+                            <x-ui.select wire:model="refundReason" class="mt-1">
+                                <x-ui.select-trigger class="w-full">
+                                    <x-ui.select-value placeholder="Выберите причину..." />
+                                </x-ui.select-trigger>
                                 <x-ui.select-content>
                                     @foreach(\App\Enums\RefundReason::options() as $value => $label)
                                         <x-ui.select-item value="{{ $value }}">{{ $label }}</x-ui.select-item>

@@ -1,10 +1,11 @@
 <?php
+
 namespace Database\Seeders;
 
 use App\Models\User;
 use App\Models\UserProfile;
 use App\Models\UserPreference;
-use App\Models\UserBalance; // <--- ДОБАВИЛИ
+use App\Models\UserBalance;
 use App\Models\Album;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Hash;
@@ -37,7 +38,6 @@ class StaffSeeder extends Seeder
         $password = '12121212';
 
         foreach ($staffMembers as $member) {
-            // 1. Создаем или обновляем аккаунт
             $user = User::updateOrCreate(
                 ['email' => $member['email']],
                 [
@@ -56,7 +56,6 @@ class StaffSeeder extends Seeder
                 ]
             );
 
-            // 2. Профиль
             UserProfile::updateOrCreate(
                 ['user_id' => $user->id],
                 [
@@ -75,7 +74,6 @@ class StaffSeeder extends Seeder
                 ]
             );
 
-            // 3. Настройки (УБРАЛИ КРЕДИТЫ И ЛАЙКИ)
             UserPreference::updateOrCreate(
                 ['user_id' => $user->id],
                 [
@@ -83,7 +81,7 @@ class StaffSeeder extends Seeder
                     'theme' => 'light',
                     'preferred_gender' => 'any',
                     'preferred_distance_km' => 10000,
-                    'hide_from_search' => true, // Не показывать в ленте!
+                    'hide_from_search' => true,
                     'push_enabled' => true,
                     'email_enabled' => true,
                     'email_settings' => [
@@ -99,19 +97,16 @@ class StaffSeeder extends Seeder
                 ]
             );
 
-            // 4. Создаем БАЛАНС (НОВОЕ)
+            // ФИКС: Убраны boosts_remaining и boosts_reset_at
             UserBalance::updateOrCreate(
                 ['user_id' => $user->id],
                 [
                     'credits' => 5000,
                     'superlikes_remaining' => 100,
                     'superlikes_reset_at' => now()->addMonth(),
-                    'boosts_remaining' => 10,
-                    'boosts_reset_at' => now()->addMonth(),
                 ]
             );
 
-            // 5. Альбом
             Album::updateOrCreate(
                 ['user_id' => $user->id, 'is_default' => true],
                 [

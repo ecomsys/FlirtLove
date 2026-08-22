@@ -11,7 +11,7 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Log;
 
-class SendVipExpiringNotification implements ShouldQueue
+class SendSubscribeExpiringNotification implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels; // <--- И СЮДА
 
@@ -25,7 +25,7 @@ class SendVipExpiringNotification implements ShouldQueue
     {
         // ЗАЩИТА ОТ ГОНКИ
         if (!$this->subscription->isActive() || !$this->subscription->ends_at->between(now(), now()->addHours(25))) {
-            Log::info("SendVipExpiringNotification: Подписка ID {$this->subscription->id} больше не требует уведомления.");
+            Log::info("SendSubscribeExpiringNotification: Подписка ID {$this->subscription->id} больше не требует уведомления.");
             return;
         }
 
@@ -37,6 +37,6 @@ class SendVipExpiringNotification implements ShouldQueue
 
         $user->notify(new SubscriptionExpiringSoonNotification($this->subscription));
         
-        Log::info("SendVipExpiringNotification: Отправлено юзеру ID {$user->id} о подписке ID {$this->subscription->id}");
+        Log::info("SendSubscribeExpiringNotification: Отправлено юзеру ID {$user->id} о подписке ID {$this->subscription->id}");
     }
 }
