@@ -28,8 +28,12 @@ return new class extends Migration
             $table->timestamp('banned_until')->nullable();
 
             // === 3. ПОДПИСКА (Кэш для middleware) ===
+            // === КЭШ ПОДПИСОК И БУСТОВ ДЛЯ MIDDLEWARE ===
             $table->boolean('is_premium')->default(false);
             $table->timestamp('premium_expires_at')->nullable();
+
+            $table->boolean('is_vip')->default(false);
+            $table->timestamp('vip_expires_at')->nullable();         
 
             // === 4. ВЕРИФИКАЦИЯ И ОНБОРДИНГ ===
             $table->boolean('is_verified')->default(false);
@@ -45,6 +49,7 @@ return new class extends Migration
             // === КРИТИЧЕСКИ ВАЖНЫЕ ИНДЕКСЫ ===
             $table->index(['status', 'has_completed_onboarding']); 
             $table->index(['is_premium', 'premium_expires_at']);
+            $table->index(['is_vip', 'vip_expires_at']);
         });
 
         Schema::create('password_reset_tokens', function (Blueprint $table) {

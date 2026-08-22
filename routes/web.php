@@ -95,7 +95,7 @@ Route::middleware(['auth', 'verified'])->prefix('admin')->name('admin.')->group(
        
         Volt::route('/system/journal-logs', 'admin.system.journal-logs')->name('system.journal-logs');
 
-        Volt::route('/system/geo-locations', 'admin.system.geo-locations.index')->name('system.geo-locations.index');
+        Volt::route('/system/geo-ip-locations', 'admin.system.geo-ip-locations.index')->name('system.geo-ip-locations.index');
 
         Volt::route('/system/laravel-logs', 'admin.system.laravel-logs')->name('system.laravel-logs');
         

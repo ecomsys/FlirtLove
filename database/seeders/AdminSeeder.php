@@ -5,7 +5,7 @@ namespace Database\Seeders;
 use App\Models\User;
 use App\Models\UserProfile;
 use App\Models\UserPreference;
-use App\Models\UserBalance; // <--- ДОБАВИЛИ
+use App\Models\UserBalance;
 use App\Models\Album;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Hash;
@@ -32,7 +32,6 @@ class AdminSeeder extends Seeder
         $founderIds = [];
 
         foreach ($founders as $founderData) {
-            // 1. Создаем или обновляем Владельца
             $admin = User::updateOrCreate(
                 ['email' => $founderData['email']],
                 [
@@ -53,7 +52,6 @@ class AdminSeeder extends Seeder
 
             $founderIds[] = $admin->id;
 
-            // 2. Создаем профиль
             UserProfile::updateOrCreate(
                 ['user_id' => $admin->id],
                 [
@@ -91,7 +89,6 @@ class AdminSeeder extends Seeder
                 ]
             );
 
-            // 3. Создаем настройки (УБРАЛИ КРЕДИТЫ И ЛАЙКИ)
             UserPreference::updateOrCreate(
                 ['user_id' => $admin->id],
                 [
@@ -107,7 +104,7 @@ class AdminSeeder extends Seeder
                     'is_invisible' => false,
                     'hide_intimate' => false,
                     'disable_photo_comments' => false,
-                    'hide_from_search' => true, // Владельцев не нужно показывать в ленте!
+                    'hide_from_search' => true, 
                     'push_enabled' => true,
                     'email_enabled' => true,
                     'email_settings' => [
@@ -123,19 +120,16 @@ class AdminSeeder extends Seeder
                 ]
             );
 
-            // 4. Создаем БАЛАНС (НОВОЕ)
+            // ФИКС: Убраны boosts_remaining и boosts_reset_at
             UserBalance::updateOrCreate(
                 ['user_id' => $admin->id],
                 [
                     'credits' => 999999,
                     'superlikes_remaining' => 999,
                     'superlikes_reset_at' => now()->addDays(365),
-                    'boosts_remaining' => 999,
-                    'boosts_reset_at' => now()->addDays(365),
                 ]
             );
 
-            // 5. Создаем альбом
             Album::updateOrCreate(
                 [
                     'user_id' => $admin->id,

@@ -18,11 +18,7 @@ return new class extends Migration
             // === ЛИМИТЫ (Суперлайки) ===
             $table->unsignedInteger('superlikes_remaining')->default(5);
             $table->timestamp('superlikes_reset_at')->nullable();
-            
-            // На будущее (Бусты профиля)
-            $table->unsignedInteger('boosts_remaining')->default(0);
-            $table->timestamp('boosts_reset_at')->nullable();
-
+   
             $table->timestamps();
         });
     }

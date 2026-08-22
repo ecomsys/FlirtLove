@@ -90,24 +90,42 @@ new class extends Component
             </div>
         </div>
 
-        {{-- Карточка Статус Подписки --}}
+        {{-- Карточка Статус Подписки (Premium & VIP) --}}
         <div class="p-4 bg-muted/20 rounded-lg border border-border h-full flex flex-col justify-center">
             <h3 class="text-sm font-semibold mb-4 flex items-center gap-2">
-                <x-lucide-crown class="w-4 h-4 text-yellow-500" /> Статус подписки
+                <x-lucide-crown class="w-4 h-4 text-yellow-500" /> Активные статусы
             </h3>
             
-            <div class="flex items-center gap-3 mb-2">
-                @if($this->user->has_active_premium)
-                    <x-ui.badge variant="success" size="sm">Premium Active</x-ui.badge>
-                    @if($this->user->premium_expires_at)
-                        <span class="text-xs text-muted-foreground">Истекает: {{ $this->user->premium_expires_at->format('d.m.Y H:i') }}</span>
+            <div class="flex flex-col gap-3">
+                {{-- Premium --}}
+                <div class="flex items-center gap-3">
+                    @if($this->user->has_active_premium)
+                        <x-ui.badge variant="success" size="sm">Premium</x-ui.badge>
+                        @if($this->user->premium_expires_at)
+                            <span class="text-xs text-muted-foreground">до {{ $this->user->premium_expires_at->format('d.m.Y H:i') }}</span>
+                        @endif
+                    @elseif($this->user->premium_expires_at && $this->user->premium_expires_at->isPast())
+                        <x-ui.badge variant="destructive" size="sm">Premium истек</x-ui.badge>
+                        <span class="text-xs text-muted-foreground">{{ $this->user->premium_expires_at->format('d.m.Y') }}</span>
+                    @else
+                        <x-ui.badge variant="secondary" size="sm">Premium нет</x-ui.badge>
                     @endif
-                @elseif($this->user->premium_expires_at && $this->user->premium_expires_at->isPast())
-                    <x-ui.badge variant="destructive" size="sm">Просрочена</x-ui.badge>
-                    <span class="text-xs text-muted-foreground">Истекла: {{ $this->user->premium_expires_at->format('d.m.Y H:i') }}</span>
-                @else
-                    <x-ui.badge variant="secondary" size="sm">Нет подписки</x-ui.badge>
-                @endif
+                </div>
+
+                {{-- VIP --}}
+                <div class="flex items-center gap-3">
+                    @if($this->user->has_active_vip)
+                        <x-ui.badge variant="info" size="sm">VIP (Буст)</x-ui.badge>
+                        @if($this->user->vip_expires_at)
+                            <span class="text-xs text-muted-foreground">до {{ $this->user->vip_expires_at->format('d.m.Y H:i') }}</span>
+                        @endif
+                    @elseif($this->user->vip_expires_at && $this->user->vip_expires_at->isPast())
+                        <x-ui.badge variant="destructive" size="sm">VIP истек</x-ui.badge>
+                        <span class="text-xs text-muted-foreground">{{ $this->user->vip_expires_at->format('d.m.Y') }}</span>
+                    @else
+                        <x-ui.badge variant="secondary" size="sm">VIP нет</x-ui.badge>
+                    @endif
+                </div>
             </div>
         </div>
     </div>
@@ -115,7 +133,7 @@ new class extends Component
     {{-- Нижняя панель: Таблицы бок о бок --}}
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">     
 
-        {{-- Левая колонка: История транзакций (Все подряд) --}}
+        {{-- Левая колонка: История транзакций --}}
         <div class="space-y-3">
             <h3 class="text-sm font-semibold flex items-center gap-2">
                 <x-lucide-receipt class="w-4 h-4" /> Транзакции ({{ $this->transactions->total() }})
@@ -147,14 +165,15 @@ new class extends Component
                                 <x-ui.table-cell>
                                     <div class="flex flex-col">
                                         @if($trans->type === 'subscription')
-                                            <span class="text-sm font-medium">Покупка VIP</span>
+                                            @php $tier = $trans->meta['tier'] ?? 'subscription'; @endphp
+                                            <span class="text-sm font-medium">Покупка {{ $tier === 'vip' ? 'VIP' : 'Premium' }}</span>
                                             <span class="text-xs text-muted-foreground">
-                                                {{ isset($trans->meta['plan_name']) ? $trans->meta['plan_name'] : 'Тариф удален' }}
+                                                {{ $trans->meta['plan_name'] ?? 'Тариф удален' }}
                                             </span>
                                         @elseif($trans->type === 'credits')
                                             <span class="text-sm font-medium">Покупка кредитов</span>
                                             <span class="text-xs text-muted-foreground">
-                                                {{ $trans->credits_amount ?? ($trans->meta['credits_purchased'] ?? 0) }} шт
+                                                {{ $trans->credits_amount ?? 0 }} шт
                                             </span>
                                         @else
                                             <span class="text-sm text-muted-foreground">{{ ucfirst($trans->type) }}</span>
@@ -165,7 +184,6 @@ new class extends Component
                                     <span class="text-sm font-medium">{{ $trans->amount }} ₽</span>
                                 </x-ui.table-cell>
                                 <x-ui.table-cell>
-                                    {{-- ФИКС: Статусы исправлены на success, pending, failed, refunded --}}
                                     @if($trans->status === 'success')
                                         <x-ui.badge variant="success" size="xs">Успешно</x-ui.badge>
                                     @elseif($trans->status === 'pending')
@@ -189,7 +207,7 @@ new class extends Component
             @endif
         </div>
 
-        {{-- Правая колонка: История подписок (Полная) --}}
+                {{-- Правая колонка: История подписок --}}
         <div class="space-y-3">
             <h3 class="text-sm font-semibold flex items-center gap-2">
                 <x-lucide-history class="w-4 h-4" /> Подписки ({{ $this->subscriptions->total() }})
@@ -204,7 +222,7 @@ new class extends Component
                     <x-ui.table-header>
                         <x-ui.table-row>
                             <x-ui.table-head class="w-12">ID</x-ui.table-head>
-                            <x-ui.table-head>Тариф</x-ui.table-head>
+                            <x-ui.table-head>Тип / Тариф</x-ui.table-head>
                             <x-ui.table-head>Начало</x-ui.table-head>
                             <x-ui.table-head>Конец</x-ui.table-head>
                             <x-ui.table-head>Чек</x-ui.table-head>
@@ -213,14 +231,19 @@ new class extends Component
                     </x-ui.table-header>
                     <x-ui.table-body>
                         @foreach($this->subscriptions as $sub)
-                            <x-ui.table-row wire:key="sub-{{ $sub->plan_id }}">
+                            <x-ui.table-row wire:key="sub-{{ $sub->id }}">
                                 <x-ui.table-cell class="text-xs font-mono whitespace-nowrap">
                                     <a href="{{ route('admin.finances.subscriptions', ['q' => $sub->plan_id]) }}" wire:navigate class="text-blue-500 hover:underline" title="Открыть в журнале подписок">
                                         #{{ $sub->plan_id }}
                                     </a>
                                 </x-ui.table-cell>
                                 <x-ui.table-cell>
-                                    <span class="text-sm font-medium">{{ $sub->plan?->name ?? 'Удален' }}</span>
+                                    <div class="flex flex-col">
+                                        <x-ui.badge variant="{{ $sub->tier === 'vip' ? 'info' : 'secondary' }}" size="xs">
+                                            {{ $sub->tier === 'vip' ? 'VIP' : 'Premium' }}
+                                        </x-ui.badge>
+                                        <span class="text-sm font-medium mt-1">{{ $sub->plan?->name ?? 'Тариф удален' }}</span>
+                                    </div>
                                 </x-ui.table-cell>
                                 <x-ui.table-cell class="text-xs text-muted-foreground whitespace-nowrap">
                                     {{ $sub->starts_at->format('d.m.y') }}
@@ -228,7 +251,6 @@ new class extends Component
                                 <x-ui.table-cell class="text-xs text-muted-foreground whitespace-nowrap">
                                     {{ $sub->ends_at->format('d.m.y') }}
                                 </x-ui.table-cell>
-                                {{-- ФИКС: Вернули колонку Чек (ID транзакции) --}}
                                 <x-ui.table-cell class="text-xs text-muted-foreground font-mono whitespace-nowrap">
                                     @if($sub->transaction_id)
                                         <a href="{{ route('admin.finances.transactions', ['q' => $sub->transaction_id]) }}" wire:navigate class="text-blue-500 hover:underline" title="Найти чек об оплате">

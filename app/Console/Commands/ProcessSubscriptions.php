@@ -34,7 +34,7 @@ class ProcessSubscriptions extends Command
             ->whereNull('expires_notified_at') // <--- КЛЮЧЕВАЯ ЗАЩИТА ОТ СПАМА! Если уже уведомляли - пропускаем
             ->chunkById(100, function ($subscriptions) use (&$notifyCount) {
                 foreach ($subscriptions as $subscription) {
-                    \App\Jobs\SendVipExpiringNotification::dispatch($subscription);
+                    \App\Jobs\SendSubscribeExpiringNotification::dispatch($subscription);
                     
                     // Сразу ставим метку, что уведомление отправлено
                     $subscription->update(['expires_notified_at' => now()]);

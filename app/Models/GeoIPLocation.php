@@ -6,8 +6,10 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
-class GeoLocation extends Model
+class GeoIPLocation extends Model
 {
+    protected $table = 'geoip_locations';
+
     protected $fillable = [
         'parent_id',
         'type',
@@ -28,12 +30,12 @@ class GeoLocation extends Model
 
     public function parent(): BelongsTo
     {
-        return $this->belongsTo(GeoLocation::class, 'parent_id');
+        return $this->belongsTo(GeoIPLocation::class, 'parent_id');
     }
 
     public function children(): HasMany
     {
-        return $this->hasMany(GeoLocation::class, 'parent_id');
+        return $this->hasMany(GeoIPLocation::class, 'parent_id');
     }
 
     // ============================================

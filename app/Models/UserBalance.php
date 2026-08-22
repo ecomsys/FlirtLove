@@ -1,4 +1,5 @@
 <?php
+
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
@@ -10,15 +11,12 @@ class UserBalance extends Model
     protected $fillable = [
         'user_id', 'credits', 
         'superlikes_remaining', 'superlikes_reset_at',
-        'boosts_remaining', 'boosts_reset_at'
     ];
 
     protected $casts = [
         'credits' => 'integer',
         'superlikes_remaining' => 'integer',
         'superlikes_reset_at' => 'datetime',
-        'boosts_remaining' => 'integer',
-        'boosts_reset_at' => 'datetime',
     ];
 
     public function user(): BelongsTo
@@ -27,12 +25,9 @@ class UserBalance extends Model
     }
 
     // ============================================
-    // ХЕЛПЕРЫ ДЛЯ ВАЛЮТЫ И ЛИМИТОВ
+    // ХЕЛПЕРЫ ДЛЯ ВАЛЮТЫ (С защитой от Race Condition)
     // ============================================
 
-    /**
-     * Начислить кредиты (с защитой от гонки)
-     */
     public function addCredits(int $amount): bool
     {
         if ($amount <= 0) return false;
@@ -41,70 +36,49 @@ class UserBalance extends Model
             ->where('id', $this->id)
             ->increment('credits', $amount);
 
-        if ($affected) {
-            $this->credits += $amount; // Обновляем в памяти
-        }
+        if ($affected) $this->credits += $amount;
 
         return (bool) $affected;
     }
 
-    /**
-     * Списать кредиты (с защитой от гонки и ухода в минус)
-     */
     public function spendCredits(int $amount): bool
     {
-        if ($amount <= 0) return false;
+        if ($amount <= 0 || $this->credits < $amount) return false;
 
         $affected = DB::table('user_balances')
             ->where('id', $this->id)
             ->where('credits', '>=', $amount)
             ->decrement('credits', $amount);
 
-        if ($affected) {
-            $this->credits -= $amount; // Обновляем в памяти
-        }
+        if ($affected) $this->credits -= $amount;
 
         return (bool) $affected;
     }
 
-    /**
-     * Списать один суперлайк. Возвращает true, если лимит был, false - если закончился.
-     */
+    // ============================================
+    // ХЕЛПЕРЫ ДЛЯ СУПЕРЛАЙКОВ
+    // ============================================
+
     public function spendSuperlike(): bool
     {
+        if ($this->superlikes_remaining <= 0) return false;
+
         $affected = DB::table('user_balances')
             ->where('id', $this->id)
             ->where('superlikes_remaining', '>', 0)
             ->decrement('superlikes_remaining');
 
-        if ($affected) {
-            $this->superlikes_remaining -= 1;
-        }
+        if ($affected) $this->superlikes_remaining -= 1;
 
         return (bool) $affected;
     }
 
-    /**
-     * Сброс лимита суперлайков (вызывается кроном раз в сутки).
-     * Лимит берется из активной подписки (features JSON).
-     */
     public function resetSuperlikes(): void
     {
-        $limit = 5; // Дефолт для бесплатных юзеров
+        $limit = 1; 
 
-        // Ищем активную подписку с жадной загрузкой тарифа
-        $activeSub = $this->user?->subscriptions()
-            ->where('status', 'active')
-            ->where('ends_at', '>', now())
-            ->with('plan')
-            ->first();
-
-        // Если подписка есть и в тарифе прописан лимит суперлайков — берем его
-        if ($activeSub && $activeSub->plan) {
-            $planLimit = $activeSub->plan->getFeature('superlikes_per_day');
-            if (!is_null($planLimit)) {
-                $limit = (int) $planLimit;
-            }
+        if ($this->user && $this->user->hasActivePremium) {
+            $limit = 5; 
         }
 
         $this->update([
