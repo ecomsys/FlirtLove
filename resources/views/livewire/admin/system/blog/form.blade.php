@@ -460,16 +460,16 @@ new #[Layout('layouts.admin')] class extends Component
                 typingTimer: null,
 
                 init() {
-                    // ФИКС: Небольшая задержка (150мс), чтобы DOM от Livewire успел полностью "осесть" после wire:navigate
-                    setTimeout(() => {
-                        this.$nextTick(() => {
-                            this.textareaElement = document.getElementById('tinyMceBody');
-                            if (this.textareaElement) {
-                                this.waitForTinyMCE();
-                            }
+                    this.$nextTick(() => {
+                        this.textareaElement = document.getElementById('tinyMceBody');
+                        if (this.textareaElement) {
+                            this.waitForTinyMCE();
                             this.setupThemeWatcher();
-                        });
-                    }, 150);
+                        } else {
+                            // ФИКС: Если DOM еще не готов, ждем 100мс и пробуем снова, пока не найдет textarea
+                            setTimeout(() => this.init(), 100);
+                        }
+                    });
                 },
 
                 waitForTinyMCE() {
@@ -518,8 +518,9 @@ new #[Layout('layouts.admin')] class extends Component
                         editor.on('input change keyup undo redo SetContent', () => {
                             clearTimeout(this.typingTimer);
                             this.typingTimer = setTimeout(() => {
-                                // ФИКС: Напрямую пушим в Livewire, минуя баги с textarea
-                                this.$wire.set('body', editor.getContent());
+                                // ФИКС: Напрямую пушим в Livewire, минуя баги с textarea. 
+                                // Добавили ?? '', чтобы не уронить Livewire, если getContent вдруг вернет null
+                                this.$wire.set('body', editor.getContent() ?? '');
                             }, 500);
                         });
                     };
@@ -560,7 +561,6 @@ new #[Layout('layouts.admin')] class extends Component
             };
         };
     </script>
-
     
     <livewire:admin.media-manager />
 </div>

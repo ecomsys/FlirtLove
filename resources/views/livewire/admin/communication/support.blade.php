@@ -10,16 +10,123 @@ use Livewire\Attributes\Layout;
 use Livewire\Attributes\On;
 use Livewire\Volt\Component;
 use Livewire\WithPagination;
+use Livewire\Attributes\Url;
 
 new #[Layout('layouts.admin')] class extends Component 
 {
     use WithPagination;
 
-    public string $chatFilter = 'active';
+        /** @var string Фильтр списка тикетов (active, unread, archived) */
+    public string $chatFilter = 'unread';
+    
+    /** @var int|null ID активного чата для просмотра переписки */
+    #[Url(as: 'chat', except: '')]
     public ?int $activeChatId = null;
+    
+    /** @var string Текст сообщения для отправки */
     public string $messageBody = '';
+    
+    /** @var string Поиск по имени или ID чата */
+    #[Url(as: 'q', except: '')]
     public string $search = '';
+    
+    /** @var bool Видимость модалки создания нового тикета */
     public bool $showNewTicketModal = false;
+
+    /** @var string URL для кнопки "Назад" */
+    public string $backUrl = '';
+
+    /**
+     * Инициализация компонента.
+     * Запоминаем URL "Назад" и обрабатываем умный поиск по ID или прямой старт с юзером.
+     */
+    public function mount($user_id = null): void
+    {
+        // ФИКС: Запоминаем URL "Назад" только при первой загрузке
+        $previousUrl = url()->previous();
+        $this->backUrl = ($previousUrl && $previousUrl !== url()->current()) 
+            ? $previousUrl 
+            : route('admin.dashboard');
+
+        $adminId = auth()->id();
+        if ($user_id) {
+            $this->startChatWithUser($user_id);
+            return;
+        }
+
+               // Умный поиск: если пришли по ссылке ?q=123, автоматически открываем чат
+        if (!empty($this->search) && is_numeric($this->search)) {
+            $chat = Chat::where('type', 'support')
+                ->whereHas('participants', fn($q) => $q->where('user_id', auth()->id()))
+                ->with(['participants' => fn($q) => $q->select('chat_id', 'user_id', 'is_hidden')->where('user_id', auth()->id())])
+                ->find((int) $this->search);
+                
+            if ($chat) {
+                $participant = $chat->participants->first();
+                if ($participant) {
+                    // ФИКС: Автоматически переключаем вкладку, если чат в архиве
+                    $this->chatFilter = $participant->is_hidden ? 'archived' : 'active';
+                }
+                $this->selectChat($chat->id);
+                return;
+            }
+        }
+
+        $unreadChat = Chat::where('type', 'support')
+            ->whereHas('participants', fn($q) => $q->where('user_id', $adminId)->where('unread_count', '>', 0)->where('is_hidden', false))
+            ->latest('last_message_at')
+            ->first();
+
+        if ($unreadChat) {
+            $this->selectChat($unreadChat->id);
+        } else {
+            $latestChat = Chat::where('type', 'support')
+                ->whereHas('participants', fn($q) => $q->where('user_id', $adminId)->where('is_hidden', false))
+                ->latest('last_message_at')
+                ->first();
+            if ($latestChat) {
+                $this->selectChat($latestChat->id);
+            }
+        }
+    }
+
+    /**
+     * Хук Livewire: сброс пагинации и умная подсветка при поиске.
+     */
+     public function updatedSearch(): void
+    {
+        $this->resetPage();
+
+        // Если ввели число, проверяем: это ID тикета?
+        if (is_numeric($this->search) && !empty($this->search)) {
+            $chat = Chat::where('type', 'support')
+                ->whereHas('participants', fn($q) => $q->where('user_id', auth()->id()))
+                ->with(['participants' => fn($q) => $q->select('chat_id', 'user_id', 'is_hidden')->where('user_id', auth()->id())])
+                ->find((int) $this->search);
+                
+            if ($chat) {
+                $participant = $chat->participants->first();
+                if ($participant) {
+                    // ФИКС: Автоматически переключаем вкладку, если чат в архиве
+                    $this->chatFilter = $participant->is_hidden ? 'archived' : 'active';
+                }
+                $this->selectChat($chat->id);
+                return;
+            }
+        }
+        
+        // Если не нашли как ID тикета — оставляем как обычный поиск (по имени)
+        $this->activeChatId = null;
+    }
+    /**
+     * Очистка строки поиска.
+     */
+    public function clearSearch(): void
+    {
+        $this->search = '';
+        $this->activeChatId = null;
+        $this->resetPage();
+    }
 
     #[Computed]
     public function flatTemplates(): array
@@ -49,7 +156,7 @@ new #[Layout('layouts.admin')] class extends Component
     public function startChatWithUser(int $id): void
     {
         $admin = auth()->user();
-        $user = \App\Models\User::find($id);
+         $user = \App\Models\User::withTrashed()->find($id);
 
         if ($user) {
             if ($this->chatFilter !== 'active') {
@@ -63,32 +170,7 @@ new #[Layout('layouts.admin')] class extends Component
 
         $this->showNewTicketModal = false;
         unset($this->chats);
-    }
-
-    public function mount($user_id = null): void
-    {
-        $adminId = auth()->id();
-        if ($user_id) {
-            $this->startChatWithUser($user_id);
-        } else {
-            $unreadChat = Chat::where('type', 'support')
-                ->whereHas('participants', fn($q) => $q->where('user_id', $adminId)->where('unread_count', '>', 0)->where('is_hidden', false))
-                ->latest('last_message_at')
-                ->first();
-
-            if ($unreadChat) {
-                $this->selectChat($unreadChat->id);
-            } else {
-                $latestChat = Chat::where('type', 'support')
-                    ->whereHas('participants', fn($q) => $q->where('user_id', $adminId)->where('is_hidden', false))
-                    ->latest('last_message_at')
-                    ->first();
-                if ($latestChat) {
-                    $this->selectChat($latestChat->id);
-                }
-            }
-        }
-    }
+    }    
 
     public function selectChat(int $chatId): void
     {
@@ -182,13 +264,16 @@ new #[Layout('layouts.admin')] class extends Component
             })
             ->when($this->search, function ($query) use ($operator) {
                 $query->where(function ($q) use ($operator) {
+                    // Ищем строго по имени участника
                     $q->whereHas('participants.user', fn($sub) => $sub->where('name', $operator, "%{$this->search}%"));
+                    
+                    // ИЛИ если ввели цифры — ищем по ID самого тикета (чата)
                     if (is_numeric($this->search)) {
                         $q->orWhere('id', (int) $this->search);
                     }
                 });
             })
-            ->with(['participants.user.photos' => $avatarQuery, 'messages' => fn($q) => $q->latest()->limit(1)])
+            ->with(['participants.user' => fn($q) => $q->withTrashed()->with(['photos' => $avatarQuery]), 'messages' => fn($q) => $q->latest()->limit(1)])
             ->orderByDesc('last_message_at')
             ->paginate(15);
     }
@@ -222,9 +307,9 @@ new #[Layout('layouts.admin')] class extends Component
             $activeChat = $this->chats->firstWhere('id', $this->activeChatId);
             
             if (!$activeChat) {
-                $activeChat = Chat::with(['participants.user.photos' => $avatarQuery])->find($this->activeChatId);
+                $activeChat = Chat::with(['participants.user' => fn($q) => $q->withTrashed()->with(['photos' => $avatarQuery])])->find($this->activeChatId);
             }
-            
+
             $partner = $activeChat?->participants->firstWhere('user_id', '!=', auth()->id())?->user;
 
             $activeMessages = Message::where('chat_id', $this->activeChatId)
@@ -247,11 +332,6 @@ new #[Layout('layouts.admin')] class extends Component
 <div class="space-y-6">
     <div class="flex items-center justify-between flex-wrap gap-4">
         <div class="flex items-center gap-4">
-            @php
-                $previousUrl = url()->previous();
-                $backUrl = $previousUrl && $previousUrl !== url()->current() ? $previousUrl : route('admin.dashboard');
-            @endphp
-
             <a href="{{ $backUrl }}" wire:navigate class="p-2 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors">
                 <x-lucide-arrow-left class="w-5 h-5" />
             </a>
@@ -297,9 +377,14 @@ new #[Layout('layouts.admin')] class extends Component
                 </x-ui.button>
             </div>
 
-            <div class="relative mb-3 shrink-0" wire:key="search-wrapper">
+             <div class="relative mb-3 shrink-0" wire:key="search-wrapper">
                 <x-lucide-search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground z-10" />
-                <x-ui.input wire:model.live.debounce.300ms="search" type="search" placeholder="Поиск по имени или ID..." class="pl-9" />
+                <x-ui.input wire:model.live.debounce.300ms="search" type="search" placeholder="Поиск по имени юзера или id тикета..." class="pl-9 pr-8" />
+                @if (!empty($search))
+                    <button wire:click="clearSearch" class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground z-10">
+                        <x-lucide-x class="w-4 h-4" />
+                    </button>
+                @endif
             </div>
 
             <div x-data="{ scrollActive() { let el = this.$el.querySelector('.chat-active'); if(el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } }"
@@ -333,25 +418,27 @@ new #[Layout('layouts.admin')] class extends Component
 
                             <div class="flex-1 min-w-0">
                                 <div class="flex justify-between items-center gap-2">
-                                    <div class="flex items-center gap-1 min-w-0">
-                                        <x-user-status-sign :user="$chatPartner" />
-                                        <span class="text-sm truncate {{ $unreadCount > 0 ? 'font-bold text-blue-600 dark:text-blue-400' : 'font-medium' }}">{{ $chatPartner?->name ?? 'Удален' }}</span>
-                                        @if ($chatPartner?->has_active_premium) <x-lucide-crown class="w-3 h-3 text-yellow-500" /> @endif
-                                        @if ($chatPartner?->status === 'banned') <x-ui.badge variant="destructive" size="xs">Бан</x-ui.badge> @endif
+                                    <div class="flex flex-col gap-1">
+                                        <div class="flex items-center gap-1 min-w-0">
+                                            <x-user-status-sign :user="$chatPartner" />
+                                            <a href="{{ route('admin.users.show', $chatPartner?->id) }}" wire:navigate class="text-sm truncate hover:text-primary {{ $unreadCount > 0 ? 'font-bold text-blue-600 dark:text-blue-400' : 'font-medium' }}" @if(!$chatPartner) style="pointer-events: none;" @endif>{{ $chatPartner?->name ?? 'Удален' }}</a>
+                                            @if ($chatPartner?->has_active_premium) <x-lucide-crown class="w-3 h-3 text-yellow-500" /> @endif                                        
+                                        </div>
+                                        <p class="text-xs truncate mt-1 {{ $unreadCount > 0 ? 'text-foreground font-medium' : 'text-muted-foreground' }}">
+                                            @if ($lastMsg) {{ Str::limit($lastMsg->body, 30) }} @else <span class="italic">Нет сообщений</span> @endif
+                                        </p>
                                     </div>
 
                                     <div class="flex flex-col items-end gap-1 shrink-0">
                                         @if ($chat->last_message_at)
                                             <span class="text-[10px] {{ $unreadCount > 0 ? 'text-blue-500 font-medium' : 'text-muted-foreground' }}">{{ $chat->last_message_at->diffForHumans() }}</span>
                                         @endif
+                                        <span class="text-[10px] text-muted-foreground bg-muted px-1 py-0.5 rounded-xs whitespace-nowrap">#{{ $chat->id }}</span>
                                         @if ($unreadCount > 0)
                                             <span class="bg-blue-500 text-white text-[10px] font-bold rounded-full h-5 min-w-[20px] flex items-center justify-center px-1">{{ $unreadCount }}</span>
                                         @endif
                                     </div>
-                                </div>
-                                <p class="text-xs truncate mt-1 {{ $unreadCount > 0 ? 'text-foreground font-medium' : 'text-muted-foreground' }}">
-                                    @if ($lastMsg) {{ Str::limit($lastMsg->body, 30) }} @else <span class="italic">Нет сообщений</span> @endif
-                                </p>
+                                </div>                              
                             </div>
                         </div>
                     </div>
@@ -384,29 +471,33 @@ new #[Layout('layouts.admin')] class extends Component
                             <div class="flex items-center gap-1">
                                 <x-user-status-sign :user="$partner" />
                                 <a href="{{ route('admin.users.show', $partner?->id) }}" wire:navigate class="hover:text-primary font-medium text-sm">{{ $partner?->name ?? 'Удален' }}</a>
-                                @if ($partner?->has_active_premium) <x-lucide-crown class="w-3 h-3 text-yellow-500" /> @endif
-                                <span class="text-xs text-muted-foreground">(ID: {{ $partner?->id }})</span>
+                                @if ($partner?->has_active_premium) <x-lucide-crown class="w-3 h-3 text-yellow-500" /> @endif                                
                             </div>
                             <div class="text-xs text-muted-foreground">{{ $partner?->email ?? '-' }}</div>
                         </div>
                     </div>
 
-                    @if ($chatFilter === 'archived')
-                        <x-ui.button wire:click="unarchiveChat({{ $this->activeChatId }})" wire:confirm="Вернуть тикет из архива?" variant="ghost" size="icon-sm" wire:target="unarchiveChat({{ $this->activeChatId }})" title="Вернуть из архива" wire:key="btn-unarchive-{{ $this->activeChatId }}">
-                            <x-lucide-archive-restore class="w-4 h-4 text-success" wire:loading.remove wire:target="unarchiveChat({{ $this->activeChatId }})" />
-                            <x-lucide-loader-2 class="w-4 h-4 animate-spin hidden" wire:loading wire:target="unarchiveChat({{ $this->activeChatId }})" />
-                        </x-ui.button>
-                    @else
-                        <x-ui.button wire:click="archiveChat({{ $this->activeChatId }})" wire:confirm="Архивировать тикет?" variant="ghost" size="icon-sm" wire:target="archiveChat({{ $this->activeChatId }})" title="Архивировать" wire:key="btn-archive-{{ $this->activeChatId }}">
-                            <x-lucide-archive class="w-4 h-4 text-muted-foreground" wire:loading.remove wire:target="archiveChat({{ $this->activeChatId }})" />
-                            <x-lucide-loader-2 class="w-4 h-4 animate-spin hidden" wire:loading wire:target="archiveChat({{ $this->activeChatId }})" />
-                        </x-ui.button>
-                    @endif
+                    <div class="flex gap-2 items-center">
+                        <span class="text-[0.85rem] text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-mono">#{{ $this->activeChatId }}</span>
+                        @if ($chatFilter === 'archived')
+                            <x-ui.button wire:click="unarchiveChat({{ $this->activeChatId }})" wire:confirm="Вернуть тикет из архива?" variant="ghost" size="icon-sm" wire:target="unarchiveChat({{ $this->activeChatId }})" title="Вернуть из архива" wire:key="btn-unarchive-{{ $this->activeChatId }}">
+                                <x-lucide-archive-restore class="w-4 h-4 text-success" wire:loading.remove wire:target="unarchiveChat({{ $this->activeChatId }})" />
+                                <x-lucide-loader-2 class="w-4 h-4 animate-spin hidden" wire:loading wire:target="unarchiveChat({{ $this->activeChatId }})" />
+                            </x-ui.button>
+                        @else
+                            <x-ui.button wire:click="archiveChat({{ $this->activeChatId }})" wire:confirm="Архивировать тикет?" variant="ghost" size="icon-sm" wire:target="archiveChat({{ $this->activeChatId }})" title="Архивировать" wire:key="btn-archive-{{ $this->activeChatId }}">
+                                <x-lucide-archive class="w-4 h-4 text-muted-foreground" wire:loading.remove wire:target="archiveChat({{ $this->activeChatId }})" />
+                                <x-lucide-loader-2 class="w-4 h-4 animate-spin hidden" wire:loading wire:target="archiveChat({{ $this->activeChatId }})" />
+                            </x-ui.button>
+                        @endif
+                    </div>
                 </div>
 
                 <!-- Лента сообщений -->
-                <div x-data x-init="setTimeout(() => { $el.scrollTop = $el.scrollHeight; }, 50);"
-                    @scroll-chat-bottom.window="$nextTick(() => { $el.scrollTop = $el.scrollHeight; })"
+                <div x-data="{ autoScroll: true }"
+                    x-init="setTimeout(() => { $el.scrollTop = $el.scrollHeight; }, 50);"
+                    @scroll="autoScroll = ($el.scrollHeight - $el.scrollTop - $el.clientHeight < 100)"
+                    @scroll-chat-bottom.window="$nextTick(() => { if(autoScroll) $el.scrollTop = $el.scrollHeight; })"
                     class="flex-1 min-h-0 overflow-y-auto gap-4 pr-2 little-scroll flex flex-col"
                     wire:key="msg-list-{{ $this->activeChatId }}">
                     

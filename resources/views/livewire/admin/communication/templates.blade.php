@@ -4,10 +4,15 @@ use App\Models\AdminLog;
 use App\Models\SupportTemplate;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Layout;
+use Livewire\Attributes\Session;
+use Livewire\Attributes\Url;
 use Livewire\Volt\Component;
+use Livewire\WithPagination;
 
 new #[Layout('layouts.admin')] class extends Component 
 {
+    use WithPagination;
+
     public ?int $templateId = null;
     public string $category = '';
     public string $title = '';
@@ -16,14 +21,63 @@ new #[Layout('layouts.admin')] class extends Component
     public int $sort_order = 0;
     
     public bool $showFormModal = false;
+    
+    /** @var string Поиск по названию или тексту */
+    #[Url(as: 'q', except: '')]
     public string $search = '';
+
+    /** @var string Фильтр по категории (запоминается в сессии) */
+    #[Session]
+    public string $categoryFilter = 'all';
+
+    /** @var string URL для кнопки "Назад" */
+    public string $backUrl = '';
 
     public function mount(): void
     {
+        // ФИКС: Запоминаем URL "Назад" только при первой загрузке
+        $previousUrl = url()->previous();
+        $this->backUrl = ($previousUrl && $previousUrl !== url()->current()) 
+            ? $previousUrl 
+            : route('admin.dashboard');
+
         // По умолчанию новая категория при открытии формы
         $this->category = 'Общие';
     }
 
+    /**
+     * Установка фильтра категории.
+     */
+    public function setCategoryFilter(string $category): void
+    {
+        $this->categoryFilter = $category;
+        $this->resetPage();
+    }
+
+    /**
+     * Очистка строки поиска.
+     */
+    public function clearSearch(): void
+    {
+        $this->search = '';
+        $this->resetPage();
+    }
+
+    /**
+     * Получение списка категорий для кнопок фильтра.
+     */
+    #[Computed]
+    public function categories()
+    {
+        return SupportTemplate::select('category')
+            ->distinct()
+            ->orderBy('category')
+            ->pluck('category');
+    }
+
+    /**
+     * Получение списка шаблонов с фильтрацией и пагинацией.
+     */
     #[Computed]
     public function templates()
     {
@@ -31,10 +85,15 @@ new #[Layout('layouts.admin')] class extends Component
         $search = '%' . $this->search . '%';
 
         return SupportTemplate::query()
-            ->when($this->search, fn($q) => $q->where('title', $operator, $search)->orWhere('category', $operator, $search))
+            ->when($this->categoryFilter !== 'all', fn($q) => $q->where('category', $this->categoryFilter))
+            ->when($this->search, function ($q) use ($operator, $search) {
+                $q->where('title', $operator, $search)
+                  ->orWhere('category', $operator, $search)
+                  ->orWhere('body', $operator, $search);
+            })
             ->orderBy('category')
             ->orderBy('sort_order')
-            ->get();
+            ->paginate(15);
     }
 
     public function openCreateModal(): void
@@ -95,7 +154,8 @@ new #[Layout('layouts.admin')] class extends Component
         }
 
         $this->showFormModal = false;
-        unset($this->templates); // Сбрасываем кэш списка
+        unset($this->templates);
+        unset($this->categories); // Сбрасываем кэш категорий, если добавили новую
     }
 
     public function deleteTemplate(int $id): void
@@ -106,15 +166,17 @@ new #[Layout('layouts.admin')] class extends Component
             $template->delete();
             $this->dispatch('show-toast', type: 'warning', message: 'Шаблон удален.');
             unset($this->templates);
+            unset($this->categories);
         }
     }
 }; 
 ?>
 
 <div class="space-y-6">
-    <!-- Заголовок -->    
+    <!-- Заголовок и панель управления -->
+    <div class="flex items-center justify-between flex-wrap gap-4">
         <div class="flex items-center gap-4">
-            <a href="{{ route('admin.dashboard') }}" wire:navigate class="p-2 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors">
+            <a href="{{ $backUrl }}" wire:navigate class="p-2 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors">
                 <x-lucide-arrow-left class="w-5 h-5" />
             </a>
             <div>
@@ -124,39 +186,70 @@ new #[Layout('layouts.admin')] class extends Component
                 </h1>
                 <p class="text-sm text-muted-foreground">Управление заготовками для чата поддержки</p>
             </div>
-        </div>       
-    
-<div class="flex items-center justify-between flex-wrap gap-4">
-    <!-- Поиск -->
-    <div class="relative w-full max-w-md">
-        <x-lucide-search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground z-10" />
-        <x-ui.input wire:model.live.debounce.300ms="search" type="search" placeholder="Поиск по названию или категории..." class="pl-9" />
+        </div>
+
+        <div class="flex items-center gap-3 ml-auto">
+            <div class="relative w-full max-w-xs">
+                <x-lucide-search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground z-10" />
+                <x-ui.input wire:model.live.debounce.300ms="search" type="search" placeholder="Поиск..." class="pl-9 pr-8" />
+                @if(!empty($search))
+                    <button wire:click="clearSearch" class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground z-10">
+                        <x-lucide-x class="w-4 h-4" />
+                    </button>
+                @endif
+            </div>
+
+            <x-ui.button wire:click="openCreateModal" variant="default" size="sm">
+                <x-lucide-plus class="w-4 h-4" />
+                Создать
+            </x-ui.button>
+        </div>
     </div>
 
-     <x-ui.button wire:click="openCreateModal" variant="default" size="sm">
-            <x-lucide-plus class="w-4 h-4" />
-            Создать шаблон
+    <!-- Фильтр по категориям (с памятью) -->
+    <div class="flex flex-wrap gap-1.5">
+        <x-ui.button wire:click="setCategoryFilter('all')" variant="{{ $categoryFilter === 'all' ? 'default' : 'secondary' }}" size="sm">
+            Все
         </x-ui.button>
-</div>
+        @foreach($this->categories as $cat)
+            <x-ui.button wire:click="setCategoryFilter('{{ $cat }}')" variant="{{ $categoryFilter === $cat ? 'default' : 'secondary' }}" size="sm">
+                {{ $cat }}
+            </x-ui.button>
+        @endforeach
+    </div>
+
     <!-- Таблица шаблонов -->
     <div class="bg-card border border-border rounded-lg overflow-hidden">
         <x-ui.table>
             <x-ui.table-header>
                 <x-ui.table-row>
-                    <x-ui.table-head class="w-32">Категория</x-ui.table-head>
+                    <x-ui.table-head class="w-16">ID</x-ui.table-head>
                     <x-ui.table-head>Название</x-ui.table-head>
+                    <x-ui.table-head class="w-40">Категория</x-ui.table-head>
                     <x-ui.table-head class="hidden md:table-cell">Текст (превью)</x-ui.table-head>
                     <x-ui.table-head class="w-24 text-center">Статус</x-ui.table-head>
-                    <x-ui.table-head class="w-16 text-right">Действия</x-ui.table-head>
+                    <x-ui.table-head class="w-32 text-right">Действия</x-ui.table-head>
                 </x-ui.table-row>
             </x-ui.table-header>
             <x-ui.table-body>
-                @forelse ($this->templates as $template)
-                    <x-ui.table-row wire:key="tpl-{{ $template->id }}">
+                               @forelse ($this->templates as $template)
+                    <x-ui.table-row wire:key="tpl-{{ $template->id }}" class="hover:bg-muted/30">
+                        <x-ui.table-cell class="text-xs font-mono text-muted-foreground whitespace-nowrap">
+                            #{{ $template->id }}
+                        </x-ui.table-cell>
+                        
+                        <!-- КЛИКАБЕЛЬНОЕ НАЗВАНИЕ -->
+                        <x-ui.table-cell class="font-medium text-sm">
+                            <button wire:click="openEditModal({{ $template->id }})" class="text-left hover:text-primary transition-colors">
+                                {{ $template->title }}
+                            </button>
+                        </x-ui.table-cell>
+
+                        <!-- ВОЗВРАЩЕННАЯ КАТЕГОРИЯ -->
                         <x-ui.table-cell class="font-medium text-sm">
                             <x-ui.badge variant="secondary" size="xs">{{ $template->category }}</x-ui.badge>
                         </x-ui.table-cell>
-                        <x-ui.table-cell class="font-medium text-sm">{{ $template->title }}</x-ui.table-cell>
+                        
                         <x-ui.table-cell class="hidden md:table-cell text-xs text-muted-foreground truncate max-w-xs">
                             {{ Str::limit($template->body, 80) }}
                         </x-ui.table-cell>
@@ -180,14 +273,21 @@ new #[Layout('layouts.admin')] class extends Component
                     </x-ui.table-row>
                 @empty
                     <x-ui.table-row>
-                        <x-ui.table-cell colspan="5" class="py-12 text-center text-muted-foreground">
-                            Шаблонов не найдено. Нажмите "Создать шаблон", чтобы добавить первый.
+                        <x-ui.table-cell colspan="6" class="py-12 text-center text-muted-foreground">
+                            Шаблонов не найдено. Нажмите "Создать", чтобы добавить первый.
                         </x-ui.table-cell>
                     </x-ui.table-row>
                 @endforelse
             </x-ui.table-body>
         </x-ui.table>
     </div>
+
+    <!-- Пагинация -->
+    @if ($this->templates->hasPages())
+        <div class="mt-4">
+            {{ $this->templates->links('partials.pagination') }}
+        </div>
+    @endif
 
     <!-- Модалка создания/редактирования -->
     @if ($showFormModal)

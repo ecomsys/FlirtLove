@@ -441,8 +441,7 @@ new #[Layout('layouts.admin')] class extends Component
                             <div class="font-medium text-foreground flex items-center gap-2 flex-wrap group-hover:text-primary transition-colors">
                                 <x-user-status-sign :user="$user" />
                                 {{ $user->name }}                                
-                                @if($user->has_active_premium)<x-lucide-crown class="w-3.5 h-3.5 text-yellow-500" />@endif                              
-                                @if($user->is_verified)<x-lucide-badge-check class="w-3.5 h-3.5 text-blue-500" />@endif
+                                @if($user->has_active_premium)<x-lucide-crown class="w-3.5 h-3.5 text-yellow-500" />@endif                                                   
                             </div>
                             <div class="text-xs text-muted-foreground">{{ $user->email }}</div>
                         </a>
@@ -463,7 +462,7 @@ new #[Layout('layouts.admin')] class extends Component
                                 'active' => ['variant' => 'success', 'label' => 'Активен'],
                                 'banned' => ['variant' => 'destructive', 'label' => 'Бан'],
                                 'shadowbanned' => ['variant' => 'warning', 'label' => 'Теневой'],
-                                'deactivated' => ['variant' => 'secondary', 'label' => 'Удален'],
+                                'deactivated' => ['variant' => 'secondary', 'label' => 'Деактивирован'],
                                 default => ['variant' => 'secondary', 'label' => $user->status]
                             };
                         @endphp
@@ -497,19 +496,19 @@ new #[Layout('layouts.admin')] class extends Component
                                         </x-ui.dropdown-menu-item>
                                     @else
                                         <x-ui.dropdown-menu-item wire:click="openBanModal({{ $user->id }}, 'shadow')">
-                                            <x-lucide-eye-off class="w-4 h-4 text-purple-500" /> Теневой бан...
+                                            <x-lucide-eye-off class="w-4 h-4 text-purple-500" /> Теневой бан
                                         </x-ui.dropdown-menu-item>
                                         <x-ui.dropdown-menu-item wire:click="openBanModal({{ $user->id }}, 'temp')">
-                                            <x-lucide-clock class="w-4 h-4 text-yellow-500" /> Бан на 3 дня...
+                                            <x-lucide-clock class="w-4 h-4 text-yellow-500" /> Бан на 3 дня
                                         </x-ui.dropdown-menu-item>
                                         <x-ui.dropdown-menu-item wire:click="openBanModal({{ $user->id }}, 'permanent')">
-                                            <x-lucide-lock class="w-4 h-4 text-red-500" /> Вечный бан...
+                                            <x-lucide-lock class="w-4 h-4 text-red-500" /> Вечный бан
                                         </x-ui.dropdown-menu-item>
                                     @endif
 
                                     <x-ui.dropdown-menu-separator />
                                     <x-ui.dropdown-menu-item wire:click="openDeleteModal({{ $user->id }})" variant="destructive">
-                                        <x-lucide-trash-2 class="w-4 h-4" /> Удалить...
+                                        <x-lucide-trash-2 class="w-4 h-4" /> Деактивировать
                                     </x-ui.dropdown-menu-item>
                                 @endif
                             </x-ui.dropdown-menu-content>

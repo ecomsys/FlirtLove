@@ -15,30 +15,61 @@ new #[Layout('layouts.admin')] class extends Component
 {
     use WithPagination;
 
-    #[Url(as: 'q', except: '')] 
-    #[Session] 
+       /** @var string Поиск по имени, email или ID алерта */
+    #[Url(as: 'q', except: '')]
     public string $search = '';
-    #[Session] 
-    public string $statusFilter = 'all';
-    #[Session] 
-    public string $severityFilter = 'all';
-    #[Session] 
-    public int $perPage = 20;
 
+    /** @var string Фильтр статуса */
+    #[Url(as: 'status', except: 'open')]
+    public string $statusFilter = 'open';
+
+    /** @var string Фильтр опасности */
+    #[Url(as: 'severity', except: 'all')]
+    public string $severityFilter = 'all';
+
+    public int $perPage = 20;
     public int $filterVersion = 0;
 
-     public function mount(): void
+    /** @var string URL для кнопки "Назад" */
+    public string $backUrl = '';
+
+    public function mount(): void
     {
-        // Сбрасываем на "Все" ТОЛЬКО если ID пришел через URL (?q=123)
-        if (is_numeric($this->search) && $this->search !== '') {
-            $this->statusFilter = 'all';
+        // ФИКС: Запоминаем URL "Назад" только при первой загрузке
+        $previousUrl = url()->previous();
+        $this->backUrl = ($previousUrl && $previousUrl !== url()->current()) 
+            ? $previousUrl 
+            : route('admin.dashboard');
+
+        // Умный поиск: если ищут по ID алерта, автоматически переключаем фильтр на его реальный статус
+        if (!empty($this->search) && is_numeric($this->search)) {
+            $alert = FraudAlert::find((int) $this->search);
+            if ($alert) {
+                $this->statusFilter = $alert->status->value;
+            }
         }
     }
 
     public function updatedSearch(): void 
     { 
-        // Просто сбрасываем страницу. Фильтр статуса не трогаем!
         $this->resetPage(); 
+
+        // ФИКС: Умная подсветка вкладки при ручном вводе ID
+        if (is_numeric($this->search) && !empty($this->search)) {
+            $alert = FraudAlert::find((int) $this->search);
+            if ($alert) {
+                $this->statusFilter = $alert->status->value;
+            }
+        }
+    }
+
+    /**
+     * Очистка строки поиска.
+     */
+    public function clearSearch(): void
+    {
+        $this->search = '';
+        $this->resetPage();
     }
 
     public function updatedSeverityFilter(): void { $this->resetPage(); }
@@ -59,18 +90,27 @@ new #[Layout('layouts.admin')] class extends Component
         $this->filterVersion++;
     }
 
-    #[Computed]
+      #[Computed]
     public function alerts()
     {
         $searchOperator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
 
         return FraudAlert::query()
-            ->with(['user.photos', 'user', 'admin:id,name']) 
+            // ФИКС: Грузим юзера (и его аватарки) даже если он мягко-удален (withTrashed)
+            ->with([
+                'user' => fn($q) => $q->withTrashed()->with(['photos' => fn($sq) => $sq->select(['id', 'user_id', 'is_primary', 'status', 'path_thumb', 'path_medium', 'path_large', 'path_original'])->orderByDesc('is_primary')->limit(1)]), 
+                'admin:id,name'
+            ])
             ->when($this->search, function ($q) use ($searchOperator) {
-                $q->whereHas('user', function ($q) use ($searchOperator) {
-                    $q->where('name', $searchOperator, "%{$this->search}%")
-                      ->orWhere('email', $searchOperator, "%{$this->search}%");
-                })->orWhereRaw("CAST(id AS TEXT) {$searchOperator} ?", ["%{$this->search}%"]);
+                $q->where(function ($query) use ($searchOperator) {
+                    $query->whereHas('user', function ($uq) use ($searchOperator) {
+                        // ФИКС: withTrashed() для поиска по имени удаленного юзера
+                        $uq->withTrashed()
+                           ->where('name', $searchOperator, "%{$this->search}%")
+                           ->orWhere('email', $searchOperator, "%{$this->search}%");
+                    })
+                    ->orWhereRaw("CAST(id AS TEXT) {$searchOperator} ?", ["%{$this->search}%"]);
+                });
             })
             ->when($this->statusFilter !== 'all', fn($q) => $q->where('status', $this->statusFilter))
             ->when($this->severityFilter !== 'all', fn($q) => $q->where('severity', $this->severityFilter))
@@ -125,7 +165,7 @@ new #[Layout('layouts.admin')] class extends Component
     <!-- Заголовок -->
     <div class="flex items-center justify-between flex-wrap gap-4">
         <div class="flex items-center gap-3">
-            <a href="{{ route('admin.dashboard') }}" wire:navigate class="p-2 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors">
+            <a href="{{ $backUrl }}" wire:navigate class="p-2 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors">
                 <x-lucide-arrow-left class="w-5 h-5" />
             </a>
             <div>
@@ -177,10 +217,10 @@ new #[Layout('layouts.admin')] class extends Component
         </div>
 
         <div class="relative w-64">
-            <x-ui.input wire:model.live.debounce.300ms="search" type="search" placeholder="Поиск по имени, email или id..." class="pl-9" />
+            <x-ui.input wire:model.live.debounce.300ms="search" type="search" placeholder="Поиск по имени, email или id..." class="pl-9 pr-8" />
             <x-lucide-search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             @if (!empty($search))
-                <button wire:click="$set('search', '')" class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+                <button wire:click="clearSearch" class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground z-10">
                     <x-lucide-x class="w-4 h-4" />
                 </button>
             @endif
@@ -221,20 +261,26 @@ new #[Layout('layouts.admin')] class extends Component
                     <!-- КОЛОНКА ЮЗЕРА (Узкая) -->
                     <x-ui.table-cell class="max-w-[180px]">
                         @if($alert->user)
-                        <a href="{{ route('admin.users.show', $alert->user->id) }}" class="flex gap-2 items-center group" wire:navigate>
-                            <x-avatar src="{{ $alert->user->avatar_url }}" name="{{  $alert->user->name }}" size="sm" userId="{{  $alert->user->id }}" showStatus="true" :isOnline="$alert->user->is_online"/>                            
-                            <div class="block min-w-0">
-                                <div class="font-medium text-sm text-foreground flex items-center gap-1.5 group-hover:text-primary transition-colors truncate">
-                                    <x-user-status-sign :user="$alert->user" />
-                                    <span class="truncate">{{ $alert->user->name }}</span>                                
-                                    @if($alert->user->has_active_premium)<x-lucide-crown class="w-3.5 h-3.5 text-yellow-500 shrink-0" />@endif                              
-                                    @if($alert->user->is_verified)<x-lucide-badge-check class="w-3.5 h-3.5 text-blue-500 shrink-0" />@endif
+                            <a href="{{ route('admin.users.show', $alert->user->id) }}" class="flex gap-2 items-center group" wire:navigate>
+                                <x-avatar src="{{ $alert->user->avatar_url }}" name="{{ $alert->user->name }}" size="sm" userId="{{ $alert->user->id }}" showStatus="true" :isOnline="$alert->user->is_online" />                            
+                                <div class="block min-w-0">
+                                    <div class="font-medium text-sm text-foreground flex items-center gap-1.5 group-hover:text-primary transition-colors truncate">
+                                        <x-user-status-sign :user="$alert->user" />
+                                        {{ $alert->user->name }}
+                                        @if($alert->user->has_active_premium)<x-lucide-crown class="w-3.5 h-3.5 text-yellow-500 shrink-0" />@endif                                                                  
+                                    </div>
+                                    <div class="text-xs text-muted-foreground truncate">{{ $alert->user->email }}</div>
                                 </div>
-                                <div class="text-xs text-muted-foreground truncate">{{ $alert->user->email }}</div>
-                            </div>
-                        </a>
+                            </a>
                         @else
-                            <span class="text-xs text-muted-foreground italic">Аккаунт удален</span>
+                            <div class="flex items-center gap-2">
+                                <x-avatar name="Deleted" size="sm" />
+                                <div class="block min-w-0">
+                                    <div class="font-medium text-sm text-muted-foreground flex items-center gap-1.5 truncate">
+                                        <span class="truncate">Аккаунт удален </span>
+                                    </div>                                   
+                                </div>
+                            </div>
                         @endif
                     </x-ui.table-cell>
                     

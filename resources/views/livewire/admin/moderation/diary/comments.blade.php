@@ -23,21 +23,53 @@ new #[Layout('layouts.admin')] class extends Component
     public string $statusFilter = 'pending';
     
     public int $perPage = 5; 
+
+    public string $backUrl = '';
     
-    // ФИКС: Если пришли с поиском (например, по ID коммента), включаем фильтр "Все"
+     /**
+     * Инициализация компонента.
+     * Запоминаем URL "Назад" и обрабатываем прямой переход по ссылке с поиском.
+     */
     public function mount(): void
     {
-        if (!empty($this->search)) {
+        $previousUrl = url()->previous();
+        $this->backUrl = ($previousUrl && $previousUrl !== url()->current()) 
+            ? $previousUrl 
+            : route('admin.moderation.diary.index');
+
+        // Умный поиск: если ищут по ID коммента, автоматически переключаем фильтр на его реальный статус
+        if (!empty($this->search) && is_numeric($this->search)) {
+            $comment = DiaryComment::find((int) $this->search);
+            if ($comment) {
+                $this->statusFilter = $comment->status;
+            } else {
+                $this->statusFilter = 'all';
+            }
+        } elseif (!empty($this->search)) {
             $this->statusFilter = 'all';
         }
     }
 
-    public function updatingSearch(): void { 
-        // Если админ начал вводить текст, переключаемся на "Все", чтобы найти
+        /**
+     * Хук Livewire: сброс пагинации и умная подсветка при поиске.
+     */
+    public function updatedSearch(): void 
+    { 
+        $this->resetPage(); 
+
+        // Умная подсветка вкладки при ручном вводе ID коммента
+        if (is_numeric($this->search) && !empty($this->search)) {
+            $comment = DiaryComment::find((int) $this->search);
+            if ($comment) {
+                $this->statusFilter = $comment->status;
+                return;
+            }
+        }
+        
+        // Если ввели текст (не число), переключаемся на "Все", чтобы найти
         if (!empty($this->search) && $this->statusFilter !== 'all') {
             $this->statusFilter = 'all';
         }
-        $this->resetPage(); 
     }
     
     // ФИКС: При ручной смене фильтра очищаем поиск
@@ -181,14 +213,6 @@ new #[Layout('layouts.admin')] class extends Component
     <!-- Заголовок -->
     <div class="flex items-center justify-between flex-wrap gap-4">
         <div class="flex items-center gap-4">
-            <!-- ФИКС: Честная стрелка назад -->
-            @php
-                $previousUrl = url()->previous();
-                $backUrl = ($previousUrl && $previousUrl !== url()->current()) 
-                    ? $previousUrl 
-                    : route('admin.moderation.diary.index');
-            @endphp
-
             <a href="{{ $backUrl }}" wire:navigate class="p-2 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors">
                 <x-lucide-arrow-left class="w-5 h-5" />
             </a>
@@ -205,12 +229,13 @@ new #[Layout('layouts.admin')] class extends Component
     <!-- Фильтры -->
     <div class="flex flex-wrap items-center gap-3">
         <div class="flex flex-wrap gap-1.5">
+              <x-ui.button wire:click="setStatusFilter('all')" variant="{{ $statusFilter === 'all' ? 'default' : 'secondary' }}" size="sm">
+                Все <x-ui.badge size="xs">{{ $this->counts['total'] }}</x-ui.badge>
+            </x-ui.button>
             <x-ui.button wire:click="setStatusFilter('pending')" variant="{{ $statusFilter === 'pending' ? 'default' : 'secondary' }}" size="sm">
                 Ожидают <x-ui.badge size="xs" variant="warning">{{ $this->counts['pending'] }}</x-ui.badge>
             </x-ui.button>
-            <x-ui.button wire:click="setStatusFilter('all')" variant="{{ $statusFilter === 'all' ? 'default' : 'secondary' }}" size="sm">
-                Все <x-ui.badge size="xs">{{ $this->counts['total'] }}</x-ui.badge>
-            </x-ui.button>
+          
             <x-ui.button wire:click="setStatusFilter('approved')" variant="{{ $statusFilter === 'approved' ? 'default' : 'secondary' }}" size="sm">
                 Одобрены <x-ui.badge size="xs" variant="success">{{ $this->counts['approved'] }}</x-ui.badge>
             </x-ui.button>
@@ -225,7 +250,7 @@ new #[Layout('layouts.admin')] class extends Component
         <div class="flex items-center gap-2 ml-auto">
             <div class="relative w-64">
                 <x-lucide-search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground z-10" />
-                <x-ui.input wire:model.live.debounce.300ms="search" type="search" placeholder="Поиск по посту или автору..." class="pl-9 pr-8" />
+                <x-ui.input wire:model.live.debounce.300ms="search" type="search" placeholder="Поиск по тексту или id..." class="pl-9 pr-8" />
                 @if (!empty($search))
                     <button wire:click="clearSearch" class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground z-10">
                         <x-lucide-x class="w-4 h-4" />

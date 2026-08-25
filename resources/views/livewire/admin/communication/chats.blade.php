@@ -10,13 +10,47 @@ new #[Layout('layouts.admin')] class extends Component
 {
     use WithPagination;
 
+    /** @var string Поиск по имени или ID чата */
+    #[Url(as: 'q', except: '')]
     public string $search = '';
+
+    /** @var int|null ID активного чата для просмотра переписки */
+    #[Url(as: 'chat', except: '')]
     public ?int $activeChatId = null;
 
-    public function updatingSearch(): void
+    /** @var string URL для кнопки "Назад" */
+    public string $backUrl = '';
+
+    public function mount(): void
+    {
+        // ФИКС: Запоминаем URL "Назад" только при первой загрузке
+        $previousUrl = url()->previous();
+        $this->backUrl = ($previousUrl && $previousUrl !== url()->current()) 
+            ? $previousUrl 
+            : route('admin.dashboard');
+    }
+
+    public function updatedSearch(): void
     {
         $this->resetPage();
+
+        // Умный поиск: если ввели точный ID чата, автоматически открываем его переписку
+        if (is_numeric($this->search) && !empty($this->search)) {
+            $chat = Chat::find((int) $this->search);
+            if ($chat) {
+                $this->activeChatId = $chat->id;
+                return;
+            }
+        }
+        
         $this->activeChatId = null;
+    }
+
+    public function clearSearch(): void
+    {
+        $this->search = '';
+        $this->activeChatId = null;
+        $this->resetPage();
     }
 
     public function selectChat(int $chatId): void
@@ -56,26 +90,25 @@ new #[Layout('layouts.admin')] class extends Component
         );
     }
 
-    public function with(): array
+        public function with(): array
     {
         $operator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
         $avatarQuery = fn($q) => $q->select(['id', 'user_id', 'is_primary', 'status', 'path_thumb', 'path_medium', 'path_large', 'path_original'])->orderByDesc('is_primary')->limit(1);
 
+        // ФИКС: Жадно загружаем участников и отправителей сообщений ВКЛЮЧАЯ мягко-удаленных (withTrashed)
         $chats = Chat::where('type', 'private')
-            ->whereHas('participants', fn($q) => $q->whereHas('user', fn($uq) => $uq->excludeStaff()))
+            ->whereHas('participants', fn($q) => $q->whereHas('user', fn($uq) => $uq->withTrashed()->excludeStaff()))
             ->with([
-                'participants.user.photos' => $avatarQuery, 
+                'participants' => fn($q) => $q->with(['user' => fn($uq) => $uq->withTrashed()->with(['photos' => $avatarQuery])]), 
                 'messages' => fn($q) => $q->latest()->limit(1)
             ])
             ->when($this->search, function ($query) use ($operator) {
                 $search = $this->search;
                 $query->where(function ($q) use ($search, $operator) {
-                    // 1. Сначала ищем по имени участника
                     $q->whereHas('participants.user', function ($sub) use ($search, $operator) {
-                        $sub->where('name', $operator, "%{$search}%");
+                        $sub->withTrashed()->where('name', $operator, "%{$search}%");
                     });
                     
-                    // 2. Если ввели цифры — ищем еще и по ID чата
                     if (is_numeric($search)) {
                         $q->orWhere('id', (int) $search);
                     }
@@ -87,8 +120,8 @@ new #[Layout('layouts.admin')] class extends Component
         $activeChat = null;
         if ($this->activeChatId) {
             $activeChat = Chat::with([
-                'participants.user.photos' => $avatarQuery, 
-                'messages' => fn($q) => $q->latest()->limit(50)->with('sender.photos', fn($sq) => $avatarQuery) 
+                'participants' => fn($q) => $q->with(['user' => fn($uq) => $uq->withTrashed()->with(['photos' => $avatarQuery])]), 
+                'messages' => fn($q) => $q->latest()->limit(50)->with(['sender' => fn($sq) => $sq->withTrashed()->with(['photos' => $avatarQuery])]) 
             ])->find($this->activeChatId);
         }
 
@@ -103,14 +136,7 @@ new #[Layout('layouts.admin')] class extends Component
 <div class="space-y-6">
     <!-- Заголовок -->
     <div class="flex items-center justify-between flex-wrap gap-4">
-        <div class="flex items-center gap-4">
-            @php
-                $previousUrl = url()->previous();
-                $backUrl = ($previousUrl && $previousUrl !== url()->current()) 
-                    ? $previousUrl 
-                    : route('admin.dashboard');
-            @endphp
-
+          <div class="flex items-center gap-4">
             <a href="{{ $backUrl }}" wire:navigate class="p-2 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors">
                 <x-lucide-arrow-left class="w-5 h-5" />
             </a>
@@ -123,9 +149,14 @@ new #[Layout('layouts.admin')] class extends Component
             </div>
         </div>
 
-        <div class="relative w-72">
+         <div class="relative w-72">
             <x-lucide-search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground z-10" />
-            <x-ui.input wire:model.live.debounce.300ms="search" type="search" placeholder="Поиск по имени, id чата ..." class="pl-9" />
+            <x-ui.input wire:model.live.debounce.300ms="search" type="search" placeholder="Поиск по имени, id чата ..." class="pl-9 pr-8" />
+            @if (!empty($search))
+                <button wire:click="clearSearch" class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground z-10">
+                    <x-lucide-x class="w-4 h-4" />
+                </button>
+            @endif
         </div>
     </div>
 
@@ -270,8 +301,12 @@ new #[Layout('layouts.admin')] class extends Component
                 </div>
 
                 <!-- Лента сообщений -->
-                <div wire:poll.10s x-data x-init="setTimeout(() => { $el.scrollTop = $el.scrollHeight; }, 50)"
-                    class="flex-1 overflow-y-auto space-y-4 pr-2 little-scroll flex flex-col max-h-[calc(100vh-23rem)]">                  
+                <div wire:poll.10s 
+                    x-data="{ autoScroll: true }"
+                    x-init="setTimeout(() => { $el.scrollTop = $el.scrollHeight; }, 50)"
+                    @scroll="autoScroll = ($el.scrollHeight - $el.scrollTop - $el.clientHeight < 100)"
+                    x-effect="if (autoScroll) { $el.scrollTop = $el.scrollHeight }"
+                    class="flex-1 overflow-y-auto space-y-4 pr-2 little-scroll flex flex-col max-h-[calc(100vh-23rem)]">
 
                     @foreach ($activeChat->messages->sortBy('created_at') as $message)
                         @if ($message->type === 'system')

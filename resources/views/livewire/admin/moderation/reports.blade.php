@@ -21,12 +21,23 @@ new #[Layout('layouts.admin')] class extends Component
 {
     use WithPagination;
 
+    /** @var string Поиск (ID, имя, причина) */
     #[Url(as: 'q', except: '')]
     public string $search = '';
 
+    /** @var string Фильтр статуса жалобы */
+    #[Url(as: 'status', except: 'pending')]
     public string $statusFilter = 'pending';
+
+    /** @var string Фильтр типа жалобы (user, photo) */
+    #[Url(as: 'type', except: 'all')]
     public string $typeFilter = 'all';
+
+    /** @var int Количество записей на странице */
     public int $perPage = 10;
+
+    /** @var string URL для кнопки "Назад" */
+    public string $backUrl = '';
 
     private ToggleUserBanAction $toggleUserBanAction;
     private ModeratePhotoAction $moderatePhotoAction;
@@ -44,39 +55,63 @@ new #[Layout('layouts.admin')] class extends Component
 
     public function mount(): void
     {
-        $saved = session('moderate_reports', []);
-        if (isset($saved['statusFilter'])) $this->statusFilter = $saved['statusFilter'];
-        if (isset($saved['typeFilter'])) $this->typeFilter = $saved['typeFilter'];
+        // ФИКС: Запоминаем URL "Назад" только при первой загрузке
+        $previousUrl = url()->previous();
+        $this->backUrl = ($previousUrl && $previousUrl !== url()->current()) 
+            ? $previousUrl 
+            : route('admin.dashboard');
 
-        if (!empty($this->search)) {
+        // Умный поиск: если ищут по ID жалобы, автоматически переключаем фильтр на её реальный статус
+        if (!empty($this->search) && is_numeric($this->search)) {
+            $report = Report::find((int) $this->search);
+            $this->statusFilter = $report ? $report->status : 'all';
+        } elseif (!empty($this->search)) {
             $this->statusFilter = 'all';
-            session(['moderate_reports' => array_merge($saved, ['statusFilter' => 'all'])]);
         }
     }
 
-    public function updatingSearch(): void { $this->resetPage(); }
-    
+        /**
+     * Хук Livewire: сброс пагинации и умная подсветка при поиске.
+     */
+    public function updatedSearch(): void 
+    { 
+        $this->resetPage(); 
+
+        if (is_numeric($this->search) && !empty($this->search)) {
+            $report = Report::find((int) $this->search);
+            $this->statusFilter = $report ? $report->status : 'all';
+        } elseif (!empty($this->search)) {
+            $this->statusFilter = 'all';
+        }
+    }
+
+    /**
+     * Установка фильтра статуса. ФИКС: Очищаем поиск.
+     */
     public function setStatusFilter(string $status): void
     {
         $this->statusFilter = $status;
         $this->search = '';
-        session(['moderate_reports' => array_merge(session('moderate_reports', []), ['statusFilter' => $status])]);
         $this->resetPage();
     }
 
+    /**
+     * Хук Livewire: сброс кэша при смене типа. ФИКС: Очищаем поиск.
+     */
     public function updatedTypeFilter(string $value): void 
     { 
         $this->search = '';
-        session(['moderate_reports' => array_merge(session('moderate_reports', []), ['typeFilter' => $value])]);
         $this->resetPage(); 
     }
 
+    /**
+     * Полный сброс фильтров.
+     */
     public function resetFilters(): void
     {
         $this->reset(['search', 'statusFilter', 'typeFilter']);
         $this->statusFilter = 'pending'; 
         $this->typeFilter = 'all';       
-        session()->forget('moderate_reports');
         $this->resetPage();
     }
 
@@ -230,8 +265,8 @@ new #[Layout('layouts.admin')] class extends Component
             ->latest('id') 
             ->paginate($this->perPage);
 
-        $reports->loadMorph('reportable', [
-            Photo::class => ['user:id,name']
+                $reports->loadMorph('reportable', [
+            Photo::class => ['user' => fn($q) => $q->withTrashed()->select('id', 'name', 'status', 'deleted_at')]
         ]);
 
         return $reports;
@@ -273,14 +308,7 @@ new #[Layout('layouts.admin')] class extends Component
 
 <div class="space-y-6">
     <!-- Заголовок -->
-    <div class="flex items-center gap-4">
-        @php
-            $previousUrl = url()->previous();
-            $backUrl = ($previousUrl && $previousUrl !== url()->current()) 
-                ? $previousUrl 
-                : route('admin.dashboard');
-        @endphp
-
+    <div class="flex items-center gap-4">    
         <a href="{{ $backUrl }}" wire:navigate class="p-2 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors">
             <x-lucide-arrow-left class="w-5 h-5" />
         </a>
@@ -298,14 +326,15 @@ new #[Layout('layouts.admin')] class extends Component
     <!-- Фильтры -->
     <div class="flex flex-wrap items-center gap-3">
         <div class="flex flex-wrap gap-1.5">
-            <x-ui.button wire:click="setStatusFilter('pending')" variant="{{ $statusFilter === 'pending' ? 'default' : 'secondary' }}" size="sm" wire:key="filter-pending">
-                Ожидают <x-ui.badge size="xs" variant="destructive">{{ $this->counts['pending'] }}</x-ui.badge>
-            </x-ui.button>
-            
+              
             <x-ui.button wire:click="setStatusFilter('all')" variant="{{ $statusFilter === 'all' ? 'default' : 'secondary' }}" size="sm" wire:key="filter-all">
                 Все <x-ui.badge size="xs">{{ $this->counts['total'] }}</x-ui.badge>
             </x-ui.button>
             
+            <x-ui.button wire:click="setStatusFilter('pending')" variant="{{ $statusFilter === 'pending' ? 'default' : 'secondary' }}" size="sm" wire:key="filter-pending">
+                Ожидают <x-ui.badge size="xs" variant="destructive">{{ $this->counts['pending'] }}</x-ui.badge>
+            </x-ui.button>
+          
             <x-ui.button wire:click="setStatusFilter('resolved')" variant="{{ $statusFilter === 'resolved' ? 'default' : 'secondary' }}" size="sm" wire:key="filter-resolved">
                 Решены <x-ui.badge size="xs" variant="success">{{ $this->counts['resolved'] }}</x-ui.badge>
             </x-ui.button>
@@ -364,6 +393,8 @@ new #[Layout('layouts.admin')] class extends Component
                 <x-ui.table-row 
                     wire:key="report-{{ $report->id }}-{{ $report->status }}-{{ $report->reported?->status }}"
                     class="{{ $isHighlighted ? 'bg-blue-500/10 ring-2 ring-blue-500/50' : '' }}"
+                    x-data="{ isHi: {{ $isHighlighted ? 'true' : 'false' }} }"
+                    x-init="isHi && setTimeout(() => { $el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 200)"
                 >
                     <x-ui.table-cell class="text-xs font-mono whitespace-nowrap {{ $isHighlighted ? 'text-blue-500 font-bold' : 'text-muted-foreground' }}">
                         #{{ $report->id }}
@@ -583,15 +614,3 @@ new #[Layout('layouts.admin')] class extends Component
         {{ $this->reports->links('partials.pagination') }}
     </div>
 </div>
-
-{{-- ФИКС: Авто-скролл к подсвеченной строке --}}
-<script>
-document.addEventListener('livewire:navigated', () => {
-    const highlightedRow = document.querySelector('.ring-blue-500\\/50');
-    if (highlightedRow) {
-        setTimeout(() => {
-            highlightedRow.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        }, 100);
-    }
-});
-</script>

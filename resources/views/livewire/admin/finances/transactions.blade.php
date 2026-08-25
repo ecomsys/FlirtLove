@@ -29,15 +29,23 @@ new #[Layout('layouts.admin')] class extends Component
     public string $refundReason = '';
     public string $refundComment = '';
 
+    /** @var string URL для кнопки "Назад" */
+    public string $backUrl = '';
+
     public function mount(): void
     {
+        // ФИКС: Запоминаем URL "Назад" только при первой загрузке
+        $previousUrl = url()->previous();
+        $this->backUrl = ($previousUrl && $previousUrl !== url()->current()) 
+            ? $previousUrl 
+            : route('admin.dashboard');
+
         if (request()->has('q')) {
             $this->statusFilter = 'all';
             $this->typeFilter = 'all';
             $this->dateFilter = 'all';
         }
     }
-
     // ФИКС РЕАКТИВНОСТИ: Сбрасываем кэш при любом изменении фильтров
     public function updatedSearch(): void { $this->resetPage(); $this->clearComputedCache(); }
     public function updatedStatusFilter(): void { $this->resetPage(); $this->clearComputedCache(); }
@@ -203,13 +211,6 @@ new #[Layout('layouts.admin')] class extends Component
     <!-- Шапка с кнопкой "Назад" -->
     <div class="flex items-center justify-between flex-wrap gap-4">
         <div class="flex items-center gap-4">
-            @php
-                $previousUrl = url()->previous();
-                $backUrl = ($previousUrl && $previousUrl !== url()->current()) 
-                    ? $previousUrl 
-                    : route('admin.dashboard');
-            @endphp
-
             <a href="{{ $backUrl }}" wire:navigate class="p-2 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors">
                 <x-lucide-arrow-left class="w-5 h-5" />
             </a>
@@ -265,12 +266,12 @@ new #[Layout('layouts.admin')] class extends Component
             <x-ui.button wire:click="setStatusFilter('all')" variant="{{ $statusFilter === 'all' ? 'default' : 'secondary' }}" size="sm">
                 Все <x-ui.badge size="xs" class="ml-1">{{ $this->counts['all'] }}</x-ui.badge>
             </x-ui.button>
-            <x-ui.button wire:click="setStatusFilter('success')" variant="{{ $statusFilter === 'success' ? 'default' : 'secondary' }}" size="sm">
-                <x-lucide-check-circle class="w-4 h-4 inline mr-1 text-green-500" /> Успешные <x-ui.badge size="xs" class="ml-1">{{ $this->counts['success'] }}</x-ui.badge>
-            </x-ui.button>
-            <x-ui.button wire:click="setStatusFilter('pending')" variant="{{ $statusFilter === 'pending' ? 'default' : 'secondary' }}" size="sm">
+             <x-ui.button wire:click="setStatusFilter('pending')" variant="{{ $statusFilter === 'pending' ? 'default' : 'secondary' }}" size="sm">
                 <x-lucide-clock class="w-4 h-4 inline mr-1 text-yellow-500" /> В ожидании <x-ui.badge size="xs" class="ml-1">{{ $this->counts['pending'] }}</x-ui.badge>
             </x-ui.button>
+            <x-ui.button wire:click="setStatusFilter('success')" variant="{{ $statusFilter === 'success' ? 'default' : 'secondary' }}" size="sm">
+                <x-lucide-check-circle class="w-4 h-4 inline mr-1 text-green-500" /> Успешные <x-ui.badge size="xs" class="ml-1">{{ $this->counts['success'] }}</x-ui.badge>
+            </x-ui.button>           
             <x-ui.button wire:click="setStatusFilter('failed')" variant="{{ $statusFilter === 'failed' ? 'default' : 'secondary' }}" size="sm">
                 <x-lucide-x-circle class="w-4 h-4 inline mr-1 text-red-500" /> Ошибки <x-ui.badge size="xs" class="ml-1">{{ $this->counts['failed'] }}</x-ui.badge>
             </x-ui.button>
@@ -322,6 +323,8 @@ new #[Layout('layouts.admin')] class extends Component
                 <x-ui.table-row 
                     wire:key="trans-{{ $transaction->id }}-{{ $transaction->status }}"
                     class="{{ $isHighlighted ? 'bg-blue-500/10 ring-2 ring-blue-500/50' : '' }}"
+                    x-data="{ isHi: {{ $isHighlighted ? 'true' : 'false' }} }"
+                    x-init="isHi && setTimeout(() => { $el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 200)"
                 >
                     <x-ui.table-cell class="text-xs font-mono whitespace-nowrap {{ $isHighlighted ? 'text-blue-500 font-bold' : 'text-muted-foreground' }}">
                         #{{ $transaction->id }}
@@ -336,8 +339,7 @@ new #[Layout('layouts.admin')] class extends Component
                                         {{ $transaction->user->name }}
                                         @if($transaction->user->has_active_premium)<x-lucide-crown class="w-3.5 h-3.5 text-yellow-500" />@endif
                                     </span>
-                                    <span class="text-xs text-muted-foreground truncate">{{ $transaction->user->email }}</span>
-                                    @if($transaction->user->trashed()) <x-ui.badge variant="secondary" size="xs">Удален</x-ui.badge> @endif
+                                    <span class="text-xs text-muted-foreground truncate">{{ $transaction->user->email }}</span>                                    
                                 </div>
                             </a>
                         @else
@@ -441,7 +443,7 @@ new #[Layout('layouts.admin')] class extends Component
                             <p class="text-xs text-muted-foreground">Сумма</p>
                             <p class="font-medium">{{ $this->viewingTransaction->formatted_amount }}</p>
                         </div>
-                                               <div>
+                        <div>
                             <p class="text-xs text-muted-foreground">Тип</p>
                             @php
                                 $modalTypeVariant = 'secondary';
@@ -578,18 +580,6 @@ new #[Layout('layouts.admin')] class extends Component
                 </div>
             </div>
         </div>
-    @endif
-
-    {{-- ФИКС: Авто-скролл к подсвеченной строке --}}
-<script>
-document.addEventListener('livewire:navigated', () => {
-    const highlightedRow = document.querySelector('.ring-blue-500\\/50');
-    if (highlightedRow) {
-        setTimeout(() => {
-            highlightedRow.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        }, 100);
-    }
-});
-</script>
+    @endif   
 </div>
 

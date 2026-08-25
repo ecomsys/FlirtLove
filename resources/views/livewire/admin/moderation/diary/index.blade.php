@@ -18,71 +18,175 @@ new #[Layout('layouts.admin')] class extends Component
 {
     use WithPagination;
 
-     #[Session] 
+    /** @var string Активная вкладка (diaries или rubrics) */
+    #[Session] 
     public string $activeTab = 'diaries';
     
-    // ФИКС: Вешаем #[Session] на все фильтры, чтобы они запоминались при переходах
+    /** @var string Поиск по дневникам */
     #[Session]
     public string $search = '';
     
+    /** @var string Фильтр статуса дневников */
     #[Session]
-    public string $statusFilter = 'all';
+    public string $statusFilter = 'pending';
     
+    /** @var string Фильтр рубрики */
     #[Session]
     public string $rubricFilter = 'all';
     
+    /** @var string Фильтр удаленных (without, with, only) */
     #[Session]
     public string $trashedFilter = 'without';
     
+    /** @var string Поиск по рубрикам */
     #[Session]
     public string $rubricSearch = '';
 
+    /** @var bool Видимость модалки создания/редактирования рубрики */
     public bool $showRubricModal = false;
+    
+    /** @var int|null ID редактируемой рубрики */
     public ?int $editingRubricId = null;
+    
     public string $rubricName = '';
     public string $rubricSlug = '';
     public string $rubricDescription = '';
     public bool $rubricIsActive = true;
     public int $rubricSortOrder = 0;
 
-        public bool $showDeleteRubricModal = false;
+    /** @var bool Видимость модалки удаления рубрики */
+    public bool $showDeleteRubricModal = false;
     public ?int $deletingRubricId = null;
     public string $deletingRubricName = '';
     public int $deletingRubricCount = 0;
-    public string $reassignRubricId = ''; // ID рубрики, куда переносим посты ('' = без рубрики)
-
     
-    // Убрали метод mount(), так как #[Session] сам всё подхватит
+    /** @var string ID рубрики для переноса постов ('' = без рубрики) */
+    public string $reassignRubricId = '';
+
+    /** @var string URL для кнопки "Назад" (фикс потери истории при AJAX-запросах) */
+    public string $backUrl = '';
+
+    /**
+     * Инициализация компонента.
+     * Фиксим запоминание URL для кнопки "Назад".
+     */
+       public function mount(): void
+    {
+        $previousUrl = url()->previous();
+        $this->backUrl = ($previousUrl && $previousUrl !== url()->current()) 
+            ? $previousUrl 
+            : route('admin.dashboard');
+
+        // Умный поиск: если пришли по ссылке ?q=ID
+        if (request()->has('q')) {
+            $searchTerm = (string) request()->input('q');
+            $this->activeTab = 'diaries';
+            
+            if (is_numeric($searchTerm)) {
+                $diary = Diary::withTrashed()->find((int) $searchTerm);
+                if ($diary) {
+                    $this->search = $searchTerm;
+                    $this->trashedFilter = $diary->trashed() ? 'only' : 'without';
+                    $this->statusFilter = $diary->trashed() ? 'all' : $diary->status;
+                    return;
+                }
+            }
+            $this->search = $searchTerm;
+            $this->statusFilter = 'all';
+        }
+    }
+    /**
+     * Переключение вкладок (Дневники / Рубрики).
+     */
     public function setTab(string $tab): void
     {
         $this->activeTab = $tab;
+        $this->search = '';
+        $this->rubricSearch = '';
         $this->resetPage();
     }
 
-      // ============================================
+    // ============================================
     // ДНЕВНИКИ
     // ============================================
-    public function updatedSearch(): void { $this->resetPage(); unset($this->diaries); }
-    public function updatedRubricFilter(): void { $this->resetPage(); unset($this->diaries); }
 
+    /**
+     * Хук Livewire: сброс пагинации и кэша при поиске.
+     */
+       public function updatedSearch(): void 
+    { 
+        $this->resetPage(); 
+
+        if (is_numeric($this->search) && !empty($this->search)) {
+            $diary = Diary::withTrashed()->find((int) $this->search);
+            if ($diary) {
+                $newTrashed = $diary->trashed() ? 'only' : 'without';
+                $newStatus = $diary->trashed() ? 'all' : $diary->status;
+                
+                if ($this->trashedFilter !== $newTrashed || $this->statusFilter !== $newStatus) {
+                    $this->trashedFilter = $newTrashed;
+                    $this->statusFilter = $newStatus;
+                    unset($this->diaryCounts);
+                }
+            }
+        }
+        unset($this->diaries); 
+    }
+    /**
+     * Хук Livewire: сброс пагинации и кэша при смене рубрики.
+     */
+    public function updatedRubricFilter(): void 
+    { 
+        $this->resetPage(); 
+        unset($this->diaries); 
+    }
+
+    public function clearRubricSearch(): void
+    {
+        $this->rubricSearch = '';
+        $this->resetPage();
+        unset($this->rubrics);
+    }
+
+    /**
+     * Установка фильтра статуса.
+     */
     public function setStatusFilter(string $status): void
     {
         $this->statusFilter = $status;
         $this->trashedFilter = 'without';
+        $this->search = ''; // ФИКС: Очищаем поиск
         $this->resetPage();
         unset($this->diaries);
         unset($this->diaryCounts);
     }
 
-    public function toggleTrashedFilter(): void
+    /**
+     * Переключение фильтра карантина (удаленных).
+     */
+     public function toggleTrashedFilter(): void
     {
         $this->trashedFilter = $this->trashedFilter === 'only' ? 'without' : 'only';
         $this->statusFilter = 'all';
+        $this->search = ''; // ФИКС: Очищаем поиск
         $this->resetPage();
         unset($this->diaries);
         unset($this->diaryCounts);
     }
 
+    /**
+     * Очистка строки поиска по дневникам.
+     */
+    public function clearSearch(): void
+    {
+        $this->search = '';
+        $this->resetPage();
+        unset($this->diaries);
+    }
+
+    /**
+     * Одобрить запись. Делегирует в Action.
+     */
     public function approveDiary(int $id, ModerateDiaryAction $action): void
     {
         $diary = Diary::find($id);
@@ -93,6 +197,9 @@ new #[Layout('layouts.admin')] class extends Component
         $this->dispatch('show-toast', type: 'success', message: 'Запись одобрена');
     }
 
+    /**
+     * Отклонить запись с указанием причины.
+     */
     public function rejectDiary(int $id, string $reason, ModerateDiaryAction $action): void
     {
         $diary = Diary::find($id);
@@ -103,6 +210,9 @@ new #[Layout('layouts.admin')] class extends Component
         $this->dispatch('show-toast', type: 'warning', message: 'Запись отклонена');
     }
 
+    /**
+     * Мягкое удаление (в карантин).
+     */
     public function deleteDiary(int $id, ModerateDiaryAction $action): void
     {
         $diary = Diary::find($id);
@@ -113,6 +223,9 @@ new #[Layout('layouts.admin')] class extends Component
         $this->dispatch('show-toast', type: 'success', message: 'Отправлено в карантин');
     }
 
+    /**
+     * Восстановление из карантина.
+     */
     public function restoreDiary(int $id, ModerateDiaryAction $action): void
     {
         $diary = Diary::withTrashed()->find($id);
@@ -123,6 +236,9 @@ new #[Layout('layouts.admin')] class extends Component
         $this->dispatch('show-toast', type: 'success', message: 'Восстановлено из карантина');
     }
 
+    /**
+     * Полное удаление записи.
+     */
     public function forceDeleteDiary(int $id, ModerateDiaryAction $action): void
     {
         $diary = Diary::withTrashed()->find($id);
@@ -133,18 +249,23 @@ new #[Layout('layouts.admin')] class extends Component
         $this->dispatch('show-toast', type: 'success', message: 'Удалено навсегда');
     }
 
-       #[Computed]
+    /**
+     * Получение списка дневников с фильтрацией и пагинацией.
+     */
+    #[Computed]
     public function diaries()
     {
         $avatarQuery = fn($q) => $q->select(['id', 'user_id', 'is_primary', 'status', 'path_thumb', 'path_medium', 'path_large', 'path_original'])->orderByDesc('is_primary')->limit(1);
-        $query = Diary::query()->with(['user.photos' => $avatarQuery, 'rubric']);
+            $query = Diary::query()->with([
+            'user' => fn($q) => $q->withTrashed()->with(['photos' => $avatarQuery]), 
+            'rubric'
+        ]);
 
         if ($this->trashedFilter === 'with') $query->withTrashed();
         elseif ($this->trashedFilter === 'only') $query->onlyTrashed();
 
         $operator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
 
-        // ФИКС: Обернули поиск в ->where(function ($q) ...), чтобы OR не ломал фильтры статуса
         $query->when($this->search, function ($q) use ($operator) {
             $q->where(function ($q) use ($operator) {
                 $q->where('title', $operator, "%{$this->search}%")
@@ -161,6 +282,9 @@ new #[Layout('layouts.admin')] class extends Component
         return $query->latest('published_at')->paginate(15);
     }
 
+    /**
+     * Подсчет счетчиков для кнопок фильтров.
+     */
     #[Computed]
     public function diaryCounts(): array
     {
@@ -180,11 +304,18 @@ new #[Layout('layouts.admin')] class extends Component
         ];
     }
 
-// ============================================
+    // ============================================
     // РУБРИКИ
     // ============================================
+
+    /**
+     * Хук Livewire: сброс пагинации при поиске рубрик.
+     */
     public function updatedRubricSearch(): void { $this->resetPage(); }
 
+    /**
+     * Открытие модалки создания рубрики.
+     */
     public function createRubricModal(): void
     {
         $this->reset(['rubricName', 'rubricSlug', 'rubricDescription', 'rubricIsActive', 'rubricSortOrder', 'editingRubricId']);
@@ -192,6 +323,9 @@ new #[Layout('layouts.admin')] class extends Component
         $this->showRubricModal = true;
     }
 
+    /**
+     * Открытие модалки редактирования рубрики.
+     */
     public function editRubricModal(int $id): void
     {
         $rubric = Rubric::find($id);
@@ -206,11 +340,17 @@ new #[Layout('layouts.admin')] class extends Component
         $this->showRubricModal = true;
     }
 
+    /**
+     * Авто-генерация слага при вводе названия (только при создании).
+     */
     public function updatedRubricName(string $value): void
     {
         if (is_null($this->editingRubricId)) $this->rubricSlug = Str::slug($value);
     }
 
+    /**
+     * Сохранение новой рубрики.
+     */
     public function saveRubric(ManageDiaryRubricAction $action): void
     {
         $this->validate([
@@ -234,6 +374,9 @@ new #[Layout('layouts.admin')] class extends Component
         $this->showRubricModal = false;
     }
 
+    /**
+     * Обновление существующей рубрики.
+     */
     public function updateRubric(ManageDiaryRubricAction $action): void
     {
         $this->validate([
@@ -259,6 +402,9 @@ new #[Layout('layouts.admin')] class extends Component
         $this->showRubricModal = false;
     }
 
+    /**
+     * Открытие модалки удаления рубрики с проверкой привязанных постов.
+     */
     public function openDeleteRubricModal(int $id): void
     {
         $rubric = Rubric::withCount('diaries')->find($id);
@@ -271,6 +417,9 @@ new #[Layout('layouts.admin')] class extends Component
         $this->showDeleteRubricModal = true;
     }
 
+    /**
+     * Подтверждение удаления рубрики (с переносом постов).
+     */
     public function confirmDeleteRubric(ManageDiaryRubricAction $action): void
     {
         if (!$this->deletingRubricId) return;
@@ -281,19 +430,21 @@ new #[Layout('layouts.admin')] class extends Component
             return;
         }
 
-        // Конвертируем пустую строку из селекта в null
         $reassignId = $this->reassignRubricId !== '' ? (int) $this->reassignRubricId : null;
         
         $action->delete($rubric, $reassignId, auth()->user());
 
         unset($this->rubrics);
         unset($this->allRubrics);
-        unset($this->diaries); // Сбрасываем, так как посты могли поменять рубрику
+        unset($this->diaries); 
 
         $this->dispatch('show-toast', type: 'success', message: 'Рубрика удалена. Записи перенесены.');
         $this->showDeleteRubricModal = false;
     }
 
+    /**
+     * Быстрое переключение статуса рубрики (Активна/Скрыта).
+     */
     public function toggleRubricStatus(int $id, ManageDiaryRubricAction $action): void
     {
         $rubric = Rubric::find($id);
@@ -303,14 +454,17 @@ new #[Layout('layouts.admin')] class extends Component
         unset($this->rubrics);
     }
 
-      #[Computed]
+    /**
+     * Получение списка рубрик с поиском.
+     */
+    #[Computed]
     public function rubrics()
     {
         $avatarQuery = fn($q) => $q->select(['id', 'user_id', 'is_primary', 'status', 'path_thumb', 'path_medium', 'path_large', 'path_original'])->orderByDesc('is_primary')->limit(1);
         $operator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
 
-        // ФИКС: Обернули в where() и добавили поиск по ID рубрики
-        return Rubric::with(['user.photos' => $avatarQuery])
+               //  Грузим автора рубрики (и аватарки) даже если он мягко-удален
+        return Rubric::with(['user' => fn($q) => $q->withTrashed()->with(['photos' => $avatarQuery])])
             ->withCount('diaries')
             ->when($this->rubricSearch, function ($q) use ($operator) {
                 $q->where(function ($q) use ($operator) {
@@ -327,10 +481,12 @@ new #[Layout('layouts.admin')] class extends Component
             ->paginate(15);
     }
     
+    /**
+     * Получение только системных рубрик (для выпадающего списка).
+     */
     #[Computed]
     public function allRubrics()
     {
-        // ФИКС: Берем только системные рубрики (где user_id = null)
         return Rubric::whereNull('user_id')->ordered()->get();
     }
 }; 
@@ -340,7 +496,7 @@ new #[Layout('layouts.admin')] class extends Component
     <!-- Заголовок -->
     <div class="flex items-center justify-between flex-wrap gap-4">
         <div class="flex items-center gap-4">
-            <a href="{{ route('admin.dashboard') }}" wire:navigate class="p-2 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors">
+            <a href="{{ $backUrl }}" wire:navigate class="p-2 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors">
                 <x-lucide-arrow-left class="w-5 h-5" />
             </a>
             <h1 class="text-2xl font-semibold flex items-center gap-2">
@@ -383,8 +539,10 @@ new #[Layout('layouts.admin')] class extends Component
                 </div>
 
                 <div class="flex items-center gap-2">
-                    <x-ui.select wire:model.live="rubricFilter" class="min-w-40">
-                        <x-ui.select-trigger><x-ui.select-value placeholder="Все рубрики" /></x-ui.select-trigger>
+                    <x-ui.select wire:model.live="rubricFilter">
+                        <x-ui.select-trigger class="min-w-40">
+                            <x-ui.select-value placeholder="Все рубрики" />
+                        </x-ui.select-trigger>
                         <x-ui.select-content>
                             <x-ui.select-item value="all">Все рубрики</x-ui.select-item>
                             @foreach($this->allRubrics as $r)
@@ -396,6 +554,11 @@ new #[Layout('layouts.admin')] class extends Component
                     <div class="relative w-64">
                         <x-ui.input wire:model.live.debounce.300ms="search" type="search" placeholder="Поиск по ID, названию..." class="pl-9 pr-8" />
                         <x-lucide-search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground z-10" />
+                        @if (!empty($search))
+                            <button wire:click="clearSearch" class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+                                <x-lucide-x class="w-4 h-4" />
+                            </button>
+                        @endif
                     </div>
                 </div>
             </div>
@@ -416,10 +579,16 @@ new #[Layout('layouts.admin')] class extends Component
 
                 <x-ui.table-body>
                     @forelse ($this->diaries as $diary)
-                        <x-ui.table-row wire:key="diary-{{ $diary->id }}" class="{{ $diary->trashed() ? 'opacity-50 bg-red-500/5' : '' }}">
-                            <x-ui.table-cell class="text-muted-foreground text-xs font-mono whitespace-nowrap">
-                                #{{ $diary->id }}
-                            </x-ui.table-cell>
+                       @php $isHighlighted = is_numeric($this->search) && $diary->id == (int)$this->search; @endphp
+                        <x-ui.table-row 
+                            wire:key="diary-{{ $diary->id }}" 
+                            class="{{ $diary->trashed() ? 'opacity-50 bg-red-500/5' : '' }} {{ $isHighlighted ? 'bg-blue-500/10 ring-2 ring-blue-500/50' : '' }}"
+                            x-data="{ isHi: {{ $isHighlighted ? 'true' : 'false' }} }"
+                            x-init="isHi && setTimeout(() => { $el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 200)"
+                        >
+                         <x-ui.table-cell class="text-muted-foreground text-xs font-mono whitespace-nowrap {{ $isHighlighted ? 'text-blue-500 font-bold' : '' }}">
+                            #{{ $diary->id }}
+                        </x-ui.table-cell>
                             <x-ui.table-cell>
                                 @if($diary->user)
                                     <a href="{{ route('admin.users.show', $diary->user->id) }}" wire:navigate class="group flex items-center gap-3 hover:text-primary transition-colors">
@@ -561,8 +730,13 @@ new #[Layout('layouts.admin')] class extends Component
         <div class="space-y-4">
             <div class="flex items-center justify-between gap-3">
                 <div class="relative w-64">
-                    <x-ui.input wire:model.live.debounce.300ms="rubricSearch" type="search" placeholder="Поиск по названию, имени или ID юзера..." class="pl-9 pr-8" />
+                    <x-ui.input wire:model.live.debounce.300ms="rubricSearch" type="search" placeholder="Поиск по названию, имени или ID..." class="pl-9 pr-8" />
                     <x-lucide-search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground z-10" />
+                    @if (!empty($rubricSearch))
+                        <button wire:click="clearRubricSearch" class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+                            <x-lucide-x class="w-4 h-4" />
+                        </button>
+                    @endif
                 </div>
                 <x-ui.button wire:click="createRubricModal" variant="default" size="sm">
                     <x-lucide-plus class="w-4 h-4" /> Создать системную рубрику
@@ -584,8 +758,14 @@ new #[Layout('layouts.admin')] class extends Component
                 </x-ui.table-header>
                 <x-ui.table-body>
                     @forelse ($this->rubrics as $rubric)
-                        <x-ui.table-row wire:key="rubric-{{ $rubric->id }}">
-                             <x-ui.table-cell class="text-muted-foreground text-xs font-mono whitespace-nowrap">
+                        @php $isRubricHighlighted = is_numeric($this->rubricSearch) && $rubric->id == (int)$this->rubricSearch; @endphp
+                        <x-ui.table-row 
+                            wire:key="rubric-{{ $rubric->id }}" 
+                            class="{{ $isRubricHighlighted ? 'bg-blue-500/10 ring-2 ring-blue-500/50' : '' }}"
+                            x-data="{ isHi: {{ $isRubricHighlighted ? 'true' : 'false' }} }"
+                            x-init="isHi && setTimeout(() => { $el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 200)"
+                        >
+                            <x-ui.table-cell class="text-muted-foreground text-xs font-mono whitespace-nowrap {{ $isRubricHighlighted ? 'text-blue-500 font-bold' : '' }}">
                                 #{{ $rubric->id }}
                             </x-ui.table-cell>
                             <x-ui.table-cell class="text-muted-foreground text-sm">{{ $rubric->sort_order }}</x-ui.table-cell>
@@ -770,7 +950,7 @@ new #[Layout('layouts.admin')] class extends Component
             </div>
 
             <div class="flex items-center justify-end gap-2 p-4 border-t border-border bg-muted/20">
-                <x-ui.button @click="$wire.showDeleteRubricModal = false" variant="outline" size="sm">Отмена</x-ui-button>
+                <x-ui.button @click="$wire.showDeleteRubricModal = false" variant="outline" size="sm">Отмена</x-ui.button>
                 <x-ui.button wire:click="confirmDeleteRubric" variant="destructive" size="sm" wire:target="confirmDeleteRubric" wire:loading.attr="disabled">
                     <x-lucide-trash-2 class="w-4 h-4" wire:loading.remove wire:target="confirmDeleteRubric" />
                     <x-lucide-loader-2 class="w-4 h-4 animate-spin hidden" wire:loading wire:target="confirmDeleteRubric" />

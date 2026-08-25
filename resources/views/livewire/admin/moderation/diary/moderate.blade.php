@@ -18,16 +18,23 @@ new #[Layout('layouts.admin')] class extends Component
     public ?string $rejectReason = null;
     public ?string $rubricId = null;
     public bool $isCommentsEnabled;
+     /** @var string URL для кнопки "Назад" */
     public string $backUrl = '';
 
+    /**
+     * Инициализация компонента.
+     * Загружаем дневник, его связи и запоминаем URL "Назад".
+     */
     public function mount(Diary $diary): void
     {
         $avatarQuery = fn($q) => $q->select(['id', 'user_id', 'is_primary', 'status', 'path_thumb', 'path_medium', 'path_large', 'path_original'])->orderByDesc('is_primary')->limit(1);
         $diary->load(['user.photos' => $avatarQuery, 'rubric']);
 
-        $this->backUrl = url()->previous() && url()->previous() !== url()->current() 
-            ? url()->previous() 
-            : route('admin.moderation.diary.index');
+        // ФИКС: Запоминаем URL "Назад" только при первой загрузке страницы
+        $previousUrl = url()->previous();
+        $this->backUrl = ($previousUrl && $previousUrl !== url()->current()) 
+            ? $previousUrl 
+            : route('admin.dashboard');
 
         $this->diary = $diary;
         $this->status = $diary->status;
@@ -35,7 +42,6 @@ new #[Layout('layouts.admin')] class extends Component
         $this->rubricId = $diary->rubric_id ? (string) $diary->rubric_id : '';
         $this->isCommentsEnabled = $diary->is_comments_enabled;
     }   
-
     #[Computed]
     public function availableRubrics()
     {

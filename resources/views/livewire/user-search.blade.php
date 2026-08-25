@@ -21,6 +21,7 @@ new class extends Component
         $avatarQuery = fn($q) => $q->select(['id', 'user_id', 'is_primary', 'status', 'path_thumb', 'path_medium', 'path_large', 'path_original'])->orderByDesc('is_primary')->limit(1);
 
         return User::query()
+            ->withTrashed()
             ->excludeStaff()
             ->with(['photos' => $avatarQuery])
             ->where(function ($q) use ($operator, $search) {

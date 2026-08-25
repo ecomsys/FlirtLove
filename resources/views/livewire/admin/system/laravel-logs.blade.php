@@ -13,28 +13,66 @@ new #[Layout('layouts.admin')] class extends Component
 {
     use WithPagination;
 
-    public string $search = '';
+       public string $search = '';
     public string $levelFilter = 'all';
     public string $dateFilter = '';
     public int $perPage = 50;
+
+    /** @var string URL для кнопки "Назад" */
+    public string $backUrl = '';
 
     // Авторизация: только админы могут смотреть системные логи
     public function mount(): void
     {
         abort_unless(auth()->user()?->role === 'admin', 403);
+
+        // ФИКС: Запоминаем URL "Назад" только при первой загрузке
+        $previousUrl = url()->previous();
+        $this->backUrl = ($previousUrl && $previousUrl !== url()->current()) 
+            ? $previousUrl 
+            : route('admin.dashboard');
+
         $this->levelFilter = session('admin_logs_level', 'all');
     }
 
-    // Сброс пагинации при поиске
     public function updatedSearch(): void
     {
         $this->resetPage();
+        $this->clearComputedCache();
     }
 
-    // Сброс пагинации при смене даты
     public function updatedDateFilter(): void
     {
         $this->resetPage();
+        $this->clearComputedCache();
+    }
+
+    public function clearSearch(): void
+    {
+        $this->search = '';
+        $this->resetPage();
+        $this->clearComputedCache();
+    }
+
+    public function clearFilters(): void
+    {
+        $this->search = '';
+        $this->levelFilter = 'all';
+        $this->dateFilter = '';
+        $this->resetPage();
+        $this->clearComputedCache();
+    }
+
+    public function refreshLogs(): void
+    {
+        $this->clearComputedCache();
+    }
+
+    private function clearComputedCache(): void
+    {
+        unset($this->logs);
+        unset($this->stats);
+        unset($this->logSize);
     }
 
     // Установка фильтра уровня (с сохранением в сессию)
@@ -43,6 +81,7 @@ new #[Layout('layouts.admin')] class extends Component
         $this->levelFilter = $level;
         session(['admin_logs_level' => $level]);
         $this->resetPage();
+        $this->clearComputedCache();
     }
 
     // Очистка файла логов
@@ -57,6 +96,7 @@ new #[Layout('layouts.admin')] class extends Component
             
             Log::info('Логи очищены администратором');
             $this->dispatch('show-toast', type: 'success', message: 'Логи очищены');
+            $this->clearComputedCache();
         } catch (\Exception $e) {
             $this->dispatch('show-toast', type: 'error', message: 'Не удалось очистить логи: ' . $e->getMessage());
         }
@@ -211,20 +251,26 @@ new #[Layout('layouts.admin')] class extends Component
 
 <div class="space-y-6 pb-6">
     <!-- Header -->
-    <div class="flex items-center justify-between flex-wrap gap-4">
-        <div>
-            <h1 class="text-2xl font-semibold flex items-center gap-2">
-                <x-lucide-file-text class="w-6 h-6" />
-                Системные логи
-            </h1>
-            <p class="text-sm text-muted-foreground">
-                Размер файла: {{ $this->logSize }}
-            </p>
+        <div class="flex items-center justify-between flex-wrap gap-4">
+        <div class="flex items-center gap-4">
+            <a href="{{ $backUrl }}" wire:navigate class="p-2 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors">
+                <x-lucide-arrow-left class="w-5 h-5" />
+            </a>
+            <div>
+                <h1 class="text-2xl font-semibold flex items-center gap-2">
+                    <x-lucide-file-text class="w-6 h-6" />
+                    Системные логи
+                </h1>
+                <p class="text-sm text-muted-foreground">
+                    Размер файла: {{ $this->logSize }}
+                </p>
+            </div>
         </div>
 
         <div class="flex items-center gap-2">
-            <x-ui.button wire:click="$refresh" variant="outline" size="sm">
-                <x-lucide-refresh-ccw class="w-4 h-4" />
+            <x-ui.button wire:click="refreshLogs" variant="outline" size="sm" wire:loading.attr="disabled" wire:target="refreshLogs">
+                <span wire:loading.remove wire:target="refreshLogs"><x-lucide-refresh-ccw class="w-4 h-4" /></span>
+                <span wire:loading wire:target="refreshLogs"><x-lucide-loader-2 class="w-4 h-4 animate-spin inline" /></span>
             </x-ui.button>
 
             <x-ui.alert-dialog>
@@ -328,8 +374,8 @@ new #[Layout('layouts.admin')] class extends Component
                 <x-lucide-search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                 @if(!empty($search))
                     <button
-                        wire:click="$set('search', '')"
-                        class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                        wire:click="clearSearch"
+                        class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground z-10"
                     >
                         <x-lucide-x class="w-4 h-4" />
                     </button>
@@ -382,7 +428,7 @@ new #[Layout('layouts.admin')] class extends Component
                             <p>Логи не найдены</p>
                             @if(!empty($search) || $levelFilter !== 'all' || !empty($dateFilter))
                                 <x-ui.button
-                                    wire:click="$set('search', ''); $set('levelFilter', 'all'); $set('dateFilter', '')"
+                                    wire:click="clearFilters"
                                     variant="outline"
                                     size="sm"
                                 >
