@@ -24,8 +24,31 @@ new #[Layout('layouts.admin')] class extends Component
     public int $duration_days = 30;
     public bool $is_active = true;
     public int $sort_order = 0;
-    public string $apple_product_id = '';
+       public string $apple_product_id = '';
     public string $google_product_id = '';
+
+    /** @var string URL для кнопки "Назад" */
+    public string $backUrl = '';
+
+    /**
+     * Инициализация компонента.
+     * Запоминаем URL "Назад" только при первой загрузке.
+     */
+    public function mount(): void
+    {
+        $previousUrl = url()->previous();
+        $this->backUrl = ($previousUrl && $previousUrl !== url()->current()) 
+            ? $previousUrl 
+            : route('admin.dashboard');
+    }
+
+    /**
+     * Очистка строки поиска.
+     */
+    public function clearSearch(): void
+    {
+        $this->search = '';
+    }
 
     // Хардкодим списки фичей для вывода в UI
     public array $premiumFeatures = [
@@ -158,12 +181,6 @@ new #[Layout('layouts.admin')] class extends Component
     <!-- Шапка -->
     <div class="flex items-center justify-between flex-wrap gap-4">
         <div class="flex items-center gap-4">
-            @php
-                $previousUrl = url()->previous();
-                $backUrl = ($previousUrl && $previousUrl !== url()->current()) 
-                    ? $previousUrl 
-                    : route('admin.dashboard');
-            @endphp
             <a href="{{ $backUrl }}" wire:navigate class="p-2 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors">
                 <x-lucide-arrow-left class="w-5 h-5" />
             </a>
@@ -178,8 +195,13 @@ new #[Layout('layouts.admin')] class extends Component
         
         <div class="flex items-center gap-2">
             <div class="relative w-55">
-                <x-ui.input wire:model.live.debounce.300ms="search" type="search" placeholder="Поиск по ID или названию..." class="pl-9" />
+                <x-ui.input wire:model.live.debounce.300ms="search" type="search" placeholder="Поиск по ID или названию..." class="pl-9 pr-8" />
                 <x-lucide-search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                @if (!empty($search))
+                    <button wire:click="clearSearch" class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground z-10">
+                        <x-lucide-x class="w-4 h-4" />
+                    </button>
+                @endif
             </div>
             <x-ui.button wire:click="openPlanModal()" variant="default" size="sm">
                 <x-lucide-plus class="w-4 h-4" /> Добавить тариф

@@ -1,14 +1,13 @@
 <?php
 
-use App\Models\AdminLog;
+use App\Actions\Admin\BroadcastsAction;
 use App\Models\Broadcast;
 use App\Models\User;
-use App\Jobs\SendBroadcastJob;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Layout;
-use Livewire\Attributes\Session;
+use Livewire\Attributes\Url;
 use Livewire\Attributes\On;
 use Livewire\Volt\Component;
 use Livewire\WithPagination;
@@ -23,33 +22,83 @@ new #[Layout('layouts.admin')] class extends Component
     /** @var bool Состояние чекбокса "Выбрать все на странице" */
     public bool $selectAll = false;
     
-    #[Session] 
+    #[Url(as: 'date_from', except: '')] 
     public ?string $dateFrom = null;
-    #[Session] 
+    
+    #[Url(as: 'date_to', except: '')] 
     public ?string $dateTo = null;
-    #[Session] 
+    
+    /** @var string Поиск (по названию, тексту или ID) */
+    #[Url(as: 'q', except: '')]
     public string $search = '';
-    #[Session] 
-    public string $statusFilter = 'all';
-    #[Session] 
+    
+    /** @var string Фильтр статуса */
+    #[Url(as: 'status', except: 'draft')]
+    public string $statusFilter = 'draft';
+    
+    /** @var string Фильтр типа */
+    #[Url(as: 'type', except: 'all')]
     public string $typeFilter = 'all';
     
     /** @var int Количество записей на страницу */
     public int $perPage = 10;
 
+    /** @var string URL для кнопки "Назад" */
+    public string $backUrl = '';
+
     // === ХУКИ ОБНОВЛЕНИЯ ФИЛЬТРОВ ===
-    // При изменении любого фильтра сбрасываем пагинацию и очищаем кэш вычисляемых свойств,
-    // чтобы Livewire гарантированно сделал новый запрос в БД.
     
-    public function updatingSearch(): void { $this->resetPage(); $this->clearComputedCache(); }
-    public function updatingStatusFilter(): void { $this->resetPage(); $this->clearComputedCache(); }   
-    public function updatingTypeFilter(): void { $this->resetPage(); $this->clearComputedCache(); }
-    public function updatingDateFrom(): void { $this->resetPage(); $this->clearComputedCache(); }
-    public function updatingDateTo(): void { $this->resetPage(); $this->clearComputedCache(); }
+    public function updatedSearch(): void 
+    { 
+        $this->resetPage(); 
+        $this->clearComputedCache(); 
+
+        // Умная подсветка вкладки при ручном вводе ID
+        if (is_numeric($this->search) && !empty($this->search)) {
+            $broadcast = Broadcast::find((int) $this->search);
+            if ($broadcast) {
+                $this->statusFilter = $broadcast->status;
+            } else {
+                $this->statusFilter = 'all';
+            }
+        }
+    }
+
+    // ФИКС: Очищаем поиск при смене любого фильтра
+    public function updatedStatusFilter(): void { $this->search = ''; $this->resetPage(); $this->clearComputedCache(); }   
+    public function updatedTypeFilter(): void { $this->search = ''; $this->resetPage(); $this->clearComputedCache(); }
+    public function updatingDateFrom(): void { $this->search = ''; $this->resetPage(); $this->clearComputedCache(); }
+    public function updatingDateTo(): void { $this->search = ''; $this->resetPage(); $this->clearComputedCache(); }
+
+    public function mount(): void
+    {
+        // ФИКС: Запоминаем URL "Назад" только при первой загрузке
+        $previousUrl = url()->previous();
+        $this->backUrl = ($previousUrl && $previousUrl !== url()->current()) 
+            ? $previousUrl 
+            : route('admin.dashboard');
+
+        // Умный поиск: если пришли по прямой ссылке ?q=123, автоматически переключаем вкладку
+        if (!empty($this->search) && is_numeric($this->search)) {
+            $broadcast = Broadcast::find((int) $this->search);
+            if ($broadcast) {
+                $this->statusFilter = $broadcast->status;
+            }
+        }
+    }
+
+    /**
+     * Очистка строки поиска.
+     */
+    public function clearSearch(): void
+    {
+        $this->search = '';
+        $this->resetPage();
+        $this->clearComputedCache();
+    }
 
     /**
      * Обработка изменения галки "Выбрать все".
-     * Заполняет массив ID-шников текущей страницы или очищает его.
      */
     public function updatedSelectAll(): void
     {
@@ -60,14 +109,12 @@ new #[Layout('layouts.admin')] class extends Component
         }
     }
 
-    // === ДЕЙСТВИЯ (ACTION METHODS) ===
+    // === ДЕЙСТВИЯ (ДЕЛЕГИРУЕМ В ACTION) ===
 
-    /**
-     * Установка фильтра статуса через кнопки над таблицей.
-     */
     public function setStatusFilter(string $status): void
     {
         $this->statusFilter = $status;
+        $this->search = ''; // ФИКС: Очищаем поиск
         $this->resetPage();
         $this->clearComputedCache();
     }
@@ -82,181 +129,69 @@ new #[Layout('layouts.admin')] class extends Component
         $this->redirect(route('admin.system.broadcasts.edit', $id), navigate: true);
     }
 
-    /**
-     * Ручной запуск рассылки.
-     * Использует атомарный запрос UPDATE с условием WHERE IN, 
-     * чтобы защититься от двойного клика (Race Condition).
-     */
-    public function sendNow(int $id): void
+    public function sendNow(int $id, BroadcastsAction $action): void
     {
-        $broadcast = Broadcast::find($id);
+        $result = $action->sendNow($id, auth()->user());
         
-        if (!$broadcast || !in_array($broadcast->status, ['draft', 'scheduled'])) {
-            $this->dispatch('show-toast', type: 'info', message: 'Эту рассылку уже нельзя отправить.');
-            return;
-        }
-
-        try {
-            // 1. Сохраняем состояние ДО запуска
-            $before = $broadcast->only(['status', 'started_at']);
-
-            $updated = Broadcast::where('id', $id)
-                ->whereIn('status', ['draft', 'scheduled'])
-                ->update([
-                    'status' => 'sending', 
-                    'started_at' => now()
-                ]);
-            
-            if ($updated) {
-                // 2. Обновляем модель в памяти и получаем состояние ПОСЛЕ
-                $broadcast->refresh();
-                $after = $broadcast->only(['status', 'started_at']);
-
-                SendBroadcastJob::dispatch($broadcast->id, $broadcast->target_audience)->onQueue('broadcasts');
-                
-                // 3. Передаем дифф в лог!
-                AdminLog::record('broadcast.send_now', $broadcast, auth()->user(), $before, $after);
-                Log::info("Админ запустил рассылку вручную", ['broadcast_id' => $id, 'admin_id' => auth()->id()]);
-                
-                $this->dispatch('show-toast', type: 'success', message: 'Рассылка поставлена в очередь');
-                $this->clearComputedCache();
-            }
-        } catch (\Exception $e) {
-            Log::error("Ошибка ручного запуска рассылки: " . $e->getMessage());
-            $broadcast->markAsFailed();
-            $this->dispatch('show-toast', type: 'error', message: 'Ошибка сервера при запуске!');
+        $this->dispatch('show-toast', type: $result['success'] ? 'success' : 'info', message: $result['message']);
+        
+        if ($result['success']) {
+            $this->clearComputedCache();
         }
     }
 
-     /**
-     * Дублирование рассылки.
-     * Создает копию со статусом "draft" и сброшенными счетчиками/датами.
-     */
-    public function duplicateBroadcast(int $id): void
+    public function duplicateBroadcast(int $id, BroadcastsAction $action): void
     {
-        try {
-            $broadcast = Broadcast::find($id);
-            if ($broadcast) {
-                // Сохраняем ID источника для лога
-                $before = ['source_id' => $broadcast->id, 'source_title' => $broadcast->title];
-
-                $new = $broadcast->replicate();
-                $new->status = 'draft';
-                $new->sent_at = null;
-                $new->scheduled_at = null;
-                $new->sent_count = 0;
-                $new->failed_count = 0;
-                $new->total_recipients = 0;
-                $new->started_at = null;
-                $new->save();
-
-                // Фиксируем, что создалось
-                $after = ['new_id' => $new->id, 'new_title' => $new->title, 'status' => 'draft'];
-
-                // Логируем с диффом!
-                AdminLog::record('broadcast.duplicate', $broadcast, auth()->user(), $before, $after);
-                Log::info("Админ продублировал рассылку", ['source_id' => $id, 'new_id' => $new->id]);
-
-                $this->dispatch('show-toast', type: 'success', message: 'Рассылка скопирована в черновики');
-                
-                $this->redirect(route('admin.system.broadcasts.edit', $new->id), navigate: true);
-            }
-        } catch (\Exception $e) {
-            Log::error("Ошибка дублирования рассылки: " . $e->getMessage());
+        $newBroadcast = $action->duplicateBroadcast($id, auth()->user());
+        
+        if ($newBroadcast) {
+            $this->dispatch('show-toast', type: 'success', message: 'Рассылка скопирована в черновики');
+            $this->redirect(route('admin.system.broadcasts.edit', $newBroadcast->id), navigate: true);
+        } else {
             $this->dispatch('show-toast', type: 'error', message: 'Ошибка сервера!');
         }
     }
 
-        /**
-     * Удаление одной рассылки.
-     * Запрещено удаление рассылок в статусе 'sending'.
-     */
-    public function deleteBroadcast(int $id): void
+    public function deleteBroadcast(int $id, BroadcastsAction $action): void
     {
-        try {
-            $broadcast = Broadcast::find($id);
-            if ($broadcast) {
-                if ($broadcast->status === 'sending') {
-                    $this->dispatch('show-toast', type: 'error', message: 'Нельзя удалить рассылку в процессе отправки!');
-                    return;
-                }
-
-                // Сохраняем данные перед удалением
-                $before = $broadcast->only(['id', 'title', 'type', 'status', 'target_audience']);
-
-                AdminLog::record('broadcast.delete', $broadcast, auth()->user(), $before, null);
-                $broadcast->delete();
-                Log::info("Админ удалил рассылку", ['broadcast_id' => $id]);
-                
-                $this->dispatch('show-toast', type: 'success', message: 'Рассылка удалена');
-                $this->clearComputedCache();
-            }
-        } catch (\Exception $e) {
-            Log::error("Ошибка удаления рассылки: " . $e->getMessage());
-            $this->dispatch('show-toast', type: 'error', message: 'Ошибка сервера!');
+        $result = $action->deleteBroadcast($id, auth()->user());
+        
+        $this->dispatch('show-toast', type: $result['success'] ? 'success' : 'error', message: $result['message']);
+        
+        if ($result['success']) {
+            $this->clearComputedCache();
         }
     }
 
-       /**
-     * Массовое удаление выбранных рассылок.
-     * Использует транзакцию и блокировку строк, чтобы безопасно удалить и залогировать.
-     */
-    public function deleteSelected(): void
+    public function deleteSelected(BroadcastsAction $action): void
     {
         if (empty($this->selectedBroadcasts)) {
             $this->dispatch('show-toast', type: 'info', message: 'Не выбрано ни одной рассылки.');
             return;
         }
 
-        try {
-            $actualDeletedCount = 0;
-            
-            DB::transaction(function () use (&$actualDeletedCount) {
-                $broadcasts = Broadcast::whereIn('id', $this->selectedBroadcasts)
-                    ->where('status', '!=', 'sending')
-                    ->lockForUpdate()
-                    ->get();
-                
-                foreach ($broadcasts as $broadcast) {
-                    // Сохраняем данные перед удалением
-                    $before = $broadcast->only(['id', 'title', 'type', 'status', 'target_audience']);
-                    
-                    AdminLog::record('broadcast.delete', $broadcast, auth()->user(), $before, null);
-                    $broadcast->delete();
-                    $actualDeletedCount++;
-                }
-            });
+        $actualDeletedCount = $action->deleteSelected($this->selectedBroadcasts, auth()->user());
 
-            if ($actualDeletedCount > 0) {
-                Log::info("Админ удалил рассылки", ['count' => $actualDeletedCount, 'admin_id' => auth()->id()]);
-                $this->dispatch('show-toast', type: 'success', message: "Удалено {$actualDeletedCount} рассылок.");
-            } else {
-                $this->dispatch('show-toast', type: 'info', message: 'Нет доступных для удаления рассылок (возможно, они в процессе отправки).');
-            }
-
-            $this->selectedBroadcasts = [];
-            $this->selectAll = false;
-            $this->clearComputedCache();
-        } catch (\Exception $e) {
-            Log::error("Ошибка массового удаления рассылок: " . $e->getMessage());
-            $this->dispatch('show-toast', type: 'error', message: 'Ошибка сервера при удалении!');
+        if ($actualDeletedCount > 0) {
+            $this->dispatch('show-toast', type: 'success', message: "Удалено {$actualDeletedCount} рассылок.");
+        } else {
+            $this->dispatch('show-toast', type: 'info', message: 'Нет доступных для удаления рассылок (возможно, они в процессе отправки).');
         }
+
+        $this->selectedBroadcasts = [];
+        $this->selectAll = false;
+        $this->clearComputedCache();
     }
 
-    /**
-     * Сброс всех фильтров к значениям по умолчанию.
-     */
     public function resetFilters(): void
     {
         $this->reset(['search', 'statusFilter', 'typeFilter', 'dateFrom', 'dateTo']);
+        $this->statusFilter = 'all';
+        $this->typeFilter = 'all';
         $this->resetPage();
         $this->clearComputedCache();
     }
 
-    /**
-     * Слушатель события сохранения формы.
-     * Обновляет список, когда мы возвращаемся со страницы создания/редтирования.
-     */
     #[On('broadcast-saved')]
     public function refreshList(): void
     {
@@ -265,24 +200,26 @@ new #[Layout('layouts.admin')] class extends Component
 
     // === ВЫЧИСЛЯЕМЫЕ СВОЙСТВА (DATA SOURCE) ===
 
-    /**
-     * Получение пагинированного списка рассылок с фильтрами.
-     * Жадно загружает админа-автора и целевого юзера (если рассылка персональная).
-     */
-    #[Computed]
+       #[Computed]
     public function broadcasts()
     {
         $avatarQuery = fn($q) => $q->select(['user_id', 'is_primary', 'path_thumb', 'path_medium'])
                                   ->orderByDesc('is_primary')
                                   ->limit(1);
 
+        $operator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
+
         $paginated = Broadcast::query()
-            ->with(['admin' => fn($q) => $q->select('id', 'name', 'email', 'last_seen')->with(['photos' => $avatarQuery])])
-            ->when($this->search, function ($query) {
+            // ФИКС 1: withTrashed() для админа-автора рассылки
+            ->with(['admin' => fn($q) => $q->withTrashed()->select('id', 'name', 'email', 'last_seen')->with(['photos' => $avatarQuery])])
+            ->when($this->search, function ($query) use ($operator) {
                 $search = '%' . $this->search . '%';
-                $query->where(function ($q) use ($search) {
-                    $q->where('title', 'ilike', $search)
-                      ->orWhere('message', 'ilike', $search);
+                $query->where(function ($q) use ($search, $operator) {
+                    $q->where('title', $operator, $search)
+                      ->orWhere('message', $operator, $search);
+                    if (is_numeric($this->search)) {
+                        $q->orWhere('id', (int) $this->search);
+                    }
                 });
             })
             ->when($this->statusFilter !== 'all', fn($q) => $q->where('status', $this->statusFilter))
@@ -292,7 +229,6 @@ new #[Layout('layouts.admin')] class extends Component
             ->latest('created_at')
             ->paginate($this->perPage);
 
-        // Жадная загрузка целевых юзеров для персональных рассылок
         $targetUserIds = $paginated->getCollection()
             ->pluck('target_audience.user_id')
             ->filter()
@@ -301,7 +237,9 @@ new #[Layout('layouts.admin')] class extends Component
             ->all();
 
         if (!empty($targetUserIds)) {
+            // ФИКС 2: withTrashed() для юзера-получателя рассылки
             $targetUsers = User::with(['photos' => $avatarQuery])
+                ->withTrashed() // <-- ВОТ ЭТО ДОБАВИЛИ
                 ->whereIn('id', $targetUserIds)
                 ->get()
                 ->keyBy('id');
@@ -315,9 +253,6 @@ new #[Layout('layouts.admin')] class extends Component
         return $paginated;
     }
 
-    /**
-     * Подсчет количества рассылок по каждому статусу для кнопок-фильтров.
-     */
     #[Computed]
     public function counts(): array
     {
@@ -336,12 +271,6 @@ new #[Layout('layouts.admin')] class extends Component
         ];
     }
 
-    // === ХЕЛПЕРЫ ===
-
-    /**
-     * Очистка кэша вычисляемых свойств (broadcasts и counts).
-     * Вызывается при любом действии или изменении фильтра, чтобы таблица всегда была свежей.
-     */
     private function clearComputedCache(): void
     {
         unset($this->broadcasts);
@@ -353,13 +282,18 @@ new #[Layout('layouts.admin')] class extends Component
 <div class="space-y-6 pb-6">
     <!-- Заголовок страницы -->
     <div class="flex items-center justify-between flex-wrap gap-4">
-        <h1 class="text-2xl font-semibold flex items-center gap-2">
-            <x-lucide-radio class="w-6 h-6" />
-            Рассылки
-            @if ($this->counts['draft'] > 0)
-                <x-ui.badge variant="warning" size="sm">{{ $this->counts['draft'] }} черновиков</x-ui.badge>
-            @endif
-        </h1>
+        <div class="flex items-center gap-4">
+            <a href="{{ $backUrl }}" wire:navigate class="p-2 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors">
+                <x-lucide-arrow-left class="w-5 h-5" />
+            </a>
+            <h1 class="text-2xl font-semibold flex items-center gap-2">
+                <x-lucide-radio class="w-6 h-6" />
+                Рассылки
+                @if ($this->counts['draft'] > 0)
+                    <x-ui.badge variant="warning" size="sm">{{ $this->counts['draft'] }} черновиков</x-ui.badge>
+                @endif
+            </h1>
+        </div>
 
        <x-ui.button wire:click="createBroadcast" variant="default" size="sm">
             <x-lucide-plus class="w-4 h-4" />
@@ -420,10 +354,10 @@ new #[Layout('layouts.admin')] class extends Component
             </div>
 
             <div class="relative w-64">
-                <x-ui.input wire:model.live.debounce.300ms="search" type="search" placeholder="Поиск..." class="pl-9 pr-8" />
+                <x-ui.input wire:model.live.debounce.300ms="search" type="search" placeholder="Поиск по ID или тексту..." class="pl-9 pr-8" />
                 <x-lucide-search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                 @if (!empty($search))
-                    <button wire:click="$set('search', '')" class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+                    <button wire:click="clearSearch" class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground z-10">
                         <x-lucide-x class="w-4 h-4" />
                     </button>
                 @endif
@@ -472,15 +406,21 @@ new #[Layout('layouts.admin')] class extends Component
 
         <x-ui.table-body>
             @forelse ($this->broadcasts as $broadcast)
-                {{-- Статичный wire:key по ID гарантирует, что строка не будет перестроена с нуля при поллинге --}}
-                <x-ui.table-row wire:key="broadcast-row-{{ $broadcast->id }}" 
-                    class="{{ in_array($broadcast->id, array_map('intval', $this->selectedBroadcasts)) ? 'bg-muted/50' : '' }}" >             
+                @php 
+                    $isHighlighted = is_numeric($this->search) && $broadcast->id == (int)$this->search; 
+                @endphp
+                <x-ui.table-row 
+                    wire:key="broadcast-row-{{ $broadcast->id }}" 
+                    class="{{ in_array($broadcast->id, array_map('intval', $this->selectedBroadcasts)) ? 'bg-muted/50' : '' }} {{ $isHighlighted ? 'bg-blue-500/10 ring-2 ring-blue-500/50' : '' }}"
+                    x-data="{ isHi: {{ $isHighlighted ? 'true' : 'false' }} }"
+                    x-init="isHi && setTimeout(() => { $el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 200)"
+                >             
                     
                     <x-ui.table-cell class="w-8">
                         <x-checkbox wire:model.live="selectedBroadcasts" value="{{ $broadcast->id }}" />
                     </x-ui.table-cell>
                     
-                    <x-ui.table-cell class="text-xs text-muted-foreground/70 whitespace-nowrap">
+                    <x-ui.table-cell class="text-xs text-muted-foreground/70 whitespace-nowrap {{ $isHighlighted ? 'text-blue-500 font-bold' : '' }}">
                         #{{ $broadcast->id }}
                     </x-ui.table-cell>
                     

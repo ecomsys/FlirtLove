@@ -122,9 +122,13 @@ new class extends Component
     }
 
     public function setPrimary(int $photoId): void
-    {
+    { 
         $photo = Photo::withTrashed()->find($photoId);
         if (!$photo) return;
+        if ($photo->deleted_at) {
+            $this->dispatch('show-toast', type: 'error', message: 'Нельзя поставить карантинное фото как аватар!');
+            return;
+        }       
         $this->moderatePhotoAction->setPrimary($photo, auth()->user());
         $this->dispatch('show-toast', type: 'success', message: 'Установлено как аватар');
         $this->dispatch('user-action-performed');

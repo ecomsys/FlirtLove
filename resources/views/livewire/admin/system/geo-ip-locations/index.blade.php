@@ -4,7 +4,7 @@ use App\Actions\Admin\GeoIPLocationAction;
 use App\Models\GeoIPLocation;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Layout;
-use Livewire\Attributes\Session;
+use Livewire\Attributes\Url;
 use Livewire\Volt\Component;
 use Livewire\WithPagination;
 
@@ -12,20 +12,36 @@ new #[Layout('layouts.admin')] class extends Component
 {
     use WithPagination;
 
-    #[Session] 
+    /** @var string Поиск по имени или ISO коду */
+    #[Url(as: 'q', except: '')]
     public string $search = '';
-    #[Session] 
-    public string $typeFilter = 'country'; // По умолчанию показываем только страны
-    #[Session] 
+    
+    /** @var string Фильтр типа (all, country, region) */
+    #[Url(as: 'type', except: 'country')]
+    public string $typeFilter = 'country';
+    
     public int $perPage = 50;
 
-    public function updatedSearch(): void { $this->resetPage(); }
+    /** @var string URL для кнопки "Назад" */
+    public string $backUrl = '';
 
-    // НОВЫЙ МЕТОД: Переключение фильтра кнопками
+      public function mount(): void
+    {
+        // ФИКС: Запоминаем URL "Назад" только при первой загрузке
+        $previousUrl = url()->previous();
+        $this->backUrl = ($previousUrl && $previousUrl !== url()->current()) 
+            ? $previousUrl 
+            : route('admin.dashboard');
+    }
+
+    public function updatedSearch(): void { $this->resetPage(); $this->clearComputedCache(); }
+
     public function setTypeFilter(string $type): void 
     { 
         $this->typeFilter = $type; 
+        $this->search = ''; // ФИКС: Очищаем поиск при смене вкладки
         $this->resetPage(); 
+        $this->clearComputedCache();
     }
 
     public function clearFilters(): void
@@ -33,7 +49,16 @@ new #[Layout('layouts.admin')] class extends Component
         $this->search = '';
         $this->typeFilter = 'country';
         $this->resetPage();
+        $this->clearComputedCache();
     }
+
+    public function clearSearch(): void
+    {
+        $this->search = '';
+        $this->resetPage();
+        $this->clearComputedCache();
+    }
+
 
     #[Computed]
     public function locations()
@@ -74,6 +99,7 @@ new #[Layout('layouts.admin')] class extends Component
         if ($loc) {
             $action->toggleRegistration($loc);
             $this->dispatch('show-toast', type: 'success', message: 'Правило регистрации обновлено');
+            $this->clearComputedCache(); // ФИКС: Обновляем таблицу мгновенно
         }
     }
 
@@ -83,16 +109,24 @@ new #[Layout('layouts.admin')] class extends Component
         if ($loc) {
             $action->toggleFeed($loc);
             $this->dispatch('show-toast', type: 'success', message: 'Правило ленты обновлено');
+            $this->clearComputedCache(); // ФИКС: Обновляем таблицу мгновенно
         }
     }
+
+    private function clearComputedCache(): void
+    {
+        unset($this->locations);
+        // unset($this->counts); // Счетчики глобальные, их сбрасывать не обязательно
+    }
+  
 }; 
 ?>
 
 <div class="space-y-6 pb-6">
     <!-- Заголовок -->
     <div class="flex items-center justify-between flex-wrap gap-4">
-        <div class="flex items-center gap-3">
-            <a href="{{ route('admin.dashboard') }}" wire:navigate class="p-2 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors">
+             <div class="flex items-center gap-3">
+            <a href="{{ $backUrl }}" wire:navigate class="p-2 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors">
                 <x-lucide-arrow-left class="w-5 h-5" />
             </a>
             <div>
@@ -127,9 +161,14 @@ new #[Layout('layouts.admin')] class extends Component
             @endif
         </div>
 
-        <div class="relative w-64">
-            <x-ui.input wire:key="geo-search-input" wire:model.live.debounce.300ms="search" type="search" placeholder="Поиск по имени или ISO коду..." class="pl-9" />
+                <div class="relative w-64">
+            <x-ui.input wire:key="geo-search-input" wire:model.live.debounce.300ms="search" type="search" placeholder="Поиск по имени или ISO коду..." class="pl-9 pr-8" />
             <x-lucide-search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            @if (!empty($search))
+                <button wire:click="clearSearch" class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground z-10">
+                    <x-lucide-x class="w-4 h-4" />
+                </button>
+            @endif
         </div>
     </div>
 
@@ -160,7 +199,7 @@ new #[Layout('layouts.admin')] class extends Component
                                 $displayName = $loc->name;
                             }
                         @endphp
-                        {{ $displayName }}
+                        <span title="{{ $displayName }}">{{ $loc->name }}</span>
                     </x-ui.table-cell>
                     
                     <x-ui.table-cell>

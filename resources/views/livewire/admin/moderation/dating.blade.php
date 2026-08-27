@@ -25,9 +25,12 @@ new #[Layout('layouts.admin')] class extends Component
     #[Url(as: 'type', except: 'all')]
     public string $typeFilter = 'all'; 
 
-    public ?string $dateFrom = null;
+       public ?string $dateFrom = null;
     public ?string $dateTo = null;
     public int $perPage = 10;
+
+    /** @var string URL для кнопки "Назад" */
+    public string $backUrl = '';
 
     public function updatingSearch(): void { $this->resetPage(); }
     public function updatingDateFrom(): void { $this->resetPage(); }
@@ -36,8 +39,11 @@ new #[Layout('layouts.admin')] class extends Component
 
     public function mount(): void
     {
-        $saved = session('moderate_dating', []);
-        if (isset($saved['typeFilter'])) $this->typeFilter = $saved['typeFilter'];
+        // ФИКС: Запоминаем URL "Назад" только при первой загрузке
+        $previousUrl = url()->previous();
+        $this->backUrl = ($previousUrl && $previousUrl !== url()->current()) 
+            ? $previousUrl 
+            : route('admin.dashboard');
         
         // Если пришли с поиском, очищаем фильтр типа, чтобы не мешал
         if (!empty($this->search)) {
@@ -52,10 +58,9 @@ new #[Layout('layouts.admin')] class extends Component
         $this->resetPage();
     }
 
-    public function setTypeFilter(string $type): void
+       public function setTypeFilter(string $type): void
     {
         $this->typeFilter = $type;
-        session(['moderate_dating' => array_merge(session('moderate_dating', []), ['typeFilter' => $type])]);
         $this->resetPage();
     }
 
@@ -105,13 +110,13 @@ new #[Layout('layouts.admin')] class extends Component
     {
         return Cache::remember('dating_admin_stats', 60, function () {
             $baseSwipeQuery = Swipe::where(function ($q) {
-                $q->whereNull('user_id')->orWhereHas('user', fn($q2) => $q2->excludeStaff());
+                $q->whereNull('user_id')->orWhereHas('user', fn($q2) => $q2->withTrashed()->excludeStaff());
             });
                 
             $baseMatchQuery = UserMatch::where(function ($q) {
-                $q->whereNull('user1_id')->orWhereHas('user1', fn($q2) => $q2->excludeStaff());
+                $q->whereNull('user1_id')->orWhereHas('user1', fn($q2) => $q2->withTrashed()->excludeStaff());
             })->where(function ($q) {
-                $q->whereNull('user2_id')->orWhereHas('user2', fn($q2) => $q2->excludeStaff());
+                $q->whereNull('user2_id')->orWhereHas('user2', fn($q2) => $q2->withTrashed()->excludeStaff());
             });
 
             return [
@@ -130,27 +135,30 @@ new #[Layout('layouts.admin')] class extends Component
         return $this->viewMode === 'matches' ? $this->getMatches() : $this->getSwipes();
     }
 
-    private function getSwipes()
+       private function getSwipes()
     {
         $searchOperator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
         $avatarQuery = fn($q) => $q->select(['id', 'user_id', 'is_primary', 'status', 'path_thumb', 'path_medium', 'path_large', 'path_original'])->orderByDesc('is_primary')->limit(1);
 
         return Swipe::with([
-                'user' => fn($q) => $q->select('id', 'name', 'email', 'role', 'status', 'is_premium', 'premium_expires_at', 'last_seen')->with(['photos' => $avatarQuery]),
-                'targetUser' => fn($q) => $q->select('id', 'name', 'email', 'role', 'status', 'is_premium', 'premium_expires_at', 'last_seen')->with(['photos' => $avatarQuery]),
+                // ФИКС: Добавлено 'deleted_at' в select!
+                'user' => fn($q) => $q->withTrashed()->select('id', 'name', 'email', 'role', 'status', 'is_premium', 'premium_expires_at', 'last_seen', 'deleted_at')->with(['photos' => $avatarQuery]),
+                'targetUser' => fn($q) => $q->withTrashed()->select('id', 'name', 'email', 'role', 'status', 'is_premium', 'premium_expires_at', 'last_seen', 'deleted_at')->with(['photos' => $avatarQuery]),
             ])
             ->where(function ($q) {
-                $q->whereNull('user_id')->orWhereHas('user', fn($q2) => $q2->excludeStaff());
+                // ФИКС: Ищем даже удаленных юзеров
+                $q->whereNull('user_id')->orWhereHas('user', fn($q2) => $q2->withTrashed()->excludeStaff());
             })
             ->where(function ($q) {
-                $q->whereNull('target_user_id')->orWhereHas('targetUser', fn($q2) => $q2->excludeStaff());
+                $q->whereNull('target_user_id')->orWhereHas('targetUser', fn($q2) => $q2->withTrashed()->excludeStaff());
             })
             ->when($this->typeFilter !== 'all', fn($q) => $q->where('type', $this->typeFilter))
             ->when($this->search, function ($q) use ($searchOperator) {
                 $search = $this->search;
                 $q->where(function ($innerQ) use ($search, $searchOperator) {
                     $innerQ->whereRaw("CAST(id AS TEXT) {$searchOperator} ?", ["%{$search}%"])
-                    ->orWhereHas('user', fn($q2) => $q2->where('name', $searchOperator, "%{$search}%"))
+                    // ФИКС: Ищем по имени даже удаленных
+                    ->orWhereHas('user', fn($q2) => $q2->withTrashed()->where('name', $searchOperator, "%{$search}%"))
                     ->when(is_numeric($search), fn($q3) => $q3->orWhere('user_id', $search));
                 });
             })
@@ -160,27 +168,29 @@ new #[Layout('layouts.admin')] class extends Component
             ->paginate($this->perPage)->onEachSide(2);
     }
 
-    private function getMatches()
+        private function getMatches()
     {
         $searchOperator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
         $avatarQuery = fn($q) => $q->select(['id', 'user_id', 'is_primary', 'status', 'path_thumb', 'path_medium', 'path_large', 'path_original'])->orderByDesc('is_primary')->limit(1);
 
         return UserMatch::with([
-                'user1' => fn($q) => $q->select('id', 'name', 'email', 'role', 'status', 'is_premium', 'premium_expires_at', 'last_seen')->with(['photos' => $avatarQuery]),
-                'user2' => fn($q) => $q->select('id', 'name', 'email', 'role', 'status', 'is_premium', 'premium_expires_at', 'last_seen')->with(['photos' => $avatarQuery]),
+                // ФИКС: Добавлено 'deleted_at' в select!
+                'user1' => fn($q) => $q->withTrashed()->select('id', 'name', 'email', 'role', 'status', 'is_premium', 'premium_expires_at', 'last_seen', 'deleted_at')->with(['photos' => $avatarQuery]),
+                'user2' => fn($q) => $q->withTrashed()->select('id', 'name', 'email', 'role', 'status', 'is_premium', 'premium_expires_at', 'last_seen', 'deleted_at')->with(['photos' => $avatarQuery]),
             ])
             ->where(function ($q) {
-                $q->whereNull('user1_id')->orWhereHas('user1', fn($q2) => $q2->excludeStaff());
+                $q->whereNull('user1_id')->orWhereHas('user1', fn($q2) => $q2->withTrashed()->excludeStaff());
             })
             ->where(function ($q) {
-                $q->whereNull('user2_id')->orWhereHas('user2', fn($q2) => $q2->excludeStaff());
+                $q->whereNull('user2_id')->orWhereHas('user2', fn($q2) => $q2->withTrashed()->excludeStaff());
             })
             ->when($this->search, function ($q) use ($searchOperator) {
                 $search = $this->search;
                 $q->where(function ($innerQ) use ($search, $searchOperator) {
                     $innerQ->whereRaw("CAST(id AS TEXT) {$searchOperator} ?", ["%{$search}%"])
-                    ->orWhereHas('user1', fn($q2) => $q2->where('name', $searchOperator, "%{$search}%"))
-                    ->orWhereHas('user2', fn($q2) => $q2->where('name', $searchOperator, "%{$search}%"))
+                    // ФИКС: Ищем по имени даже удаленных
+                    ->orWhereHas('user1', fn($q2) => $q2->withTrashed()->where('name', $searchOperator, "%{$search}%"))
+                    ->orWhereHas('user2', fn($q2) => $q2->withTrashed()->where('name', $searchOperator, "%{$search}%"))
                     ->when(is_numeric($search), function ($q3) use ($search) {
                         $q3->orWhere('user1_id', $search)->orWhere('user2_id', $search);
                     });
@@ -198,14 +208,7 @@ new #[Layout('layouts.admin')] class extends Component
 <div class="flex flex-col gap-6">
     <!-- Шапка -->
     <div class="flex items-center justify-between flex-wrap gap-4">
-         <div class="flex items-center gap-4">
-            @php
-                $previousUrl = url()->previous();
-                $backUrl = ($previousUrl && $previousUrl !== url()->current()) 
-                    ? $previousUrl 
-                    : route('admin.dashboard');
-            @endphp
-
+         <div class="flex items-center gap-4">            
             <a href="{{ $backUrl }}" wire:navigate class="p-2 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors">
                 <x-lucide-arrow-left class="w-5 h-5" />
             </a>
@@ -292,6 +295,8 @@ new #[Layout('layouts.admin')] class extends Component
                 <x-ui.table-row 
                     wire:key="{{ $viewMode }}-{{ $item->id }}-{{ $item->status ?? 'trashed' }}"
                     class="{{ $isHighlighted ? 'bg-blue-500/10 ring-2 ring-blue-500/50' : '' }}"
+                    x-data="{ isHi: {{ $isHighlighted ? 'true' : 'false' }} }"
+                    x-init="isHi && setTimeout(() => { $el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 200)"
                 >
                     <x-ui.table-cell class="text-xs font-mono whitespace-nowrap {{ $isHighlighted ? 'text-blue-500 font-bold' : 'text-muted-foreground' }}">
                         #{{ $item->id }}
@@ -479,14 +484,3 @@ new #[Layout('layouts.admin')] class extends Component
     </div>
 </div>
 
-{{-- ФИКС: Авто-скролл к подсвеченной строке --}}
-<script>
-document.addEventListener('livewire:navigated', () => {
-    const highlightedRow = document.querySelector('.ring-blue-500\\/50');
-    if (highlightedRow) {
-        setTimeout(() => {
-            highlightedRow.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        }, 100);
-    }
-});
-</script>

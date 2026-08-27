@@ -16,35 +16,57 @@ use Livewire\WithPagination;
 new #[Layout('layouts.admin')] class extends Component 
 {
     use WithPagination;
-  #[Url(as: 'q', except: '')]
+
+    #[Url(as: 'q', except: '')]
     public string $search = '';
 
     #[Url(as: 'status', except: 'pending')]
     public string $statusFilter = 'pending';
     
     public int $perPage = 5; 
+
+    public string $backUrl = '';
     
-    // ФИКС: Если пришли с поиском (например, по ID коммента), включаем фильтр "Все"
     public function mount(): void
     {
-        if (!empty($this->search)) {
+        $previousUrl = url()->previous();
+        $this->backUrl = ($previousUrl && $previousUrl !== url()->current()) 
+            ? $previousUrl 
+            : route('admin.moderation.diary.index');
+
+        if (!empty($this->search) && is_numeric($this->search)) {
+            $comment = DiaryComment::find((int) $this->search);
+            if ($comment) {
+                $this->statusFilter = $comment->status;
+            } else {
+                $this->statusFilter = 'all';
+            }
+        } elseif (!empty($this->search)) {
             $this->statusFilter = 'all';
         }
     }
 
-    public function updatingSearch(): void { 
-        // Если админ начал вводить текст, переключаемся на "Все", чтобы найти
+    public function updatedSearch(): void 
+    { 
+        $this->resetPage(); 
+
+        if (is_numeric($this->search) && !empty($this->search)) {
+            $comment = DiaryComment::find((int) $this->search);
+            if ($comment) {
+                $this->statusFilter = $comment->status;
+                return;
+            }
+        }
+        
         if (!empty($this->search) && $this->statusFilter !== 'all') {
             $this->statusFilter = 'all';
         }
-        $this->resetPage(); 
     }
     
-    // ФИКС: При ручной смене фильтра очищаем поиск
     public function setStatusFilter(string $status): void
     {
         $this->statusFilter = $status;
-        $this->search = ''; // Очищаем поиск!
+        $this->search = '';
         $this->resetPage();
     }
 
@@ -53,6 +75,7 @@ new #[Layout('layouts.admin')] class extends Component
         $this->search = '';
         $this->resetPage();
     }
+
     public function approveComment(int $commentId, ModerateDiaryCommentAction $action): void
     {
         $comment = DiaryComment::with('parent')->find($commentId);
@@ -104,7 +127,7 @@ new #[Layout('layouts.admin')] class extends Component
         };
     }
 
-        #[Computed]
+    #[Computed]
     public function diaries()
     {
         $operator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
@@ -113,17 +136,16 @@ new #[Layout('layouts.admin')] class extends Component
         $diaries = Diary::query()
             ->whereHas('comments', fn($q) => $this->applyCommentFilters($q))
             ->with([
-                'user' => fn($q) => $q->withTrashed()->select('id', 'name', 'status', 'is_premium', 'premium_expires_at', 'is_verified', 'last_seen')->with(['photos' => $avatarQuery]), 
+                'user' => fn($q) => $q->withTrashed()->select('id', 'name', 'status', 'is_premium', 'premium_expires_at', 'is_verified', 'last_seen', 'deleted_at')->with(['photos' => $avatarQuery]), 
                 'comments' => function ($q) use ($avatarQuery) {
                     $this->applyCommentFilters($q);
                     $q->with([
-                        'user' => fn($uq) => $uq->withTrashed()->select('id', 'name', 'status', 'is_premium', 'premium_expires_at', 'is_verified', 'last_seen')->with(['photos' => $avatarQuery]),
+                        'user' => fn($uq) => $uq->withTrashed()->select('id', 'name', 'status', 'is_premium', 'premium_expires_at', 'is_verified', 'last_seen', 'deleted_at')->with(['photos' => $avatarQuery]),
                         'replies' => function ($q) use ($avatarQuery) {
-                            // ФИКС: Применяем фильтр статуса к ответам!
                             if ($this->statusFilter !== 'all') {
                                 $q->where('status', $this->statusFilter);
                             }
-                            $q->with(['parent:id,status', 'user' => fn($uq) => $uq->withTrashed()->select('id', 'name', 'status', 'is_premium', 'premium_expires_at', 'is_verified', 'last_seen')->with(['photos' => $avatarQuery])])->latest();
+                            $q->with(['parent:id,status', 'user' => fn($uq) => $uq->withTrashed()->select('id', 'name', 'status', 'is_premium', 'premium_expires_at', 'is_verified', 'last_seen', 'deleted_at')->with(['photos' => $avatarQuery])])->latest();
                         },
                     ])->latest();
                 },
@@ -131,15 +153,25 @@ new #[Layout('layouts.admin')] class extends Component
 
         if (!empty($this->search)) {
             $diaries->where(function ($q) use ($operator) {
-                $q->where('title', $operator, "%{$this->search}%")
-                  ->orWhereHas('user', fn($uq) => $uq->where('name', $operator, "%{$this->search}%"));
+                $search = $this->search;
                 
-                // ФИКС: Если ввели цифры, ищем пост по ID оставленного под ним комментария
-                if (is_numeric($this->search)) {
-                    $q->orWhereHas('comments', fn($cq) => $cq->where('id', (int)$this->search));
+                // 1. Ищем по названию дневника
+                $q->where('title', $operator, "%{$search}%")
+                  // 2. Ищем по имени автора дневника (вкл. удаленных)
+                  ->orWhereHas('user', fn($uq) => $uq->withTrashed()->where('name', $operator, "%{$search}%"))
+                  // 3. Ищем по имени автора комментария (вкл. удаленных)
+                  ->orWhereHas('comments.user', fn($cuq) => $cuq->withTrashed()->where('name', $operator, "%{$search}%"))
+                  // 4. Ищем по имени автора ответа (вкл. удаленных)
+                  ->orWhereHas('comments.replies.user', fn($ruq) => $ruq->withTrashed()->where('name', $operator, "%{$search}%"));
+                
+                // 5. Если ввели цифры, ищем по ID комментария или ответа
+                if (is_numeric($search)) {
+                    $q->orWhereHas('comments', fn($cq) => $cq->where('id', (int)$search))
+                      ->orWhereHas('comments.replies', fn($rq) => $rq->where('id', (int)$search));
                 }
             });
         }
+        
         return $diaries->latest()->paginate($this->perPage);
     }
 
@@ -181,14 +213,6 @@ new #[Layout('layouts.admin')] class extends Component
     <!-- Заголовок -->
     <div class="flex items-center justify-between flex-wrap gap-4">
         <div class="flex items-center gap-4">
-            <!-- ФИКС: Честная стрелка назад -->
-            @php
-                $previousUrl = url()->previous();
-                $backUrl = ($previousUrl && $previousUrl !== url()->current()) 
-                    ? $previousUrl 
-                    : route('admin.moderation.diary.index');
-            @endphp
-
             <a href="{{ $backUrl }}" wire:navigate class="p-2 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors">
                 <x-lucide-arrow-left class="w-5 h-5" />
             </a>
@@ -205,11 +229,11 @@ new #[Layout('layouts.admin')] class extends Component
     <!-- Фильтры -->
     <div class="flex flex-wrap items-center gap-3">
         <div class="flex flex-wrap gap-1.5">
-            <x-ui.button wire:click="setStatusFilter('pending')" variant="{{ $statusFilter === 'pending' ? 'default' : 'secondary' }}" size="sm">
-                Ожидают <x-ui.badge size="xs" variant="warning">{{ $this->counts['pending'] }}</x-ui.badge>
-            </x-ui.button>
             <x-ui.button wire:click="setStatusFilter('all')" variant="{{ $statusFilter === 'all' ? 'default' : 'secondary' }}" size="sm">
                 Все <x-ui.badge size="xs">{{ $this->counts['total'] }}</x-ui.badge>
+            </x-ui.button>
+            <x-ui.button wire:click="setStatusFilter('pending')" variant="{{ $statusFilter === 'pending' ? 'default' : 'secondary' }}" size="sm">
+                Ожидают <x-ui.badge size="xs" variant="warning">{{ $this->counts['pending'] }}</x-ui.badge>
             </x-ui.button>
             <x-ui.button wire:click="setStatusFilter('approved')" variant="{{ $statusFilter === 'approved' ? 'default' : 'secondary' }}" size="sm">
                 Одобрены <x-ui.badge size="xs" variant="success">{{ $this->counts['approved'] }}</x-ui.badge>
@@ -225,7 +249,7 @@ new #[Layout('layouts.admin')] class extends Component
         <div class="flex items-center gap-2 ml-auto">
             <div class="relative w-64">
                 <x-lucide-search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground z-10" />
-                <x-ui.input wire:model.live.debounce.300ms="search" type="search" placeholder="Поиск по посту или автору..." class="pl-9 pr-8" />
+                <x-ui.input wire:model.live.debounce.300ms="search" type="search" placeholder="Поиск по тексту или id..." class="pl-9 pr-8" />
                 @if (!empty($search))
                     <button wire:click="clearSearch" class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground z-10">
                         <x-lucide-x class="w-4 h-4" />
@@ -251,15 +275,20 @@ new #[Layout('layouts.admin')] class extends Component
                         <div class="flex items-center gap-3">
                             <x-avatar src="{{ $diary->user?->avatar_url }}" name="{{ $diary->user?->name }}" size="sm" userId="{{ $diary->user?->id }}" showStatus="true" :isOnline="$diary->user?->is_online" />
                             <div>
-                                <a href="{{ route('admin.users.show', $diary->user->id) }}" wire:navigate class="font-semibold text-foreground hover:text-primary flex items-center gap-2">
-                                    <span>
-                                        <x-user-status-sign :user="$diary->user" />
-                                        {{ $diary->user?->name }}
-                                    </span>
-                                    @if($diary->user?->has_active_premium)
-                                        <x-lucide-crown class="w-4 h-4 text-yellow-500" />
-                                    @endif
-                                </a>
+                                {{-- ФИКС: Защита от 500 ошибки, если автор дневника удален --}}
+                                @if($diary->user)
+                                    <a href="{{ route('admin.users.show', $diary->user->id) }}" wire:navigate class="font-semibold text-foreground hover:text-primary flex items-center gap-2">
+                                        <span>
+                                            <x-user-status-sign :user="$diary->user" />
+                                            {{ $diary->user->name }}
+                                        </span>
+                                        @if($diary->user->has_active_premium)
+                                            <x-lucide-crown class="w-4 h-4 text-yellow-500" />
+                                        @endif
+                                    </a>
+                                @else
+                                    <span class="font-semibold text-muted-foreground flex items-center gap-2">Удален</span>
+                                @endif
                                 <div class="text-xs text-muted-foreground mt-1">
                                     Запись: <a href="{{ route('admin.moderation.diary.moderate', $diary->id) }}" wire:navigate class="font-medium text-foreground/80 hover:text-primary transition-colors">{{ $diary->title }}</a>
                                 </div>
@@ -272,7 +301,6 @@ new #[Layout('layouts.admin')] class extends Component
                             @php 
                                 $commentDimmed = $this->statusFilter !== 'all' && $comment->status !== $this->statusFilter; 
                                 $rejectEnum = $comment->reject_reason ? \App\Enums\CommentRejectReason::tryFrom($comment->reject_reason) : null;
-                                // ФИКС: Проверяем, является ли этот коммент искомым (по ID)
                                 $isHighlighted = is_numeric($this->search) && $comment->id == (int)$this->search;      
                             @endphp
 
@@ -285,7 +313,6 @@ new #[Layout('layouts.admin')] class extends Component
 
                                 <div class="flex-1 min-w-0">
                                     <div class="flex items-center gap-2 flex-wrap">
-                                        <!-- ФИКС: Вывод ID коммента -->
                                         <span class="text-[10px] text-muted-foreground font-mono py-0.5 px-1 rounded-sm bg-muted">#{{ $comment->id }}</span>
                                         
                                         @if($comment->user)
@@ -345,7 +372,6 @@ new #[Layout('layouts.admin')] class extends Component
                                         @php 
                                             $replyDimmed = $this->statusFilter !== 'all' && $reply->status !== $this->statusFilter;
                                             $replyRejectEnum = $reply->reject_reason ? \App\Enums\CommentRejectReason::tryFrom($reply->reject_reason) : null;
-                                            // ФИКС: Проверяем, является ли этот ответ искомым
                                             $isReplyHighlighted = is_numeric($this->search) && $reply->id == (int)$this->search;
                                         @endphp
                                         <div 
@@ -357,7 +383,6 @@ new #[Layout('layouts.admin')] class extends Component
 
                                             <div class="flex-1 min-w-0">
                                                 <div class="flex items-center gap-2 flex-wrap">
-                                                    <!-- ФИКС: Вывод ID ответа -->
                                                     <span class="text-[10px] text-muted-foreground font-mono">#{{ $reply->id }}</span>
                                                     
                                                     @if($reply->user)

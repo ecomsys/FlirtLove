@@ -5,7 +5,7 @@ use App\Models\Page;
 use Illuminate\Support\Facades\Log;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Layout;
-use Livewire\Attributes\Session;
+use Livewire\Attributes\Url;
 use Livewire\Volt\Component;
 use Livewire\WithPagination;
 
@@ -13,17 +13,19 @@ new #[Layout('layouts.admin')] class extends Component
 {
     use WithPagination;
 
-    /** @var string Поисковый запрос (сохраняется в сессию) */
-    #[Session] 
+    /** @var string Поисковый запрос */
+    #[Url(as: 'q', except: '')]
     public string $search = '';
     
-    /** @var string Текущий фильтр статуса (сохраняется в сессию) */
-    #[Session] 
+    /** @var string Текущий фильтр статуса */
+    #[Url(as: 'status', except: 'all')]
     public string $statusFilter = 'all';
     
-    /** @var int Количество элементов на странице (сохраняется в сессию) */
-    #[Session] 
+    /** @var int Количество элементов на странице */
     public int $perPage = 15;
+
+    /** @var string URL для кнопки "Назад" */
+    public string $backUrl = '';
     
     /** @var array Массив выбранных ID страниц для массовых действий */
     public array $selected = [];
@@ -50,6 +52,7 @@ new #[Layout('layouts.admin')] class extends Component
             
             Log::info("Админ удалил страницу", ['page_id' => $id, 'admin_id' => auth()->id()]);
             $this->dispatch('show-toast', type: 'success', message: 'Страница удалена');
+            $this->clearComputedCache();
         } catch (\Exception $e) {
             Log::error("Ошибка при удалении страницы: " . $e->getMessage(), ['page_id' => $id]);
             $this->dispatch('show-toast', type: 'error', message: 'Ошибка сервера при удалении!');
@@ -83,6 +86,7 @@ new #[Layout('layouts.admin')] class extends Component
                 type: 'success', 
                 message: !$oldStatus ? 'Страница опубликована' : 'Страница снята с публикации'
             );
+            $this->clearComputedCache();
         } catch (\Exception $e) {
             Log::error("Ошибка при смене статуса страницы: " . $e->getMessage(), ['page_id' => $id]);
             $this->dispatch('show-toast', type: 'error', message: 'Ошибка сервера при смене статуса!');
@@ -115,13 +119,24 @@ new #[Layout('layouts.admin')] class extends Component
             ]);
 
             $this->dispatch('show-toast', type: 'success', message: 'Страница продублирована');
+            $this->clearComputedCache();
         } catch (\Exception $e) {
             Log::error("Ошибка при дублировании страницы: " . $e->getMessage(), ['page_id' => $id]);
             $this->dispatch('show-toast', type: 'error', message: 'Ошибка сервера при дублировании!');
         }
     }
 
-    /**
+  
+       public function mount(): void
+    {
+        // ФИКС: Запоминаем URL "Назад" только при первой загрузке
+        $previousUrl = url()->previous();
+        $this->backUrl = ($previousUrl && $previousUrl !== url()->current()) 
+            ? $previousUrl 
+            : route('admin.dashboard');
+    }
+
+      /**
      * Установка фильтра статуса и сброс пагинации.
      *
      * @param string $status Статус фильтрации (all, active, draft)
@@ -130,17 +145,28 @@ new #[Layout('layouts.admin')] class extends Component
     public function setStatusFilter(string $status): void
     {
         $this->statusFilter = $status;
+        $this->search = ''; // ФИКС: Очищаем поиск при смене вкладки
         $this->resetPage();
+        $this->clearComputedCache();
     }
 
-    /**
-     * Сброс пагинации при обновлении поискового запроса.
-     *
-     * @return void
-     */
     public function updatedSearch(): void
     {
         $this->resetPage();
+        $this->clearComputedCache();
+    }
+
+    public function clearSearch(): void
+    {
+        $this->search = '';
+        $this->resetPage();
+        $this->clearComputedCache();
+    }
+
+    private function clearComputedCache(): void
+    {
+        unset($this->pages);
+        unset($this->counts);
     }
 
     /**
@@ -211,6 +237,7 @@ new #[Layout('layouts.admin')] class extends Component
             }
 
             $this->dispatch('show-toast', type: 'success', message: $message);
+            $this->clearComputedCache();
         } catch (\Exception $e) {
             Log::error("Ошибка при массовом действии со страницами: " . $e->getMessage(), [
                 'selected_ids' => $this->selected,
@@ -234,10 +261,17 @@ new #[Layout('layouts.admin')] class extends Component
     {
         $perPage = min(max($this->perPage, 1), 100);
 
+         $searchOperator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
+
         return Page::query()
-            ->when($this->search, function ($query) {
-                $query->where('title', 'like', "%{$this->search}%")
-                      ->orWhere('slug', 'like', "%{$this->search}%");
+            ->when($this->search, function ($query) use ($searchOperator) {
+                $query->where(function ($q) use ($searchOperator) {
+                    $q->where('title', $searchOperator, "%{$this->search}%")
+                      ->orWhere('slug', $searchOperator, "%{$this->search}%");
+                    if (is_numeric($this->search)) {
+                        $q->orWhere('id', (int) $this->search);
+                    }
+                });
             })
             ->when($this->statusFilter === 'active', fn($q) => $q->where('is_active', true))
             ->when($this->statusFilter === 'draft', fn($q) => $q->where('is_active', false))
@@ -275,10 +309,15 @@ new #[Layout('layouts.admin')] class extends Component
 <div class="space-y-6 pb-6">
     <!-- Заголовок -->
     <div class="flex items-center justify-between flex-wrap gap-4">
-        <h1 class="text-2xl font-semibold flex items-center gap-2">
-            <x-lucide-file-text class="w-6 h-6" />
-            Страницы
-        </h1>
+        <div class="flex items-center gap-4">
+            <a href="{{ $backUrl }}" wire:navigate class="p-2 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors">
+                <x-lucide-arrow-left class="w-5 h-5" />
+            </a>
+            <h1 class="text-2xl font-semibold flex items-center gap-2">
+                <x-lucide-file-text class="w-6 h-6" />
+                Страницы
+            </h1>
+        </div>
 
         <a href="{{ route('admin.system.pages.create') }}" wire:navigate class="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground shadow hover:bg-primary/90 h-9 px-4 py-2">
             <x-lucide-plus class="w-4 h-4" />
@@ -301,10 +340,10 @@ new #[Layout('layouts.admin')] class extends Component
         </div>
 
         <div class="relative w-64">
-            <x-ui.input wire:model.live.debounce.300ms="search" type="search" placeholder="Поиск по названию или слагу..." class="pl-9 pr-8" />
+            <x-ui.input wire:key="pages-search-input" wire:model.live.debounce.300ms="search" type="search" placeholder="Поиск по названию или id..." class="pl-9 pr-8" />
             <x-lucide-search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             @if (!empty($search))
-                <button wire:click="$set('search', '')" class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+                <button wire:click="clearSearch" class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground z-10">
                     <x-lucide-x class="w-4 h-4" />
                 </button>
             @endif
@@ -364,12 +403,20 @@ new #[Layout('layouts.admin')] class extends Component
 
         <x-ui.table-body>
             @forelse ($this->pages as $page)
-                <x-ui.table-row wire:key="page-{{ $page->id }}" class="{{ in_array((string)$page->id, $this->selected) ? 'bg-muted/30' : '' }}">
+                @php 
+                    $isHighlighted = is_numeric($this->search) && $page->id == (int)$this->search; 
+                @endphp
+                <x-ui.table-row 
+                    wire:key="page-{{ $page->id }}" 
+                    class="{{ in_array((string)$page->id, $this->selected) ? 'bg-muted/30' : '' }} {{ $isHighlighted ? 'bg-blue-500/10 ring-2 ring-blue-500/50' : '' }}"
+                    x-data="{ isHi: {{ $isHighlighted ? 'true' : 'false' }} }"
+                    x-init="isHi && setTimeout(() => { $el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 200)"
+                >
                     <x-ui.table-cell>
                         <x-checkbox wire:model.live="selected" value="{{ $page->id }}" />
                     </x-ui.table-cell>
-                    <x-ui.table-cell class="text-muted-foreground text-xs">
-                        {{ $page->id }}
+                    <x-ui.table-cell class="text-xs font-mono whitespace-nowrap {{ $isHighlighted ? 'text-blue-500 font-bold' : 'text-muted-foreground' }}">
+                        #{{ $page->id }}
                     </x-ui.table-cell>
                    <x-ui.table-cell>
                     <div class="max-w-[12rem] md:max-w-[22rem]">

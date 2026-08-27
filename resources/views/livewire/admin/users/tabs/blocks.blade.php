@@ -61,8 +61,7 @@ new class extends Component
             $block->delete();
 
             // Записываем в журнал админа
-            AdminLog::record('user_block.delete', null, auth()->user(), $logData, ['deleted' => true]);
-
+            AdminLog::record('user_block.delete', $this->user, auth()->user(), $logData, ['deleted' => true]);
             $this->dispatch('show-toast', type: 'success', message: 'Блокировка снята администратором.');
             $this->refreshUser();
         }

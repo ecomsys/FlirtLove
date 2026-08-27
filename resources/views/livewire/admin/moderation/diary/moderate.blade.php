@@ -18,16 +18,24 @@ new #[Layout('layouts.admin')] class extends Component
     public ?string $rejectReason = null;
     public ?string $rubricId = null;
     public bool $isCommentsEnabled;
+     /** @var string URL для кнопки "Назад" */
     public string $backUrl = '';
 
+    /**
+     * Инициализация компонента.
+     * Загружаем дневник, его связи и запоминаем URL "Назад".
+     */
     public function mount(Diary $diary): void
     {
         $avatarQuery = fn($q) => $q->select(['id', 'user_id', 'is_primary', 'status', 'path_thumb', 'path_medium', 'path_large', 'path_original'])->orderByDesc('is_primary')->limit(1);
-        $diary->load(['user.photos' => $avatarQuery, 'rubric']);
+        // ФИКС: Грузим юзера (и его аватарки) даже если он мягко-удален (withTrashed)
+        $diary->load(['user' => fn($q) => $q->withTrashed()->with(['photos' => $avatarQuery]), 'rubric']);
 
-        $this->backUrl = url()->previous() && url()->previous() !== url()->current() 
-            ? url()->previous() 
-            : route('admin.moderation.diary.index');
+        // ФИКС: Запоминаем URL "Назад" только при первой загрузке страницы
+        $previousUrl = url()->previous();
+        $this->backUrl = ($previousUrl && $previousUrl !== url()->current()) 
+            ? $previousUrl 
+            : route('admin.dashboard');
 
         $this->diary = $diary;
         $this->status = $diary->status;
@@ -35,7 +43,6 @@ new #[Layout('layouts.admin')] class extends Component
         $this->rubricId = $diary->rubric_id ? (string) $diary->rubric_id : '';
         $this->isCommentsEnabled = $diary->is_comments_enabled;
     }   
-
     #[Computed]
     public function availableRubrics()
     {
@@ -62,10 +69,11 @@ new #[Layout('layouts.admin')] class extends Component
     }
 
     // Хелпер: Перезагрузка связей чтобы UI не слетал
-    protected function reloadRelations(): void
+      protected function reloadRelations(): void
     {
         $avatarQuery = fn($q) => $q->select(['id', 'user_id', 'is_primary', 'status', 'path_thumb', 'path_medium', 'path_large', 'path_original'])->orderByDesc('is_primary')->limit(1);
-        $this->diary->load(['user.photos' => $avatarQuery, 'rubric']);
+        // ФИКС: Грузим юзера (и его аватарки) даже если он мягко-удален (withTrashed)
+        $this->diary->load(['user' => fn($q) => $q->withTrashed()->with(['photos' => $avatarQuery]), 'rubric']);
     }
 
     // Сохранение ТОЛЬКО настроек (Рубрика и Комменты)
@@ -193,21 +201,37 @@ new #[Layout('layouts.admin')] class extends Component
                 
                 <!-- Карточка автора -->
                 <div class="flex items-center gap-3 p-3 bg-muted/30 rounded-md border border-border">
-                    <x-avatar src="{{ $diary->user?->avatar_url }}" name="{{ $diary->user?->name }}" size="md" userId="{{ $diary->user?->id }}" showStatus="true" :isOnline="$diary->user?->is_online" />
-                    <div class="flex-1 min-w-0">
-                        <a href="{{ route('admin.users.show', $diary->user_id) }}" wire:navigate class="text-sm font-medium hover:text-primary flex items-center gap-1">
-                            <x-user-status-sign :user="$diary->user" />
-                            <span class="truncate">{{ $diary->user?->name ?? 'Удален' }}</span>
-                            @if($diary->user?->has_active_premium) <x-lucide-crown class="w-3 h-3 text-yellow-500 shrink-0" /> @endif
-                        </a>
-                        <div class="text-xs text-muted-foreground flex items-center gap-2 mt-1">
-                            <span class="flex items-center gap-1" title="Просмотры"><x-lucide-eye class="w-3 h-3" /> {{ $diary->views_count }}</span>
-                            <span>•</span>
-                            <span class="flex items-center gap-1" title="Комментарии"><x-lucide-message-circle class="w-3 h-3" /> {{ $diary->comments_count }}</span>
-                            <span>•</span>
-                            <span>{{ $diary->created_at->format('d.m.y') }}</span>
+                    @if($diary->user)
+                        <x-avatar src="{{ $diary->user->avatar_url }}" name="{{ $diary->user->name }}" size="md" userId="{{ $diary->user->id }}" showStatus="true" :isOnline="$diary->user->is_online" />
+                        <div class="flex-1 min-w-0">
+                            <a href="{{ route('admin.users.show', $diary->user_id) }}" wire:navigate class="text-sm font-medium hover:text-primary flex items-center gap-1">
+                                <x-user-status-sign :user="$diary->user" />
+                                <span class="truncate">{{ $diary->user->name }}</span>
+                                @if($diary->user->has_active_premium) <x-lucide-crown class="w-3 h-3 text-yellow-500 shrink-0" /> @endif
+                            </a>
+                            <div class="text-xs text-muted-foreground flex items-center gap-2 mt-1">
+                                <span class="flex items-center gap-1" title="Просмотры"><x-lucide-eye class="w-3 h-3" /> {{ $diary->views_count }}</span>
+                                <span>•</span>
+                                <span class="flex items-center gap-1" title="Комментарии"><x-lucide-message-circle class="w-3 h-3" /> {{ $diary->comments_count }}</span>
+                                <span>•</span>
+                                <span>{{ $diary->created_at->format('d.m.y') }}</span>
+                            </div>
                         </div>
-                    </div>
+                    @else
+                        <x-avatar name="Deleted" size="md" />
+                        <div class="flex-1 min-w-0">
+                            <span class="text-sm font-medium text-muted-foreground flex items-center gap-1">
+                                <span class="truncate">Пользователь удален</span>
+                            </span>
+                            <div class="text-xs text-muted-foreground flex items-center gap-2 mt-1">
+                                <span class="flex items-center gap-1" title="Просмотры"><x-lucide-eye class="w-3 h-3" /> {{ $diary->views_count }}</span>
+                                <span>•</span>
+                                <span class="flex items-center gap-1" title="Комментарии"><x-lucide-message-circle class="w-3 h-3" /> {{ $diary->comments_count }}</span>
+                                <span>•</span>
+                                <span>{{ $diary->created_at->format('d.m.y') }}</span>
+                            </div>
+                        </div>
+                    @endif
                 </div>
 
                 <!-- Блок настроек (Рубрика / Комменты) -->

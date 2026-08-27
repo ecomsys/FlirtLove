@@ -16,37 +16,103 @@ new #[Layout('layouts.admin')] class extends Component
 {
     use WithPagination;
 
+    /** @var string Текущая вкладка фильтра статуса (pending, approved, rejected, quarantine) */
     #[Url(as: 'status', except: 'pending')]
     public string $status = 'pending';
 
+    /** @var int Количество юзеров на странице во вкладке "Ожидают" */
     public int $perPage = 5; 
+    
+    /** @var int Количество фото на странице во вкладках истории */
     public int $perPhotos = 24; 
     
+    /** @var string Строка поиска (по имени или ID фото) */
     #[Url(as: 'q', except: '')]
     public string $search = '';
 
+    /** @var bool Флаг видимости модалки отклонения */
     public bool $isRejectModalVisible = false;
+    
+    /** @var int|null ID фото, которое отклоняем в модалке */
     public ?int $rejectingPhotoId = null;
+    
+    /** @var string Причина отклонения (значение из Enum) */
     public string $rejectReason = '';
 
+    /** @var string URL для кнопки "Назад" (фикс потери истории при AJAX-запросах) */
+    public string $backUrl = '';
+
+    /**
+     * Инициализация компонента при первой загрузке.
+     * Запоминает URL для кнопки "Назад" и обрабатывает прямой переход по ссылке с поиском.
+     */
     public function mount(): void
     {
+        // ФИКС: Запоминаем, откуда мы пришли, ПРИ ПЕРВОЙ ЗАГРУЗКЕ страницы
+        $previousUrl = url()->previous();
+        $this->backUrl = ($previousUrl && $previousUrl !== url()->current()) 
+            ? $previousUrl 
+            : route('admin.dashboard');
+
         if (request()->has('q')) {
-            $this->status = 'approved';
-            return;
+            $searchTerm = (string) request()->input('q');
+            // Умный поиск: если ищут по ID фото, автоматически переключаем вкладку на её реальный статус
+            if (is_numeric($searchTerm)) {
+                $photo = Photo::withTrashed()->find((int) $searchTerm);
+                if ($photo) {
+                    $this->status = $photo->trashed() ? 'quarantine' : $photo->status;
+                    return;
+                }
+            }
+            $this->status = 'approved'; // Дефолтная вкладка для текстового поиска
+        } else {
+            $this->status = session('moderate_photos.status', 'pending');
         }
-        $this->status = session('moderate_photos.status', 'pending');
     }
 
-    public function updatedStatus(): void { $this->resetPage(); }
-    public function updatedSearch(): void { $this->resetPage(); }
+    /**
+     * Хук Livewire: срабатывает при изменении строки поиска.
+     * Сбрасывает пагинацию и подсвечивает нужную вкладку, если введен ID фото.
+     */
+    public function updatedSearch(): void 
+    { 
+        $this->resetPage(); 
 
+        // Умная подсветка вкладки при ручном вводе ID фото
+        if (is_numeric($this->search) && !empty($this->search)) {
+            $photo = Photo::withTrashed()->find((int) $this->search);
+            if ($photo) {
+                $newStatus = $photo->trashed() ? 'quarantine' : $photo->status;
+                if ($this->status !== $newStatus) {
+                    $this->status = $newStatus;
+                }
+            }
+        }
+    }
+
+    /**
+     * Хук Livewire: срабатывает при ручной смене вкладки.
+     * Сбрасывает пагинацию и сохраняет выбор в сессию.
+     */
+    public function updatedStatus(): void 
+    { 
+        $this->resetPage(); 
+        // ФИКС: Сохраняем статус в сессию, чтобы при возврате через "Назад" браузера вкладка не сбрасывалась
+        session(['moderate_photos.status' => $this->status]);
+    }
+
+    /**
+     * Очистка строки поиска и сброс пагинации.
+     */
     public function clearSearch(): void
     {
         $this->search = '';
         $this->resetPage();
     }
 
+    /**
+     * Программная установка вкладки (по клику на кнопки фильтров).
+     */
     public function setStatus(string $status): void
     {
         $this->status = $status;
@@ -55,14 +121,21 @@ new #[Layout('layouts.admin')] class extends Component
         $this->resetPage();
     }
 
+    /**
+     * Одобрить фото. Делегирует логику в Action-класс.
+     */
     public function approve(int $photoId, ModeratePhotoAction $action): void
     {
         $photo = Photo::find($photoId);
         if (!$photo) return;
+        
         $action->approve($photo, auth()->user());
         $this->dispatch('show-toast', type: 'success', message: 'Фото одобрено. Запущена обработка...');
     }
 
+    /**
+     * Открыть модалку выбора причины отклонения.
+     */
     public function openRejectModal(int $photoId): void
     {
         $this->rejectingPhotoId = $photoId;
@@ -70,12 +143,18 @@ new #[Layout('layouts.admin')] class extends Component
         $this->isRejectModalVisible = true;
     }
 
+    /**
+     * Закрыть модалку отклонения и очистить состояние.
+     */
     public function closeRejectModal(): void
     {
         $this->isRejectModalVisible = false;
         $this->rejectingPhotoId = null;
     }
 
+    /**
+     * Подтвердить отклонение фото (вызывается из модалки).
+     */
     public function rejectPhoto(ModeratePhotoAction $action): void
     {
         $this->validate([
@@ -94,14 +173,21 @@ new #[Layout('layouts.admin')] class extends Component
         $this->dispatch('show-toast', type: 'error', message: 'Фото отклонено');
     }
 
+    /**
+     * Установить фото как главное (аватарку юзера).
+     */
     public function setPrimary(int $photoId, ModeratePhotoAction $action): void
     {
         $photo = Photo::find($photoId);
         if (!$photo) return;
+        
         $action->setPrimary($photo, auth()->user());
         $this->dispatch('show-toast', type: 'success', message: 'Установлено как аватар');
     }
 
+    /**
+     * Мягкое удаление (перемещение в карантин).
+     */
     public function softDelete(int $photoId): void
     {
         $photo = Photo::find($photoId);
@@ -112,6 +198,9 @@ new #[Layout('layouts.admin')] class extends Component
         $this->dispatch('show-toast', type: 'warning', message: 'Фото перемещено в карантин');
     }
 
+    /**
+     * Восстановление из карантина (возвращение в очередь на модерацию).
+     */
     public function restorePhoto(int $photoId): void
     {
         $photo = Photo::withTrashed()->find($photoId);
@@ -131,6 +220,9 @@ new #[Layout('layouts.admin')] class extends Component
         $this->dispatch('show-toast', type: 'success', message: 'Фото восстановлено в очередь');
     }
 
+    /**
+     * Полное удаление фото из базы и хранилища.
+     */
     public function destroy(int $photoId, ModeratePhotoAction $action): void
     {
         $photo = Photo::withTrashed()->find($photoId);
@@ -140,30 +232,41 @@ new #[Layout('layouts.admin')] class extends Component
         $this->dispatch('show-toast', type: 'success', message: 'Фото навсегда удалено.');
     }
 
+    /**
+     * Массовое одобрение всех фото конкретного юзера.
+     */
     public function approveAllForUser(int $userId, ModeratePhotoAction $action): void
     {
         $user = User::find($userId);
         if (!$user) return;
+        
         $count = $action->approveAllForUser($user, auth()->user());
         $this->dispatch('show-toast', type: $count > 0 ? 'success' : 'info', message: $count > 0 ? "Одобрено {$count} фото" : 'Нет фото для одобрения.');
     }
 
+    /**
+     * Массовое отклонение всех фото конкретного юзера.
+     */
     public function rejectAllForUser(int $userId, ModeratePhotoAction $action): void
     {
         $user = User::find($userId);
         if (!$user) return;
+        
         $count = $action->rejectAllForUser($user, auth()->user());
         $this->dispatch('show-toast', type: $count > 0 ? 'error' : 'info', message: $count > 0 ? "Отклонено {$count} фото" : 'Нет фото для отклонения.');
     }
 
-    public function with(): array
+    /**
+     * Подготовка данных для представления (жадная загрузка, фильтрация, пагинация).
+     */
+        public function with(): array
     {
         $users = collect();
         $photos = collect();
 
-        // Обновленный подсчет счетчиков (добавлен quarantine)
+        // Подсчет счетчиков для кнопок фильтров (включая карантин)
         $counts = Photo::withTrashed()
-            ->whereHas('user', fn($q) => $q->excludeStaff())
+            ->whereHas('user', fn($q) => $q->withTrashed()->excludeStaff())
             ->selectRaw("
                 COUNT(*) as total,
                 SUM(CASE WHEN status = 'pending' AND deleted_at IS NULL THEN 1 ELSE 0 END) as pending,
@@ -174,50 +277,55 @@ new #[Layout('layouts.admin')] class extends Component
 
         $isSearching = !empty($this->search);
 
+        // Если вкладка "Ожидают" и нет активного поиска — выводим карточки юзеров
         if ($this->status === 'pending' && !$isSearching) {
-            $users = User::withWhereHas('photos', function ($query) {
-                $query->where('status', 'pending');
-            })
-            ->excludeStaff()
-            ->withCount(['photos as pending_photos_count' => fn($q) => $q->where('status', 'pending')])
-             // Виртуальное поле для сортировки:
-            ->withMax(['photos as latest_pending_photo' => fn($q) => $q->where('status', 'pending')], 'created_at')
-            ->with(['photos' => function ($query) {
-                $query->whereIn('status', ['pending', 'approved'])
-                      ->orderBy('is_primary', 'desc')
-                      ->oldest()
-                      ->with('album:id,name'); 
-            }])
-            // Сортируем по виртуальному полю (быстрый JOIN под капотом)
-            ->orderByDesc('latest_pending_photo')
-            ->paginate($this->perPage);
-        } else {
+            // ФИКС: withTrashed() чтобы видеть фото от удаленных юзеров
+            $users = User::withTrashed()
+                ->withWhereHas('photos', function ($query) {
+                    $query->where('status', 'pending');
+                })
+                ->excludeStaff()
+                ->withCount(['photos as pending_photos_count' => fn($q) => $q->where('status', 'pending')])
+                ->withMax(['photos as latest_pending_photo' => fn($q) => $q->where('status', 'pending')], 'created_at')
+                ->with(['photos' => function ($query) {
+                    $query->whereIn('status', ['pending', 'approved'])
+                          ->orderBy('is_primary', 'desc')
+                          ->oldest()
+                          ->with('album:id,name'); 
+                }])
+                ->orderByDesc('latest_pending_photo')
+                ->paginate($this->perPage);
+        } 
+        // Иначе выводим сетку фото (для истории или при поиске)
+        else {
             $query = Photo::withTrashed()->with([
+                // ФИКС: withTrashed() для загрузки данных юзера (и его аватарки)
                 'user' => function ($q) {
-                    $q->select('id', 'name', 'status', 'is_premium', 'premium_expires_at', 'is_verified', 'last_seen')
+                    $q->withTrashed()
+                      ->select('id', 'name', 'status', 'is_premium', 'premium_expires_at', 'is_verified', 'last_seen', 'deleted_at')
                       ->with(['photos' => fn($sq) => $sq->select('id', 'user_id', 'status', 'is_primary', 'path_thumb', 'path_medium', 'path_large', 'path_original')->orderByDesc('is_primary')->limit(1)]);
                 }, 
                 'album:id,name'
             ])
-            ->whereHas('user', fn($q) => $q->excludeStaff());
-
-            if (!$isSearching) {
-                if ($this->status === 'quarantine') {
-                    // ФИКС: Карантин - это всё, где есть deleted_at
-                    $query->whereNotNull('deleted_at');
-                } else {
-                    // ФИКС: Для остальных вкладок ищем строго статус и отсутствие deleted_at
-                    $query->where('status', $this->status)->whereNull('deleted_at');
-                }
+            // ФИКС: withTrashed() в проверке существования юзера
+            ->whereHas('user', fn($q) => $q->withTrashed()->excludeStaff());
+            
+            // ФИКС: Фильтр по статусу применяется ВСЕГДА, даже при поиске
+            if ($this->status === 'quarantine') {
+                $query->whereNotNull('deleted_at');
+            } else {
+                $query->where('status', $this->status)->whereNull('deleted_at');
             }
 
+            // Применяем поиск
             if ($isSearching) {
                 $operator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
                 $query->where(function ($q) use ($operator) {
                     if (is_numeric($this->search)) {
                         $q->where('id', $this->search)->orWhere('user_id', $this->search);
                     } else {
-                        $q->whereHas('user', fn($sub) => $sub->where('name', $operator, "%{$this->search}%"));
+                        // ФИКС: withTrashed() для поиска по имени удаленного юзера
+                        $q->whereHas('user', fn($sub) => $sub->withTrashed()->where('name', $operator, "%{$this->search}%"));
                     }
                 });
             }
@@ -240,14 +348,7 @@ new #[Layout('layouts.admin')] class extends Component
 
 <div class="space-y-6">
     <!-- Заголовок -->
-    <div class="flex items-center gap-4">
-        @php
-            $previousUrl = url()->previous();
-            $backUrl = ($previousUrl && $previousUrl !== url()->current()) 
-                ? $previousUrl 
-                : route('admin.dashboard');
-        @endphp
-
+    <div class="flex items-center gap-4">        
         <a href="{{ $backUrl }}" wire:navigate class="p-2 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors">
             <x-lucide-arrow-left class="w-5 h-5" />
         </a>
@@ -276,22 +377,20 @@ new #[Layout('layouts.admin')] class extends Component
             </x-ui.button>
         </div>
 
-        @if ($status != 'pending')
-            <div class="flex items-center gap-5 ml-auto">
+        <div class="flex items-center gap-5 ml-auto">
+            @if (!empty($search))
+                <span class="text-xs text-muted-foreground whitespace-nowrap">Найдено: {{ $photos->total() }}</span>
+            @endif
+            <div class="relative w-64">
+                <x-lucide-search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground z-10" />
+                <x-ui.input wire:model.live.debounce.300ms="search" type="text" placeholder="Поиск по имени или ID..." class="pl-9 pr-8" />
                 @if (!empty($search))
-                    <span class="text-xs text-muted-foreground whitespace-nowrap">Найдено: {{ $photos->total() }}</span>
+                    <button wire:click="clearSearch" class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+                        <x-lucide-x class="w-4 h-4" />
+                    </button>
                 @endif
-                <div class="relative w-64">
-                    <x-lucide-search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground z-10" />
-                    <x-ui.input wire:model.live.debounce.300ms="search" type="text" placeholder="Поиск по имени или ID..." class="pl-9 pr-8" />
-                    @if (!empty($search))
-                        <button wire:click="clearSearch" class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
-                            <x-lucide-x class="w-4 h-4" />
-                        </button>
-                    @endif
-                </div>
             </div>
-        @endif
+        </div>
     </div>
 
     <!-- КОНТЕНТ ОЧЕРЕДИ (Pending) - КАРТОЧКИ ЮЗЕРОВ -->
@@ -371,11 +470,13 @@ new #[Layout('layouts.admin')] class extends Component
                                     $imgSrc = $photo->medium_url ?: asset('images/no-image-placeholder.png');
                                     $fullSrc = $photo->original_url ?: $imgSrc;
                                 @endphp
-                                <div wire:key="photo-{{ $photo->id }}" class="relative aspect-square bg-muted group overflow-hidden rounded-lg">
+                              <div wire:key="photo-{{ $photo->id }}" 
+                                    class="relative aspect-square bg-muted group overflow-hidden rounded-lg {{ is_numeric($this->search) && $photo->id == (int)$this->search ? 'ring-4 ring-blue-500 ring-offset-2 ring-offset-card z-10' : '' }}"
+                                    @if(is_numeric($this->search) && $photo->id == (int)$this->search) x-data x-init="setTimeout(() => $el.scrollIntoView({ behavior: 'smooth', block: 'center' }), 200)" @endif
+                                >
                                     <a href="{{ $fullSrc }}" data-fancybox="gallery-{{ $user->id }}" data-caption="{{ $user->name }}" class="block w-full h-full">                                        
                                         <img src="{{ $imgSrc }}" alt="Photo" loading="lazy" class="absolute inset-0 w-full h-full object-cover group-hover:scale-105 transition-transform duration-300">
                                     </a>
-
                                     <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center pointer-events-none">
                                         <x-lucide-maximize-2 class="w-6 h-6 text-white drop-shadow-lg" />
                                     </div>
@@ -438,8 +539,12 @@ new #[Layout('layouts.admin')] class extends Component
                         $imgSrc = $photo->medium_url ?: $photo->original_url ?: asset('images/no-image-placeholder.png');
                         $fullSrc = $photo->original_url ?: $photo->medium_url ?: '#';
                         $isRejected = $photo->status === 'rejected';
+                        $isHighlighted = is_numeric($this->search) && $photo->id == (int)$this->search;
                     @endphp
-                    <div wire:key="photo-{{ $photo->id }}" class="bg-card border border-border rounded-lg overflow-hidden flex flex-col">
+                <div wire:key="photo-{{ $photo->id }}" 
+                            class="bg-card border border-border rounded-lg overflow-hidden flex flex-col {{ $isHighlighted ? 'ring-4 ring-blue-500 ring-offset-2 ring-offset-card z-10' : '' }}"
+                            @if($isHighlighted) x-data x-init="setTimeout(() => $el.scrollIntoView({ behavior: 'smooth', block: 'center' }), 200)" @endif
+                        >         
                         <div class="relative aspect-square bg-muted group overflow-hidden">
                             <a href="{{ $fullSrc }}" data-fancybox="gallery-{{ $photo->user_id }}" data-caption="{{ $photo->user?->name }}" class="block w-full h-full">
                                 <img src="{{ $imgSrc }}" alt="Photo" loading="lazy" class="absolute inset-0 w-full h-full object-cover group-hover:scale-105 transition-transform duration-300 {{ $photo->trashed() ? 'opacity-50 grayscale' : '' }}">
@@ -509,8 +614,8 @@ new #[Layout('layouts.admin')] class extends Component
                             @elseif ($photo->status === 'approved')
                                 {{-- ОДОБРЕННЫЕ: Можно отклонить или удалить в карантин --}}
                                 <x-ui.button wire:click="openRejectModal({{ $photo->id }})" variant="warning" size="sm" class="flex-1 h-8 text-xs">Отклонить</x-ui.button>
-                                <x-ui.button wire:click="softDelete({{ $photo->id }})" wire:confirm="Переместить в карантин?" wire:target="softDelete({{ $photo->id }})" variant="destructive" size="sm" class="flex-1 h-8 text-xs">
-                                    <span wire:loading.remove wire:target="softDelete({{ $photo->id }})">Удалить</span>
+                                <x-ui.button wire:click="softDelete({{ $photo->id }})" wire:confirm="Переместить в карантин?" wire:target="softDelete({{ $photo->id }})" variant="secondary" size="sm" class="flex-1 h-8 text-xs">
+                                    <span wire:loading.remove wire:target="softDelete({{ $photo->id }})">В карантин</span>
                                     <x-lucide-loader-2 wire:loading wire:target="softDelete({{ $photo->id }})" class="w-4 h-4 animate-spin" />
                                 </x-ui.button>
                             @elseif ($photo->status === 'rejected')
@@ -519,8 +624,8 @@ new #[Layout('layouts.admin')] class extends Component
                                     <span wire:loading.remove wire:target="approve({{ $photo->id }})">Одобрить</span>
                                     <x-lucide-loader-2 wire:loading wire:target="approve({{ $photo->id }})" class="w-4 h-4 animate-spin" />
                                 </x-ui.button>
-                                <x-ui.button wire:click="softDelete({{ $photo->id }})" wire:confirm="Переместить в карантин?" wire:target="softDelete({{ $photo->id }})" variant="destructive" size="sm" class="flex-1 h-8 text-xs">
-                                    <span wire:loading.remove wire:target="softDelete({{ $photo->id }})">Удалить</span>
+                                <x-ui.button wire:click="softDelete({{ $photo->id }})" wire:confirm="Переместить в карантин?" wire:target="softDelete({{ $photo->id }})" variant="secondary" size="sm" class="flex-1 h-8 text-xs">
+                                    <span wire:loading.remove wire:target="softDelete({{ $photo->id }})">В карантин</span>
                                     <x-lucide-loader-2 wire:loading wire:target="softDelete({{ $photo->id }})" class="w-4 h-4 animate-spin" />
                                 </x-ui.button>
                             @endif
@@ -532,7 +637,7 @@ new #[Layout('layouts.admin')] class extends Component
         @endif
     @endif
 
-    <!-- МОДАЛКА ОТКЛОНЕНИЯ (Починенная) -->
+    <!-- МОДАЛКА ОТКЛОНЕНИЯ -->
     <div x-data="{ show: @entangle('isRejectModalVisible') }" x-show="show" x-cloak 
          class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" 
          style="display: none;"

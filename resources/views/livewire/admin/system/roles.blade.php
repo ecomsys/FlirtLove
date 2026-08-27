@@ -16,12 +16,15 @@ new #[Layout('layouts.admin')] class extends Component
     public string $promoteSearch = '';
     public array $selectedRoles = [];
     
-    // Доступные роли (public для доступа из Blade)
+       // Доступные роли (public для доступа из Blade)
     public array $rolesList = [
         'admin' => 'Суперадмин',
         'moderator' => 'Модератор',
         'support' => 'Саппорт',
     ];
+
+    /** @var string URL для кнопки "Назад" */
+    public string $backUrl = '';
 
     /**
      * Авторизация: только админы могут управлять ролями.
@@ -29,6 +32,12 @@ new #[Layout('layouts.admin')] class extends Component
     public function mount(): void
     {
         abort_unless(auth()->user()?->role === 'admin', 403);
+
+        // ФИКС: Запоминаем URL "Назад" только при первой загрузке
+        $previousUrl = url()->previous();
+        $this->backUrl = ($previousUrl && $previousUrl !== url()->current()) 
+            ? $previousUrl 
+            : route('admin.dashboard');
     }
 
     /**
@@ -177,7 +186,7 @@ new #[Layout('layouts.admin')] class extends Component
         }
     }
  
-    #[Computed]
+       #[Computed]
     public function staffMembers()
     {
         $founders = config('app.founders', []);
@@ -187,8 +196,12 @@ new #[Layout('layouts.admin')] class extends Component
             ? "CASE WHEN id IN (" . implode(',', array_map('intval', $founders)) . ") THEN 0 ELSE 1 END" 
             : "1";
 
-        $staff = User::whereNot('role', 'user')
-            ->with(['profile', 'photos']) // Eager load для аватарок
+        // ФИКС: Унифицированная загрузка аватарок
+        $avatarQuery = fn($q) => $q->select(['id', 'user_id', 'is_primary', 'status', 'path_thumb', 'path_medium', 'path_large', 'path_original'])->orderByDesc('is_primary')->limit(1);
+
+        $staff = User::withTrashed() // ФИКС: Видим даже деактивированных сотрудников
+            ->whereNot('role', 'user')
+            ->with(['profile', 'photos' => $avatarQuery]) 
             ->orderByRaw($founderCase) // Владельцы всегда вверху
             ->orderBy('id', 'asc')
             ->paginate(20);
@@ -250,10 +263,15 @@ new #[Layout('layouts.admin')] class extends Component
 <div class="space-y-6 pb-6">
     <!-- Заголовок страницы -->
     <div class="flex items-center justify-between flex-wrap gap-4">
-        <h1 class="text-2xl font-semibold flex items-center gap-2">
-            <x-lucide-shield-check class="w-6 h-6" />
-            Роли и Админы
-        </h1>
+        <div class="flex items-center gap-4">
+            <a href="{{ $backUrl }}" wire:navigate class="p-2 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors">
+                <x-lucide-arrow-left class="w-5 h-5" />
+            </a>
+            <h1 class="text-2xl font-semibold flex items-center gap-2">
+                <x-lucide-shield-check class="w-6 h-6" />
+                Роли и Админы
+            </h1>
+        </div>
     </div>
 
     <!-- Блок Повышения (Поиск юзеров) -->
@@ -402,25 +420,9 @@ new #[Layout('layouts.admin')] class extends Component
                                         <x-lucide-lock class="w-3 h-3" /> Защищен
                                     </span>
                                 @elseif($staff->id !== auth()->id())
-                                    <x-ui.alert-dialog>
-                                        <x-ui.alert-dialog-trigger>
-                                            <x-ui.button variant="destructive" size="xs">
-                                                <x-lucide-user-minus class="w-3 h-3" /> Уволить
-                                            </x-ui.button>
-                                        </x-ui.alert-dialog-trigger>
-                                        <x-ui.alert-dialog-content>
-                                            <x-ui.alert-dialog-header>
-                                                <x-ui.alert-dialog-title>Разжаловать {{ $staff->name }}?</x-ui.alert-dialog-title>
-                                                <x-ui.alert-dialog-description>
-                                                    Он потеряет доступ к админке и снова появится в ленте дейтинга как обычный юзер.
-                                                </x-ui.alert-dialog-description>
-                                            </x-ui.alert-dialog-header>
-                                            <x-ui.alert-dialog-footer>
-                                                <x-ui.alert-dialog-cancel>Отмена</x-ui.alert-dialog-cancel>
-                                                <x-ui.alert-dialog-action wire:click="demoteToUser({{ $staff->id }})">Разжаловать</x-ui.alert-dialog-action>
-                                            </x-ui.alert-dialog-footer>
-                                        </x-ui.alert-dialog-content>
-                                    </x-ui.alert-dialog>
+                                    <x-ui.button wire:click="demoteToUser({{ $staff->id }})" wire:confirm="Разжаловать {{ $staff->name }}? Он потеряет доступ к админке." variant="destructive" size="xs">
+                                        <x-lucide-user-minus class="w-3 h-3" /> Уволить
+                                    </x-ui.button>
                                 @else
                                     <span class="text-xs text-muted-foreground">Нельзя уволить себя</span>
                                 @endif

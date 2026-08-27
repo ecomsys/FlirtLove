@@ -14,54 +14,101 @@ new #[Layout('layouts.admin')] class extends Component
 {
     use WithPagination;
 
+    /** @var string Текущая вкладка фильтра статуса */
     public string $statusFilter = 'pending';
     
+    /** @var string Строка поиска (по тексту, имени или ID коммента) */
     #[Url(as: 'q', except: '')]
     public string $search = '';
     
+    /** @var int Количество фото на странице */
     public int $perPage = 5;
 
+    /** @var string URL для кнопки "Назад" (фикс потери истории при AJAX-запросах) */
+    public string $backUrl = '';
+
+    /**
+     * Инициализация компонента.
+     * Запоминает URL "Назад" и обрабатывает умный поиск по ID.
+     */
     public function mount(): void
     {
-        // Если пришли с поиском (например, по ID коммента), включаем фильтр "Все"
-        if (!empty($this->search)) {
-            $this->statusFilter = 'all';
-            return;
-        }
+        // ФИКС: Запоминаем URL для кнопки "Назад" при первой загрузке
+        $previousUrl = url()->previous();
+        $this->backUrl = ($previousUrl && $previousUrl !== url()->current()) 
+            ? $previousUrl 
+            : route('admin.moderation.photo-comments');
 
-        $saved = session('moderate_photo_comments', []);
-        if (isset($saved['statusFilter'])) $this->statusFilter = $saved['statusFilter'];
-        if (isset($saved['search'])) $this->search = $saved['search'];
+        // Если пришли по прямой ссылке с поиском (например, ?q=123)
+        if (request()->has('q')) {
+            $searchTerm = (string) request()->input('q');
+            
+            // ФИКС: Умный поиск. Если ищут по ID, переключаем вкладку на реальный статус коммента
+            if (is_numeric($searchTerm)) {
+                $comment = PhotoComment::find((int) $searchTerm);
+                if ($comment) {
+                    $this->statusFilter = $comment->status;
+                    return;
+                }
+            }
+            // Если не число или коммент не найден — ищем по тексту во вкладке "Все"
+            $this->statusFilter = 'all';
+        } else {
+            // Восстанавливаем фильтры из сессии
+            $saved = session('moderate_photo_comments', []);
+            if (isset($saved['statusFilter'])) $this->statusFilter = $saved['statusFilter'];
+            if (isset($saved['search'])) $this->search = $saved['search'];
+        }
     }
 
+    /**
+     * Хук Livewire: срабатывает при ручном вводе в строку поиска.
+     */
     public function updatedSearch(): void
     {
-        // Если админ начал вводить текст, переключаемся на "Все", чтобы найти
-        if (!empty($this->search) && $this->statusFilter !== 'all') {
+        // ФИКС: Умная подсветка вкладки при ручном вводе ID
+        if (is_numeric($this->search) && !empty($this->search)) {
+            $comment = PhotoComment::find((int) $this->search);
+            if ($comment) {
+                $this->statusFilter = $comment->status;
+            }
+        } elseif (!empty($this->search) && $this->statusFilter !== 'all') {
+            // Если ввели текст (не число), переключаемся на "Все", чтобы найти
             $this->statusFilter = 'all';
         }
+        
         session(['moderate_photo_comments.search' => $this->search]);
         $this->resetPage();
     }
 
-    // ФИКС: При ручной смене фильтра очищаем поиск
+    /**
+     * Хук Livewire: срабатывает при ручной смене вкладки.
+     * Очищает поиск и сохраняет выбор в сессию.
+     */
     public function updatedStatusFilter(): void
     {
         $this->search = '';
+        // ФИКС: Чистим сессию поиска, чтобы он не всплывал при перезагрузке
         session()->forget('moderate_photo_comments.search');
         session(['moderate_photo_comments.statusFilter' => $this->statusFilter]);
         $this->resetPage();
     }
 
+    /**
+     * Программная установка вкладки (по клику на кнопки фильтров).
+     */
     public function setStatusFilter(string $status): void
     {
         $this->statusFilter = $status;
-        $this->search = ''; // ФИКС: Очищаем поиск!
+        $this->search = '';
         session()->forget('moderate_photo_comments.search');
         session(['moderate_photo_comments.statusFilter' => $status]);
         $this->resetPage();
     }
 
+    /**
+     * Полный сброс фильтров.
+     */
     public function resetFilters(): void
     {
         $this->reset(['search', 'statusFilter']);
@@ -74,6 +121,9 @@ new #[Layout('layouts.admin')] class extends Component
     // ДЕЙСТВИЯ (ДЕЛЕГИРУЕМ В ACTION)
     // ============================================
 
+    /**
+     * Одобрить комментарий. Делегирует логику в Action-класс.
+     */
     public function approveComment(int $commentId, ModerateCommentAction $action): void
     {
         $comment = PhotoComment::with('parent')->find($commentId);
@@ -89,6 +139,9 @@ new #[Layout('layouts.admin')] class extends Component
         $this->dispatch('show-toast', type: 'success', message: 'Комментарий одобрен');
     }
 
+    /**
+     * Отклонить комментарий с указанием причины.
+     */
     public function rejectComment(int $commentId, string $reason, ModerateCommentAction $action): void
     {
         $comment = PhotoComment::find($commentId);
@@ -98,6 +151,9 @@ new #[Layout('layouts.admin')] class extends Component
         $this->dispatch('show-toast', type: 'info', message: 'Комментарий отклонен');
     }
 
+    /**
+     * Пометить комментарий как спам.
+     */
     public function markSpam(int $commentId, ModerateCommentAction $action): void
     {
         $comment = PhotoComment::find($commentId);
@@ -107,6 +163,9 @@ new #[Layout('layouts.admin')] class extends Component
         $this->dispatch('show-toast', type: 'error', message: 'Комментарий помечен как спам');
     }
 
+    /**
+     * Вернуть комментарий с модерации (восстановить).
+     */
     public function restoreComment(int $commentId, ModerateCommentAction $action): void
     {
         $comment = PhotoComment::find($commentId);
@@ -116,11 +175,14 @@ new #[Layout('layouts.admin')] class extends Component
         $this->dispatch('show-toast', type: 'info', message: 'Комментарий возвращен на модерацию');
     }
 
+    /**
+     * Массовое одобрение всех ожидающих комментариев под конкретным фото.
+     */
     public function approveRemaining(int $photoId, ModerateCommentAction $action): void
     {
         $pendingComments = PhotoComment::where('photo_id', $photoId)
             ->where('status', 'pending')
-            ->with('parent', 'user')
+           ->with(['parent', 'user' => fn($q) => $q->withTrashed()])
             ->get();
 
         if ($pendingComments->isEmpty()) {
@@ -132,11 +194,14 @@ new #[Layout('layouts.admin')] class extends Component
         $this->dispatch('show-toast', type: 'success', message: "Одобрено {$count} комментариев");
     }
 
+    /**
+     * Массовое отклонение всех ожидающих комментариев под конкретным фото.
+     */
     public function rejectRemaining(int $photoId, ModerateCommentAction $action): void
     {
         $pendingComments = PhotoComment::where('photo_id', $photoId)
             ->where('status', 'pending')
-            ->with('user')
+            ->with(['parent', 'user' => fn($q) => $q->withTrashed()])
             ->get();
 
         if ($pendingComments->isEmpty()) {
@@ -148,9 +213,12 @@ new #[Layout('layouts.admin')] class extends Component
         $this->dispatch('show-toast', type: 'info', message: "Отклонено {$count} комментариев");
     }
 
+    /**
+     * Массовое одобрение ВСЕХ ожидающих комментариев на сайте.
+     */
     public function approveAllPending(ModerateCommentAction $action): void
     {
-        $pendingComments = PhotoComment::where('status', 'pending')->with('parent', 'user')->get();
+        $pendingComments = PhotoComment::where('status', 'pending')->with(['parent', 'user' => fn($q) => $q->withTrashed()])->get();
 
         if ($pendingComments->isEmpty()) {
             $this->dispatch('show-toast', type: 'info', message: 'Нет комментариев для одобрения');
@@ -161,9 +229,12 @@ new #[Layout('layouts.admin')] class extends Component
         $this->dispatch('show-toast', type: 'success', message: "Одобрено {$count} комментариев");
     }
 
+    /**
+     * Массовое отклонение ВСЕХ ожидающих комментариев на сайте.
+     */
     public function rejectAllPending(ModerateCommentAction $action): void
     {
-        $pendingComments = PhotoComment::where('status', 'pending')->with('user')->get();
+        $pendingComments = PhotoComment::where('status', 'pending')->with(['parent', 'user' => fn($q) => $q->withTrashed()])->get();
 
         if ($pendingComments->isEmpty()) {
             $this->dispatch('show-toast', type: 'info', message: 'Нет комментариев для отклонения');
@@ -174,6 +245,9 @@ new #[Layout('layouts.admin')] class extends Component
         $this->dispatch('show-toast', type: 'info', message: "Отклонено {$count} комментариев");
     }
 
+    /**
+     * Хелпер для получения бейджа статуса (используется в Blade).
+     */
     public function getStatusBadge(string $status): array
     {
         return match ($status) {
@@ -189,7 +263,11 @@ new #[Layout('layouts.admin')] class extends Component
     // ВЫВОД ДАННЫХ (ОПТИМИЗИРОВАННЫЕ ЗАПРОСЫ)
     // ============================================
 
-    private function applyCommentFilters($query): void
+    /**
+     * Применение фильтров к запросу комментариев.
+     * Ищет по корневым комментариям, но захватывает ответы, если они соответствуют фильтру.
+     */
+        private function applyCommentFilters($query): void
     {
         $query->whereNull('parent_id'); 
         
@@ -206,16 +284,21 @@ new #[Layout('layouts.admin')] class extends Component
             $query->where(function ($sub) use ($search, $operator) {
                 $sub->where('content', $operator, $search)
                     ->orWhereRaw("CAST(id AS TEXT) {$operator} ?", [$search])
-                    ->orWhereHas('user', fn($user) => $user->where('name', $operator, $search))
+                    // ФИКС: withTrashed() для поиска по имени удаленного юзера
+                    ->orWhereHas('user', fn($user) => $user->withTrashed()->where('name', $operator, $search))
                     ->orWhereHas('replies', function ($r) use ($search, $operator) {
                         $r->where('content', $operator, $search)
                           ->orWhereRaw("CAST(id AS TEXT) {$operator} ?", [$search])
-                          ->orWhereHas('user', fn($user) => $user->where('name', $operator, $search));
+                          // ФИКС: withTrashed() для поиска по имени удаленного юзера в ответах
+                          ->orWhereHas('user', fn($user) => $user->withTrashed()->where('name', $operator, $search));
                     });
             });
         }
     }
 
+    /**
+     * Получение списка фото с их комментариями (с жадной загрузкой).
+     */
     #[Computed]
     public function photos()
     {
@@ -240,6 +323,9 @@ new #[Layout('layouts.admin')] class extends Component
         return $query->latest()->paginate($this->perPage);
     }
 
+    /**
+     * Подсчет счетчиков для кнопок фильтров.
+     */
     #[Computed]
     public function counts()
     {
@@ -271,13 +357,6 @@ new #[Layout('layouts.admin')] class extends Component
     <!-- Заголовок -->
     <div class="flex items-center justify-between flex-wrap gap-4">
          <div class="flex items-center gap-4">
-            @php
-                $previousUrl = url()->previous();
-                $backUrl = ($previousUrl && $previousUrl !== url()->current()) 
-                    ? $previousUrl 
-                    : route('admin.moderation.photo-comments');
-            @endphp
-
             <a href="{{ $backUrl }}" wire:navigate class="p-2 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors">
                 <x-lucide-arrow-left class="w-5 h-5" />
             </a>
@@ -344,15 +423,15 @@ new #[Layout('layouts.admin')] class extends Component
     <!-- Фильтры -->
     <div class="flex flex-wrap items-center gap-3">
         <div class="flex flex-wrap gap-1.5">
-            <x-ui.button wire:click="setStatusFilter('pending')" variant="{{ $statusFilter === 'pending' ? 'default' : 'secondary' }}" size="sm">Ожидают <x-ui.badge size="xs" variant="warning">{{ $this->counts['pending'] }}</x-ui.badge></x-ui.button>
-            <x-ui.button wire:click="setStatusFilter('all')" variant="{{ $statusFilter === 'all' ? 'default' : 'secondary' }}" size="sm">Все <x-ui.badge size="xs">{{ $this->counts['total'] }}</x-ui.badge></x-ui.button>
+               <x-ui.button wire:click="setStatusFilter('all')" variant="{{ $statusFilter === 'all' ? 'default' : 'secondary' }}" size="sm">Все <x-ui.badge size="xs">{{ $this->counts['total'] }}</x-ui.badge></x-ui.button>
+            <x-ui.button wire:click="setStatusFilter('pending')" variant="{{ $statusFilter === 'pending' ? 'default' : 'secondary' }}" size="sm">Ожидают <x-ui.badge size="xs" variant="warning">{{ $this->counts['pending'] }}</x-ui.badge></x-ui.button>         
             <x-ui.button wire:click="setStatusFilter('approved')" variant="{{ $statusFilter === 'approved' ? 'default' : 'secondary' }}" size="sm">Одобрены <x-ui.badge size="xs" variant="success">{{ $this->counts['approved'] }}</x-ui.badge></x-ui.button>
             <x-ui.button wire:click="setStatusFilter('rejected')" variant="{{ $statusFilter === 'rejected' ? 'default' : 'secondary' }}" size="sm">Отклонены <x-ui.badge size="xs" variant="destructive">{{ $this->counts['rejected'] }}</x-ui.badge></x-ui.button>
             <x-ui.button wire:click="setStatusFilter('spam')" variant="{{ $statusFilter === 'spam' ? 'default' : 'secondary' }}" size="sm">Спам <x-ui.badge size="xs" variant="destructive">{{ $this->counts['spam'] }}</x-ui.badge></x-ui.button>
         </div>
         <div class="flex items-center gap-2 ml-auto">
             <div class="relative w-64">
-                <x-ui.input wire:model.live.debounce.300ms="search" type="search" placeholder="Поиск по тексту или автору..." class="pl-9 pr-8" />
+                <x-ui.input wire:model.live.debounce.300ms="search" type="search" placeholder="Поиск по тексту или id..." class="pl-9 pr-8" />
                 <x-lucide-search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                 @if (!empty($search))
                     <button wire:click="$set('search', '')" class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"><x-lucide-x class="w-4 h-4" /></button>
@@ -435,7 +514,6 @@ new #[Layout('layouts.admin')] class extends Component
                                 @php 
                                     $commentDimmed = $this->statusFilter !== 'all' && $comment->status !== $this->statusFilter; 
                                     $rejectEnum = $comment->reject_reason ? \App\Enums\CommentRejectReason::tryFrom($comment->reject_reason) : null;
-                                    // ФИКС: Проверяем, является ли этот коммент искомым
                                     $isHighlighted = is_numeric($this->search) && $comment->id == (int)$this->search;      
                                 @endphp
 
@@ -448,7 +526,6 @@ new #[Layout('layouts.admin')] class extends Component
 
                                     <div class="flex-1 min-w-0">
                                         <div class="flex items-center gap-2 flex-wrap">
-                                            <!-- ФИКС: Вывод ID коммента -->
                                             <span class="text-[10px] text-muted-foreground font-mono py-0.5 px-1 rounded-sm bg-muted">#{{ $comment->id }}</span>
                                             
                                             @if($comment->user)
@@ -514,7 +591,6 @@ new #[Layout('layouts.admin')] class extends Component
                                             @php 
                                             $replyDimmed = $this->statusFilter !== 'all' && $reply->status !== $this->statusFilter;
                                             $replyRejectEnum = $reply->reject_reason ? \App\Enums\CommentRejectReason::tryFrom($reply->reject_reason) : null;
-                                            // ФИКС: Проверяем, является ли этот ответ искомым
                                             $isReplyHighlighted = is_numeric($this->search) && $reply->id == (int)$this->search;
                                             @endphp
                                             <div 
@@ -526,7 +602,6 @@ new #[Layout('layouts.admin')] class extends Component
 
                                                 <div class="flex-1 min-w-0">
                                                     <div class="flex items-center gap-2 flex-wrap">
-                                                        <!-- ФИКС: Вывод ID ответа -->
                                                         <span class="text-[10px] text-muted-foreground font-mono">#{{ $reply->id }}</span>
                                                         
                                                         @if($reply->user)

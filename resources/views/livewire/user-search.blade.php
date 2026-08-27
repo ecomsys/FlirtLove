@@ -21,6 +21,7 @@ new class extends Component
         $avatarQuery = fn($q) => $q->select(['id', 'user_id', 'is_primary', 'status', 'path_thumb', 'path_medium', 'path_large', 'path_original'])->orderByDesc('is_primary')->limit(1);
 
         return User::query()
+            ->withTrashed()
             ->excludeStaff()
             ->with(['photos' => $avatarQuery])
             ->where(function ($q) use ($operator, $search) {
@@ -31,8 +32,9 @@ new class extends Component
                     $q->orWhere('id', (int) $this->search);
                 }
             })
-            ->limit(10) // <--- ПОМЕНЯЛИ С 15 НА 10
-            ->get(['id', 'name', 'email', 'is_premium', 'premium_expires_at', 'status', 'last_seen']);
+            ->limit(10)
+            // ФИКС: Добавили 'deleted_at', чтобы компонент статуса видел, что юзер удален
+            ->get(['id', 'name', 'email', 'is_premium', 'premium_expires_at', 'status', 'last_seen', 'deleted_at']);
     }
 
     public function selectUser(int $userId): void

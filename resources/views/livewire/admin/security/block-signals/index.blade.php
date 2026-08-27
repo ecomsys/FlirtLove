@@ -7,6 +7,7 @@ use App\Models\UserBlock;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Session;
+use Livewire\Attributes\Url;
 use Livewire\Volt\Component;
 use Livewire\WithPagination;
 
@@ -14,22 +15,40 @@ new #[Layout('layouts.admin')] class extends Component
 {
     use WithPagination;
 
-    // ФИКС: Изменили тип на int|string и дефолтное значение на строку '3', чтобы Alpine-селект сразу его подхватил
+    #[Url(as: 'threshold', except: '3')] 
     #[Session] 
-    public string $threshold = '3'; // Строго строка!
+    public string $threshold = '3';
+    
     #[Session] 
     public int $perPage = 20;
 
     public bool $showBlockersModal = false;
+    
+    /** @var int|null ID юзера, чьи блокировки смотрим в модалке */
+    #[Url(as: 'view', except: '')]
     public ?int $viewingUserId = null;
-   
+
+    /** @var string URL для кнопки "Назад" */
+    public string $backUrl = '';
+
+    public function mount(): void
+    {
+        // ФИКС: Запоминаем URL "Назад" только при первой загрузке
+        $previousUrl = url()->previous();
+        $this->backUrl = ($previousUrl && $previousUrl !== url()->current()) 
+            ? $previousUrl 
+            : route('admin.dashboard');
+    }
 
     #[Computed]
     public function suspiciousUsers()
     {
+        $avatarQuery = fn($q) => $q->select(['id', 'user_id', 'is_primary', 'status', 'path_thumb', 'path_medium', 'path_large', 'path_original'])->orderByDesc('is_primary')->limit(1);
+
         return User::query()
+            ->withTrashed() 
             ->where('role', 'user')
-            ->with('photos:id,user_id,is_primary,status,path_thumb')
+            ->with(['photos' => $avatarQuery])
             ->leftJoin('user_blocks', function ($join) {
                 $join->on('users.id', '=', 'user_blocks.blocked_id');
             })
@@ -48,10 +67,12 @@ new #[Layout('layouts.admin')] class extends Component
     {
         if (!$this->viewingUserId) return collect();
 
+        $avatarQuery = fn($q) => $q->select(['id', 'user_id', 'is_primary', 'status', 'path_thumb', 'path_medium', 'path_large', 'path_original'])->orderByDesc('is_primary')->limit(1);
+
         return UserBlock::where('blocked_id', $this->viewingUserId)
             ->with(['blocker' => fn($q) => $q->withTrashed()
-                ->select('id', 'name', 'email', 'status', 'is_premium', 'last_seen')
-                ->with('photos:id,user_id,is_primary,status,path_thumb')
+                ->select('id', 'name', 'email', 'status', 'is_premium', 'premium_expires_at', 'last_seen', 'deleted_at')
+                ->with(['photos' => $avatarQuery])
             ])
             ->latest()
             ->get();
@@ -69,12 +90,13 @@ new #[Layout('layouts.admin')] class extends Component
         $this->viewingUserId = null;
     }
 
-    public function banUser(int $id, string $type): void
+        public function banUser(int $id, string $type): void
     {
-        $user = User::findOrFail($id);
+        $user = User::withTrashed()->findOrFail($id);
         $action = app(ToggleUserBanAction::class);
         
-        $reason = "Массовые блокировки от пользователей ({$user->total_blocks_count} раз)";
+        // ФИКС: Убираем total_blocks_count, так как его нет в модели при findOrFail
+        $reason = "Массовые блокировки от пользователей";
         $result = $action->execute($user, $reason, $type, true);
 
         $this->dispatch('show-toast', type: $result['success'] ? 'success' : 'error', message: $result['message']);
@@ -86,7 +108,7 @@ new #[Layout('layouts.admin')] class extends Component
     <!-- Заголовок -->
     <div class="flex items-center justify-between flex-wrap gap-4">
         <div class="flex items-center gap-3">
-            <a href="{{ route('admin.dashboard') }}" wire:navigate class="p-2 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors">
+            <a href="{{ $backUrl }}" wire:navigate class="p-2 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors">
                 <x-lucide-arrow-left class="w-5 h-5" />
             </a>
             <div>
@@ -166,13 +188,18 @@ new #[Layout('layouts.admin')] class extends Component
                     </x-ui.table-cell>
                     
                     <x-ui.table-cell>
+                        <div class="flex flex-col gap-1">
                         @if($user->status === 'active')
                             <x-ui.badge variant="success" size="sm">Активен</x-ui.badge>
                         @elseif($user->status === 'banned')
                             <x-ui.badge variant="destructive" size="sm">В бане</x-ui.badge>
                         @elseif($user->status === 'shadowbanned')
-                            <x-ui.badge variant="secondary" size="sm">Теневой бан</x-ui.badge>
+                            <x-ui.badge variant="warning" size="sm">Теневой бан</x-ui.badge>
+                        @endif    
+                        @if ($user->trashed())
+                            <x-ui.badge variant="secondary" size="sm">Деактивирован</x-ui.badge>
                         @endif
+                        </div>
                     </x-ui.table-cell>
                     
                     <x-ui.table-cell class="text-right">

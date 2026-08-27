@@ -24,23 +24,33 @@ new #[Layout('layouts.admin')] class extends Component
     #[Session] 
     public int $perPage = 15;
     
-    public array $selected = [];
+      public array $selected = [];
     public bool $selectAll = false;
     public string $bulkAction = '';
 
+    /** @var string URL для кнопки "Назад" */
+    public string $backUrl = '';
+
     public function mount(): void
     {
+        // ФИКС: Запоминаем URL "Назад" только при первой загрузке
+        $previousUrl = url()->previous();
+        $this->backUrl = ($previousUrl && $previousUrl !== url()->current()) 
+            ? $previousUrl 
+            : route('admin.dashboard');
+
         if (is_numeric($this->search) && $this->search !== '') {
             $this->statusFilter = 'all';
         }
     }
 
-    public function setStatusFilter(string $status): void 
+       public function setStatusFilter(string $status): void 
     { 
         $this->statusFilter = $status; 
         $this->search = ''; 
         $this->resetPage(); 
-        $this->clearSelection(); // ФИКС: сбрасываем галки
+        $this->clearSelection();
+        $this->clearComputedCache(); // ФИКС: Сбрасываем кэш
     }
 
     public function deletePost(int $id, BlogPostsAction $action): void
@@ -48,6 +58,7 @@ new #[Layout('layouts.admin')] class extends Component
         try {
             $action->delete(BlogPost::findOrFail($id));
             $this->dispatch('show-toast', type: 'success', message: 'Пост удален');
+            $this->clearComputedCache(); // ФИКС: Сбрасываем кэш
         } catch (\Exception $e) {
             Log::error("Ошибка удаления: " . $e->getMessage());
             $this->dispatch('show-toast', type: 'error', message: 'Ошибка сервера!');
@@ -59,6 +70,7 @@ new #[Layout('layouts.admin')] class extends Component
         try {
             $action->toggle(BlogPost::findOrFail($id));
             $this->dispatch('show-toast', type: 'success', message: 'Статус обновлен');
+            $this->clearComputedCache();
         } catch (\Exception $e) {
             Log::error("Ошибка смены статуса: " . $e->getMessage());
             $this->dispatch('show-toast', type: 'error', message: 'Ошибка сервера!');
@@ -70,6 +82,7 @@ new #[Layout('layouts.admin')] class extends Component
         try {
             $action->archive(BlogPost::findOrFail($id));
             $this->dispatch('show-toast', type: 'success', message: 'Пост перемещен в архив');
+            $this->clearComputedCache();
         } catch (\Exception $e) {
             Log::error("Ошибка архивации: " . $e->getMessage());
             $this->dispatch('show-toast', type: 'error', message: 'Ошибка сервера!');
@@ -81,6 +94,7 @@ new #[Layout('layouts.admin')] class extends Component
         try {
             $action->restore(BlogPost::findOrFail($id));
             $this->dispatch('show-toast', type: 'success', message: 'Пост восстановлен');
+            $this->clearComputedCache();
         } catch (\Exception $e) {
             Log::error("Ошибка восстановления: " . $e->getMessage());
             $this->dispatch('show-toast', type: 'error', message: 'Ошибка сервера!');
@@ -102,6 +116,7 @@ new #[Layout('layouts.admin')] class extends Component
             
             AdminLog::record('blog.create', $new, auth()->user());
             $this->dispatch('show-toast', type: 'success', message: 'Пост продублирован');
+            $this->clearComputedCache();
         } catch (\Exception $e) {
             Log::error("Ошибка дублирования: " . $e->getMessage());
             $this->dispatch('show-toast', type: 'error', message: 'Ошибка сервера!');
@@ -121,6 +136,7 @@ new #[Layout('layouts.admin')] class extends Component
         try {
             $message = $action->applyBulk($this->selected, $this->bulkAction, $this->statusFilter === 'archived');
             $this->dispatch('show-toast', type: 'success', message: $message);
+            $this->clearComputedCache();
         } catch (\Exception $e) {
             Log::error("Ошибка массового действия: " . $e->getMessage());
             $this->dispatch('show-toast', type: 'error', message: 'Ошибка сервера!');
@@ -130,10 +146,32 @@ new #[Layout('layouts.admin')] class extends Component
         $this->bulkAction = '';
     }
 
+    private function clearComputedCache(): void
+    {
+        unset($this->posts);
+        unset($this->counts);
+    }
+
     public function updatedSearch(): void 
     { 
         $this->resetPage(); 
-        $this->clearSelection(); // ФИКС: сбрасываем галки
+        $this->clearSelection();
+        $this->clearComputedCache();
+
+        // ФИКС: Умная подсветка вкладки при ручном вводе ID
+        if (is_numeric($this->search) && !empty($this->search)) {
+            $post = BlogPost::find((int) $this->search);
+            if ($post) {
+                $this->statusFilter = $post->status;
+            }
+        }
+    }
+
+    public function clearSearch(): void
+    {
+        $this->search = '';
+        $this->resetPage();
+        $this->clearComputedCache();
     }
     
     public function updatedSelectAll($value): void
@@ -189,15 +227,7 @@ new #[Layout('layouts.admin')] class extends Component
 ?>
 
 <div class="space-y-6 pb-6">
-    <!-- Заголовок -->
     <div class="flex items-center justify-between flex-wrap gap-4">
-         @php
-            $previousUrl = url()->previous();
-            $backUrl = ($previousUrl && $previousUrl !== url()->current()) 
-                ? $previousUrl 
-                : route('admin.dashboard');
-        @endphp
-
         <div class="flex gap-2 items-center">
             <a href="{{ $backUrl }}" wire:navigate class="p-2 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors">
                 <x-lucide-arrow-left class="w-5 h-5" />
@@ -238,7 +268,7 @@ new #[Layout('layouts.admin')] class extends Component
             <x-ui.input wire:model.live.debounce.300ms="search" type="search" placeholder="Поиск по названию или id..." class="pl-9 pr-8" />
             <x-lucide-search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             @if (!empty($search))
-                <button wire:click="$set('search', '')" class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+                <button wire:click="clearSearch" class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
                     <x-lucide-x class="w-4 h-4" />
                 </button>
             @endif

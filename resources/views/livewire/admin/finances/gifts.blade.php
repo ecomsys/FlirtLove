@@ -54,11 +54,21 @@ new #[Layout('layouts.admin')] class extends Component
     public string $modalCategory = 'romantic';
     public bool $modalIsActive = true;
 
+  
+    /** @var string URL для кнопки "Назад" */
+    public string $backUrl = '';
+  
     /**     
      * Инициализация. Восстанавливаем активную вкладку из сессии или из URL.
      */       
     public function mount(): void
     {
+        // ФИКС: Запоминаем URL "Назад" только при первой загрузке
+        $previousUrl = url()->previous();
+        $this->backUrl = ($previousUrl && $previousUrl !== url()->current()) 
+            ? $previousUrl 
+            : route('admin.dashboard');
+
         // Если перешли по прямой ссылке с поиском истории дарений
         if (request()->has('history_search')) {
             $this->activeTab = 'history';
@@ -414,14 +424,7 @@ new #[Layout('layouts.admin')] class extends Component
 
 <div class="space-y-6">
     <!-- Шапка с кнопкой "Назад" -->
-    <div class="flex items-center gap-4">
-        @php
-            $previousUrl = url()->previous();
-            $backUrl = ($previousUrl && $previousUrl !== url()->current()) 
-                ? $previousUrl 
-                : route('admin.dashboard');
-        @endphp
-
+        <div class="flex items-center gap-4">
         <a href="{{ $backUrl }}" wire:navigate class="p-2 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors">
             <x-lucide-arrow-left class="w-5 h-5" />
         </a>
@@ -641,8 +644,7 @@ new #[Layout('layouts.admin')] class extends Component
                                                 @if($uGift->sender->has_active_premium)<x-lucide-crown class="w-3.5 h-3.5 text-yellow-500" />@endif                              
                                             </span>
                                             <!-- ФИКС: Добавили email -->
-                                            <span class="text-xs text-muted-foreground truncate">{{ $uGift->sender->email }}</span>
-                                            @if($uGift->sender->trashed()) <x-ui.badge variant="secondary" size="xs">Удален</x-ui.badge> @endif
+                                            <span class="text-xs text-muted-foreground truncate">{{ $uGift->sender->email }}</span>                                        
                                         </div>
                                     </a>
                                 @else
@@ -663,8 +665,7 @@ new #[Layout('layouts.admin')] class extends Component
                                                 @if($uGift->receiver->has_active_premium)<x-lucide-crown class="w-3.5 h-3.5 text-yellow-500" />@endif                              
                                             </span>
                                             <!-- ФИКС: Добавили email -->
-                                            <span class="text-xs text-muted-foreground truncate">{{ $uGift->receiver->email }}</span>
-                                            @if($uGift->receiver->trashed()) <x-ui.badge variant="secondary" size="xs">Удален</x-ui.badge> @endif
+                                            <span class="text-xs text-muted-foreground truncate">{{ $uGift->receiver->email }}</span>                                            
                                         </div>
                                     </a>
                                 @else
@@ -675,8 +676,9 @@ new #[Layout('layouts.admin')] class extends Component
                             <x-ui.table-cell>
                                 <div class="flex items-center gap-2">
                                     <div class="w-14 h-14 overflow-hidden rounded-md bg-muted shrink-0 flex items-center justify-center">
-                                        @if($uGift->image_url)
-                                            <x-media-image src="{{ $uGift->image_url }}" alt="{{ $uGift->snapshot_name }}" class="w-full h-full object-cover"/>
+                                        @php $imgSrc = $uGift->snapshot_image_url ?? $uGift->gift?->image_url; @endphp
+                                        @if($imgSrc)
+                                            <x-media-image src="{{ $imgSrc }}" alt="{{ $uGift->snapshot_name }}" class="w-full h-full object-cover"/>
                                         @else
                                             <x-lucide-image-off class="w-4 h-4 text-muted-foreground/50" />
                                         @endif
@@ -890,14 +892,14 @@ new #[Layout('layouts.admin')] class extends Component
                 
                 @if(!$editingGiftId)
                     <x-ui.button wire:click="saveGift" variant="default" size="sm" wire:loading.attr="disabled" class="gap-2">
-                        <x-lucide-loader-circle class="w-4 h-4 animate-spin" wire:loading />
+                        <x-lucide-loader-2 class="w-4 h-4 animate-spin inline" wire:loading />
                         <x-lucide-save class="w-4 h-4" wire:loading.remove />
                         <span wire:loading.remove>Сохранить</span>
                         <span wire:loading>Сохранение...</span>
                     </x-ui.button>
                 @else
                     <x-ui.button wire:click="updateGift" variant="default" size="sm" wire:loading.attr="disabled" class="gap-2">
-                        <x-lucide-loader-circle class="w-4 h-4 animate-spin" wire:loading />
+                        <x-lucide-loader-2 class="w-4 h-4 animate-spin inline" wire:loading />
                         <x-lucide-save class="w-4 h-4" wire:loading.remove />
                         <span wire:loading.remove>Сохранить</span>
                         <span wire:loading>Сохранение...</span>

@@ -82,10 +82,10 @@ new class extends Component {
             <div>
                 <h2 class="text-lg font-semibold text-foreground flex items-center gap-2">
                     <x-lucide-trash-2 class="w-5 h-5 text-red-500" />
-                    Удаление пользователя
+                    Деактивация пользователя
                 </h2>
                 <p class="text-sm text-muted-foreground mt-1">
-                    Вы собираетесь удалить (деактивировать): <span class="font-bold text-foreground">{{ $userName }}</span>
+                    Вы собираетесь деактивировать: <span class="font-bold text-foreground">{{ $userName }}</span>
                 </p>
             </div>
             <x-ui.button variant="ghost" size="icon-sm" @click="open = false">
@@ -108,12 +108,12 @@ new class extends Component {
         </div>
 
         <div class="flex justify-end gap-2 pt-2">
-            <x-ui.button @click="open = false" variant="ghost" size="sm">Отмена</x-ui.button>
+            <x-ui.button @click="open = false" variant="outline" size="sm">Отмена</x-ui.button>
             <x-ui.button wire:click="executeDelete" variant="destructive" size="sm" wire:loading.attr="disabled" class="gap-2">
                 <x-lucide-loader-circle class="w-4 h-4 animate-spin" wire:loading />
                 <x-lucide-trash-2 class="w-4 h-4" wire:loading.remove />
-                <span wire:loading.remove>Подтвердить удаление</span>
-                <span wire:loading>Удаляем...</span>
+                <span wire:loading.remove>Подтвердить деактивацию</span>
+                <span wire:loading>Деактивируем...</span>
             </x-ui.button>
         </div>
     </div>
