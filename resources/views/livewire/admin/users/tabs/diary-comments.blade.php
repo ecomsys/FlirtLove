@@ -44,7 +44,7 @@ new class extends Component
     #[Computed]
     public function commentsReceived()
     {
-        return DiaryComment::whereHas('diary', fn($q) => $q->where('user_id', $this->userId))
+        return DiaryComment::whereHas('diary', fn($q) => $q->withTrashed()->where('user_id', $this->userId))
             ->with([
                 'diary' => fn($q) => $q->withTrashed()->select('id', 'title'), 
                 'user' => $this->getAvatarQuery()

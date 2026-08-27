@@ -42,7 +42,6 @@ new #[Layout('layouts.admin')] class extends Component
      */
     public function mount($user_id = null): void
     {
-        // ФИКС: Запоминаем URL "Назад" только при первой загрузке
         $previousUrl = url()->previous();
         $this->backUrl = ($previousUrl && $previousUrl !== url()->current()) 
             ? $previousUrl 
@@ -54,18 +53,37 @@ new #[Layout('layouts.admin')] class extends Component
             return;
         }
 
+        // ФИКС: Проверяем, существует ли чат по URL (?chat=678) и принадлежит ли он текущему админу
+        if ($this->activeChatId) {
+            $chat = Chat::where('type', 'support')
+                ->whereHas('participants', fn($q) => $q->where('user_id', $adminId))
+                ->find($this->activeChatId);
+
+            if ($chat) {
+                $participant = $chat->participants->firstWhere('user_id', $adminId);
+                if ($participant) {
+                    $this->chatFilter = $participant->is_hidden ? 'archived' : 'active';
+                }
+                $this->selectChat($chat->id);
+                return;
+            } else {
+                // Если чат не найден или чужой — сбрасываем, чтобы не падала страница
+                $this->activeChatId = null;
+            }
+        }
+
                // Умный поиск: если пришли по ссылке ?q=123, автоматически открываем чат
         if (!empty($this->search) && is_numeric($this->search)) {
-            $chat = Chat::where('type', 'support')
-                ->whereHas('participants', fn($q) => $q->where('user_id', auth()->id()))
-                ->with(['participants' => fn($q) => $q->select('chat_id', 'user_id', 'is_hidden')->where('user_id', auth()->id())])
-                ->find((int) $this->search);
+            // Убрали whereHas('participants', ... auth()->id()), чтобы можно было открыть любой чат по ID
+            $chat = Chat::where('type', 'support')->find((int) $this->search);
                 
             if ($chat) {
-                $participant = $chat->participants->first();
+                $participant = $chat->participants->firstWhere('user_id', $adminId);
                 if ($participant) {
-                    // ФИКС: Автоматически переключаем вкладку, если чат в архиве
-                    $this->chatFilter = $participant->is_hidden ? 'archived' : 'active';
+                    $this->chatFilter = $participant->is_hidden ? 'archived' : ($participant->unread_count > 0 ? 'unread' : 'active');
+                } else {
+                    // Если админ не участник, открываем как активный
+                    $this->chatFilter = 'active';
                 }
                 $this->selectChat($chat->id);
                 return;
@@ -97,18 +115,18 @@ new #[Layout('layouts.admin')] class extends Component
     {
         $this->resetPage();
 
-        // Если ввели число, проверяем: это ID тикета?
-        if (is_numeric($this->search) && !empty($this->search)) {
-            $chat = Chat::where('type', 'support')
-                ->whereHas('participants', fn($q) => $q->where('user_id', auth()->id()))
-                ->with(['participants' => fn($q) => $q->select('chat_id', 'user_id', 'is_hidden')->where('user_id', auth()->id())])
-                ->find((int) $this->search);
+               // Умный поиск: если пришли по ссылке ?q=123, автоматически открываем чат
+        if (!empty($this->search) && is_numeric($this->search)) {
+            // Убрали whereHas('participants', ... auth()->id()), чтобы можно было открыть любой чат по ID
+            $chat = Chat::where('type', 'support')->find((int) $this->search);
                 
             if ($chat) {
-                $participant = $chat->participants->first();
+                $participant = $chat->participants->firstWhere('user_id', $adminId);
                 if ($participant) {
-                    // ФИКС: Автоматически переключаем вкладку, если чат в архиве
-                    $this->chatFilter = $participant->is_hidden ? 'archived' : 'active';
+                    $this->chatFilter = $participant->is_hidden ? 'archived' : ($participant->unread_count > 0 ? 'unread' : 'active');
+                } else {
+                    // Если админ не участник, открываем как активный
+                    $this->chatFilter = 'active';
                 }
                 $this->selectChat($chat->id);
                 return;
@@ -172,15 +190,13 @@ new #[Layout('layouts.admin')] class extends Component
         unset($this->chats);
     }    
 
-    public function selectChat(int $chatId): void
+        public function selectChat(int $chatId): void
     {
         $this->activeChatId = $chatId;
         $this->messageBody = '';
 
-        ChatParticipant::where('chat_id', $chatId)
-            ->where('user_id', auth()->id())
-            ->update(['unread_count' => 0]);
-
+        // ФИКС: УБРАЛИ обнуление unread_count отсюда! Чат остается непрочитанным, пока админ не ответит или не нажмет "Прочитано".
+        
         unset($this->stats); 
         unset($this->chats);
         
@@ -189,30 +205,21 @@ new #[Layout('layouts.admin')] class extends Component
         $this->dispatch('scroll-chat-bottom');
     }
 
-    public function sendMessage(): void
+    /**
+     * НОВЫЙ МЕТОД: Ручная отметка тикета как прочитанного.
+     */
+    public function markAsRead(int $chatId): void
     {
-        $this->validate(['messageBody' => 'required|string|max:2000']);
-        $chat = Chat::find($this->activeChatId);
-        if (!$chat) return;
-        $sender = auth()->user();
+        ChatParticipant::where('chat_id', $chatId)
+            ->where('user_id', auth()->id())
+            ->update(['unread_count' => 0]);
 
-        \DB::transaction(function () use ($chat, $sender) {
-            Message::create([
-                'chat_id' => $chat->id,
-                'sender_id' => $sender->id,
-                'type' => 'text',
-                'body' => $this->messageBody,
-            ]);
-            $chat->update(['last_message_at' => now()]);
-            ChatParticipant::where('chat_id', $chat->id)->where('user_id', '!=', $sender->id)->increment('unread_count');
-        });
-
-        AdminLog::record('support.message_sent', $chat, auth()->user());
-        $this->messageBody = '';
-        
+        unset($this->stats); 
         unset($this->chats);
-        $this->dispatch('scroll-chat-bottom');
+        
+        $this->dispatch('show-toast', type: 'success', message: 'Тикет отмечен как прочитанный.');
     }
+
 
     public function archiveChat(int $chatId): void
     {
@@ -248,34 +255,40 @@ new #[Layout('layouts.admin')] class extends Component
         unset($this->chats);
     }
 
-    #[Computed]
-    public function chats()
+    public function sendMessage(): void
     {
-        $operator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
-        $avatarQuery = fn($q) => $q
-            ->select(['id', 'user_id', 'is_primary', 'status', 'path_thumb', 'path_medium', 'path_large', 'path_original'])
-            ->orderByDesc('is_primary')
-            ->limit(1);
+        $this->validate(['messageBody' => 'required|string|max:2000']);
+        $chat = Chat::find($this->activeChatId);
+        if (!$chat) return;
+        $sender = auth()->user();
 
-        return Chat::where('type', 'support')
-            ->whereHas('participants', fn($q) => $q->where('user_id', auth()->id())->where('is_hidden', $this->chatFilter === 'archived'))
-            ->when($this->chatFilter === 'unread', function ($q) {
-                $q->whereHas('participants', fn($sub) => $sub->where('user_id', auth()->id())->where('unread_count', '>', 0));
-            })
-            ->when($this->search, function ($query) use ($operator) {
-                $query->where(function ($q) use ($operator) {
-                    // Ищем строго по имени участника
-                    $q->whereHas('participants.user', fn($sub) => $sub->where('name', $operator, "%{$this->search}%"));
-                    
-                    // ИЛИ если ввели цифры — ищем по ID самого тикета (чата)
-                    if (is_numeric($this->search)) {
-                        $q->orWhere('id', (int) $this->search);
-                    }
-                });
-            })
-            ->with(['participants.user' => fn($q) => $q->withTrashed()->with(['photos' => $avatarQuery]), 'messages' => fn($q) => $q->latest()->limit(1)])
-            ->orderByDesc('last_message_at')
-            ->paginate(15);
+        \DB::transaction(function () use ($chat, $sender) {
+            Message::create([
+                'chat_id' => $chat->id,
+                'sender_id' => $sender->id,
+                'type' => 'text',
+                'body' => $this->messageBody,
+            ]);
+            $chat->update(['last_message_at' => now()]);
+            
+            // ФИКС: Увеличиваем счетчик непрочитанных ТОЛЬКО обычным юзерам (role = 'user')
+            // Это защитит админов от получения +1 к счетчику, когда отвечает коллега.
+            ChatParticipant::where('chat_id', $chat->id)
+                ->whereHas('user', fn($q) => $q->where('role', 'user'))
+                ->increment('unread_count');
+            
+            // Если отправитель является участником чата (например, он создатель), обнуляем ему счетчик
+            ChatParticipant::where('chat_id', $chat->id)
+                ->where('user_id', $sender->id)
+                ->update(['unread_count' => 0]);
+        });
+
+        AdminLog::record('support.message_sent', $chat, auth()->user());
+        $this->messageBody = '';
+        
+        unset($this->chats);
+        unset($this->stats); // ВАЖНО: Обновляем бейджи после отправки!
+        $this->dispatch('scroll-chat-bottom');
     }
 
     #[Computed]
@@ -283,7 +296,7 @@ new #[Layout('layouts.admin')] class extends Component
     {
         $stats = ChatParticipant::where('user_id', auth()->id())
             ->selectRaw("
-                SUM(CASE WHEN is_hidden = false THEN 1 ELSE 0 END) as active_count,
+                SUM(CASE WHEN is_hidden = false AND unread_count = 0 THEN 1 ELSE 0 END) as active_count,
                 SUM(CASE WHEN is_hidden = true THEN 1 ELSE 0 END) as archived_count,
                 SUM(CASE WHEN is_hidden = false AND unread_count > 0 THEN 1 ELSE 0 END) as unread_count
             ")->first();
@@ -295,29 +308,68 @@ new #[Layout('layouts.admin')] class extends Component
         ];
     }
 
-    public function with(): array
+    #[Computed]
+    public function chats()
+    {
+        $operator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
+        $avatarQuery = fn($q) => $q
+            ->select(['id', 'user_id', 'is_primary', 'status', 'path_thumb', 'path_medium', 'path_large', 'path_original'])
+            ->orderByDesc('is_primary')
+            ->limit(1);
+
+        return Chat::where('type', 'support')
+            ->whereHas('participants', fn($q) => $q->where('user_id', auth()->id()))
+            ->when($this->chatFilter === 'archived', function ($q) {
+                $q->whereHas('participants', fn($sub) => $sub->where('user_id', auth()->id())->where('is_hidden', true));
+            })
+            ->when($this->chatFilter === 'active', function ($q) {
+                // ФИКС: Активные = не скрытые и прочитанные
+                $q->whereHas('participants', fn($sub) => $sub->where('user_id', auth()->id())->where('is_hidden', false)->where('unread_count', 0));
+            })
+            ->when($this->chatFilter === 'unread', function ($q) {
+                // ФИКС: Непрочитанные = не скрытые и unread_count > 0
+                $q->whereHas('participants', fn($sub) => $sub->where('user_id', auth()->id())->where('is_hidden', false)->where('unread_count', '>', 0));
+            })
+            ->when($this->search, function ($query) use ($operator) {
+                $query->where(function ($q) use ($operator) {
+                    $q->whereHas('participants.user', fn($sub) => $sub->withTrashed()->where('name', $operator, "%{$this->search}%"));
+                    if (is_numeric($this->search)) {
+                        $q->orWhere('id', (int) $this->search);
+                    }
+                });
+            })
+            ->with(['participants.user' => fn($q) => $q->withTrashed()->with(['photos' => $avatarQuery]), 'messages' => fn($q) => $q->latest()->limit(1)])
+            ->orderByDesc('last_message_at')
+            ->paginate(15);
+    }
+
+       public function with(): array
     {
         $avatarQuery = fn($q) => $q->select(['id', 'user_id', 'is_primary', 'status', 'path_thumb', 'path_medium', 'path_large', 'path_original'])->orderByDesc('is_primary')->limit(1);
         
         $partner = null;
         $activeMessages = collect();
+        $activeUnreadCount = 0; // НОВОЕ: Счетчик непрочитанных в активном чате
 
         if ($this->activeChatId) {
-            // Оптимизация: Берем чат из уже загруженной коллекции, чтобы не делать лишних запросов к БД
             $activeChat = $this->chats->firstWhere('id', $this->activeChatId);
             
             if (!$activeChat) {
                 $activeChat = Chat::with(['participants.user' => fn($q) => $q->withTrashed()->with(['photos' => $avatarQuery])])->find($this->activeChatId);
             }
 
-            $partner = $activeChat?->participants->firstWhere('user_id', '!=', auth()->id())?->user;
+            if ($activeChat) {
+                $partner = $activeChat->participants->firstWhere('user_id', '!=', auth()->id())?->user;
+                $myParticipant = $activeChat->participants->firstWhere('user_id', auth()->id());
+                $activeUnreadCount = $myParticipant?->unread_count ?? 0;
 
-            $activeMessages = Message::where('chat_id', $this->activeChatId)
-                ->latest()
-                ->limit(100)
-                ->with('sender.photos', $avatarQuery)
-                ->get()
-                ->sortBy('created_at');
+                $activeMessages = Message::where('chat_id', $this->activeChatId)
+                    ->latest()
+                    ->limit(100)
+                    ->with(['sender' => fn($q) => $q->withTrashed()->with(['photos' => $avatarQuery])])
+                    ->get()
+                    ->sortBy('created_at');
+            }
         }
 
         return [
@@ -325,6 +377,7 @@ new #[Layout('layouts.admin')] class extends Component
             'stats' => $this->stats,
             'partner' => $partner,
             'activeMessages' => $activeMessages,
+            'activeUnreadCount' => $activeUnreadCount, // ПЕРЕДАЕМ В ШАБЛОН
         ];
     }
 };?>
@@ -361,18 +414,18 @@ new #[Layout('layouts.admin')] class extends Component
         <div wire:poll.15s class="lg:col-span-1 border-r border-border pr-4 flex flex-col h-[calc(100vh-16rem)]">
 
             <div class="flex gap-1.5 mb-3 shrink-0" wire:key="filter-buttons-container">
-                <x-ui.button wire:click="setFilter('unread')" variant="{{ $chatFilter === 'unread' ? 'default' : 'secondary' }}" size="sm" class="flex-1" wire:key="btn-filter-unread">
+                <x-ui.button title="Нерочитаннные чаты" wire:click="setFilter('unread')" variant="{{ $chatFilter === 'unread' ? 'default' : 'secondary' }}" size="sm" class="flex-1" wire:key="btn-filter-unread">
                     <span class="flex items-center justify-center gap-1">
-                        Непроч.
+                        Непр.
                         <x-ui.badge variant="{{ $this->stats['unread'] > 0 ? 'destructive' : 'secondary' }}" size="xs" class="{{ $this->stats['unread'] > 0 ? '' : 'bg-muted-foreground/10' }}">{{ $this->stats['unread'] }}</x-ui.badge>
                     </span>
                 </x-ui.button>
                 
-                <x-ui.button wire:click="setFilter('active')" variant="{{ $chatFilter === 'active' ? 'default' : 'secondary' }}" size="sm" class="flex-1" wire:key="btn-filter-active">
-                    Актив. <x-ui.badge size="xs" class="ml-1 {{ $chatFilter === 'active' ? 'bg-primary-foreground/20' : 'bg-muted-foreground/10' }}">{{ $this->stats['active'] }}</x-ui.badge>
+                <x-ui.button title="Активные чаты" wire:click="setFilter('active')" variant="{{ $chatFilter === 'active' ? 'default' : 'secondary' }}" size="sm" class="flex-1" wire:key="btn-filter-active">
+                    Акт. <x-ui.badge size="xs" class="ml-1 {{ $chatFilter === 'active' ? 'bg-primary-foreground/20' : 'bg-muted-foreground/10' }}">{{ $this->stats['active'] }}</x-ui.badge>
                 </x-ui.button>
                 
-                <x-ui.button wire:click="setFilter('archived')" variant="{{ $chatFilter === 'archived' ? 'default' : 'secondary' }}" size="sm" class="flex-1" wire:key="btn-filter-archived">
+                <x-ui.button title="Чаты отправленные в архив" wire:click="setFilter('archived')" variant="{{ $chatFilter === 'archived' ? 'default' : 'secondary' }}" size="sm" class="flex-1" wire:key="btn-filter-archived">
                     Архив <x-ui.badge size="xs" class="ml-1 {{ $chatFilter === 'archived' ? 'bg-primary-foreground/20' : 'bg-muted-foreground/10' }}">{{ $this->stats['archived'] }}</x-ui.badge>
                 </x-ui.button>
             </div>
@@ -401,19 +454,16 @@ new #[Layout('layouts.admin')] class extends Component
                     @endphp
 
                     <div wire:click="selectChat({{ $chat->id }})"
-                        class="p-3 rounded-lg cursor-pointer transition-colors relative overflow-hidden {{ $this->activeChatId === $chat->id ? 'chat-active bg-primary/10 border border-primary/30' : ($unreadCount > 0 ? 'bg-blue-500/5 border border-blue-500/30 hover:bg-blue-500/10' : 'bg-muted/30 hover:bg-muted border border-transparent') }}"
+                        class="p-3 rounded-lg cursor-pointer transition-colors relative overflow-hidden {{ $this->activeChatId === $chat->id ? 'chat-active bg-primary/10 border border-primary/30' : ($unreadCount > 0 ? 'bg-red-500/5 border border-red-500/30 hover:bg-red-500/10' : 'bg-muted/30 hover:bg-muted border border-transparent') }}"
                         wire:key="sup-chat-{{ $chat->id }}">
 
                         @if ($unreadCount > 0)
-                            <div class="absolute left-0 top-0 bottom-0 w-1 bg-blue-500"></div>
+                            <div class="absolute left-0 top-0 bottom-0 w-0.5 bg-red-500"></div>
                         @endif
 
                         <div class="flex items-center gap-3">
                             <div class="relative">
-                                <x-avatar src="{{ $chatPartner?->avatar_url }}" name="{{ $chatPartner?->name }}" size="sm" userId="{{ $chatPartner?->id }}" showStatus="true" :isOnline="$chatPartner?->is_online" />
-                                @if ($unreadCount > 0)
-                                    <span class="absolute bottom-0 right-0 block h-3 w-3 rounded-full bg-blue-500 border-2 border-card"></span>
-                                @endif
+                                <x-avatar src="{{ $chatPartner?->avatar_url }}" name="{{ $chatPartner?->name }}" size="sm" userId="{{ $chatPartner?->id }}" showStatus="true" :isOnline="$chatPartner?->is_online" />                  
                             </div>
 
                             <div class="flex-1 min-w-0">
@@ -421,7 +471,7 @@ new #[Layout('layouts.admin')] class extends Component
                                     <div class="flex flex-col gap-1">
                                         <div class="flex items-center gap-1 min-w-0">
                                             <x-user-status-sign :user="$chatPartner" />
-                                            <a href="{{ route('admin.users.show', $chatPartner?->id) }}" wire:navigate class="text-sm truncate hover:text-primary {{ $unreadCount > 0 ? 'font-bold text-blue-600 dark:text-blue-400' : 'font-medium' }}" @if(!$chatPartner) style="pointer-events: none;" @endif>{{ $chatPartner?->name ?? 'Удален' }}</a>
+                                            <a href="{{ route('admin.users.show', $chatPartner?->id) }}" wire:navigate class="text-sm truncate hover:text-primary {{ $unreadCount > 0 ? 'font-bold text-red-600 dark:text-red-400' : 'font-medium' }}" @if(!$chatPartner) style="pointer-events: none;" @endif>{{ $chatPartner?->name ?? 'Удален' }}</a>
                                             @if ($chatPartner?->has_active_premium) <x-lucide-crown class="w-3 h-3 text-yellow-500" /> @endif                                        
                                         </div>
                                         <p class="text-xs truncate mt-1 {{ $unreadCount > 0 ? 'text-foreground font-medium' : 'text-muted-foreground' }}">
@@ -429,13 +479,13 @@ new #[Layout('layouts.admin')] class extends Component
                                         </p>
                                     </div>
 
-                                    <div class="flex flex-col items-end gap-1 shrink-0">
+                                    <div class="flex flex-col items-end shrink-0">
                                         @if ($chat->last_message_at)
-                                            <span class="text-[10px] {{ $unreadCount > 0 ? 'text-blue-500 font-medium' : 'text-muted-foreground' }}">{{ $chat->last_message_at->diffForHumans() }}</span>
+                                            <span class="text-[10px] {{ $unreadCount > 0 ? 'text-red-500 font-medium' : 'text-muted-foreground' }}">{{ $chat->last_message_at->diffForHumans() }}</span>
                                         @endif
                                         <span class="text-[10px] text-muted-foreground bg-muted px-1 py-0.5 rounded-xs whitespace-nowrap">#{{ $chat->id }}</span>
                                         @if ($unreadCount > 0)
-                                            <span class="bg-blue-500 text-white text-[10px] font-bold rounded-full h-5 min-w-[20px] flex items-center justify-center px-1">{{ $unreadCount }}</span>
+                                            <span class="bg-red-500 text-white text-[10px] font-bold rounded-full h-5 min-w-[20px] flex items-center justify-center px-0.5">{{ $unreadCount }}</span>
                                         @endif
                                     </div>
                                 </div>                              
@@ -479,6 +529,19 @@ new #[Layout('layouts.admin')] class extends Component
 
                     <div class="flex gap-2 items-center">
                         <span class="text-[0.85rem] text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-mono">#{{ $this->activeChatId }}</span>
+                       
+                       
+                        @if ($activeUnreadCount > 0)
+                            <x-ui.button wire:click="markAsRead({{ $this->activeChatId }})" variant="default" size="sm" wire:target="markAsRead({{ $this->activeChatId }})" wire:loading.attr="disabled" class="h-8 px-3 text-xs">
+                                <span wire:loading.remove wire:target="markAsRead({{ $this->activeChatId }})" class="flex items-center gap-1.5">
+                                    <x-lucide-check-check class="w-4 h-4" /> Отметить как прочитано
+                                </span>
+                                <span wire:loading wire:target="markAsRead({{ $this->activeChatId }})" class="flex items-center gap-1.5">
+                                    <x-lucide-loader-2 class="w-4 h-4 animate-spin" />
+                                </span>
+                            </x-ui.button>
+                        @endif
+
                         @if ($chatFilter === 'archived')
                             <x-ui.button wire:click="unarchiveChat({{ $this->activeChatId }})" wire:confirm="Вернуть тикет из архива?" variant="ghost" size="icon-sm" wire:target="unarchiveChat({{ $this->activeChatId }})" title="Вернуть из архива" wire:key="btn-unarchive-{{ $this->activeChatId }}">
                                 <x-lucide-archive-restore class="w-4 h-4 text-success" wire:loading.remove wire:target="unarchiveChat({{ $this->activeChatId }})" />
@@ -493,7 +556,7 @@ new #[Layout('layouts.admin')] class extends Component
                     </div>
                 </div>
 
-                <!-- Лента сообщений -->
+               <!-- Лента сообщений -->
                 <div x-data="{ autoScroll: true }"
                     x-init="setTimeout(() => { $el.scrollTop = $el.scrollHeight; }, 50);"
                     @scroll="autoScroll = ($el.scrollHeight - $el.scrollTop - $el.clientHeight < 100)"
@@ -502,19 +565,41 @@ new #[Layout('layouts.admin')] class extends Component
                     wire:key="msg-list-{{ $this->activeChatId }}">
                     
                     @forelse ($activeMessages as $msg)
-                        @php $isMe = $msg->sender_id === auth()->id(); @endphp
-                        <div class="flex items-end gap-2 {{ $isMe ? 'justify-end' : 'justify-start' }}" wire:key="msg-{{ $msg->id }}">
-                            @if (!$isMe)
-                                <x-avatar src="{{ $partner?->avatar_url }}" name="{{ $partner?->name }}" size="xs" />
-                            @endif
-                            <div class="max-w-[80%]">
-                                <div class="text-left whitespace-pre-line break-words {{ $isMe ? 'bg-primary text-primary-foreground' : 'bg-muted text-foreground' }} rounded-2xl px-4 py-2 text-sm">{{ trim($msg->body) }}</div>
-                                <div class="text-[0.65rem] text-muted-foreground mt-1 {{ $isMe ? 'text-right' : 'text-left' }}">{{ $msg->created_at->format('d.m H:i') }}</div>
+                    @php
+                        $isSystem = $msg->type === 'system';
+                        // Проверяем, является ли отправчик сотрудником команды
+                        $isStaff = !$isSystem && $msg->sender && $msg->sender->isStaff();
+                    @endphp
+
+                    @if ($isSystem)
+                        {{-- Системное сообщение (Антифрод, алерты) --}}
+                        <div class="flex justify-center my-2" wire:key="sys-msg-{{ $msg->id }}">
+                            <div class="text-xs text-center text-amber-700 dark:text-amber-400 bg-amber-500/10 border border-amber-500/30 rounded-lg px-4 py-1.5 max-w-[90%] shadow-sm flex items-center gap-2">
+                                <x-lucide-shield-alert class="w-3.5 h-3.5 shrink-0" />
+                                <span class="whitespace-pre-line">{{ trim($msg->body) }}</span>
                             </div>
                         </div>
-                    @empty
-                        <div class="text-center text-sm text-muted-foreground py-8" wire:key="empty-msg-{{ $this->activeChatId }}">Начните диалог.</div>
-                    @endforelse
+                    @else
+                        {{-- Обычное сообщение --}}
+                        <div class="flex items-end gap-2 {{ $isStaff ? 'justify-end' : 'justify-start' }}" wire:key="msg-{{ $msg->id }}">
+                            @if (!$isStaff)
+                                <x-avatar src="{{ $msg->sender?->avatar_url }}" name="{{ $msg->sender?->name }}" size="xs" userId="{{ $msg->sender?->id }}" showStatus="true" :isOnline="$msg->sender?->is_online" />
+                            @endif
+                            <div class="max-w-[80%]">
+                                {{-- Если пишет другой админ (не я), показываем его имя --}}
+                                @if ($isStaff && $msg->sender_id !== auth()->id())
+                                    <div class="text-[10px] font-bold mb-0.5 text-primary-foreground/80 uppercase tracking-wide">
+                                        {{ $msg->sender?->name }}
+                                    </div>
+                                @endif
+                                <div class="text-left whitespace-pre-line break-words {{ $isStaff ? 'bg-primary text-primary-foreground' : 'bg-muted text-foreground' }} rounded-2xl px-4 py-2 text-sm">{{ trim($msg->body) }}</div>
+                                <div class="text-[0.65rem] text-muted-foreground mt-1 {{ $isStaff ? 'text-right' : 'text-left' }}">{{ $msg->created_at->format('d.m H:i') }}</div>
+                            </div>
+                        </div>
+                    @endif
+                @empty
+                    <div class="text-center text-sm text-muted-foreground py-8" wire:key="empty-msg-{{ $this->activeChatId }}">Начните диалог.</div>
+                @endforelse
                 </div>
 
                 <!-- Блок отправки -->

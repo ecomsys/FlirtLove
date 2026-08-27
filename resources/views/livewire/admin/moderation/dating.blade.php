@@ -110,13 +110,13 @@ new #[Layout('layouts.admin')] class extends Component
     {
         return Cache::remember('dating_admin_stats', 60, function () {
             $baseSwipeQuery = Swipe::where(function ($q) {
-                $q->whereNull('user_id')->orWhereHas('user', fn($q2) => $q2->excludeStaff());
+                $q->whereNull('user_id')->orWhereHas('user', fn($q2) => $q2->withTrashed()->excludeStaff());
             });
                 
             $baseMatchQuery = UserMatch::where(function ($q) {
-                $q->whereNull('user1_id')->orWhereHas('user1', fn($q2) => $q2->excludeStaff());
+                $q->whereNull('user1_id')->orWhereHas('user1', fn($q2) => $q2->withTrashed()->excludeStaff());
             })->where(function ($q) {
-                $q->whereNull('user2_id')->orWhereHas('user2', fn($q2) => $q2->excludeStaff());
+                $q->whereNull('user2_id')->orWhereHas('user2', fn($q2) => $q2->withTrashed()->excludeStaff());
             });
 
             return [
@@ -141,9 +141,9 @@ new #[Layout('layouts.admin')] class extends Component
         $avatarQuery = fn($q) => $q->select(['id', 'user_id', 'is_primary', 'status', 'path_thumb', 'path_medium', 'path_large', 'path_original'])->orderByDesc('is_primary')->limit(1);
 
         return Swipe::with([
-                // ФИКС: Добавлено withTrashed()
-                'user' => fn($q) => $q->withTrashed()->select('id', 'name', 'email', 'role', 'status', 'is_premium', 'premium_expires_at', 'last_seen')->with(['photos' => $avatarQuery]),
-                'targetUser' => fn($q) => $q->withTrashed()->select('id', 'name', 'email', 'role', 'status', 'is_premium', 'premium_expires_at', 'last_seen')->with(['photos' => $avatarQuery]),
+                // ФИКС: Добавлено 'deleted_at' в select!
+                'user' => fn($q) => $q->withTrashed()->select('id', 'name', 'email', 'role', 'status', 'is_premium', 'premium_expires_at', 'last_seen', 'deleted_at')->with(['photos' => $avatarQuery]),
+                'targetUser' => fn($q) => $q->withTrashed()->select('id', 'name', 'email', 'role', 'status', 'is_premium', 'premium_expires_at', 'last_seen', 'deleted_at')->with(['photos' => $avatarQuery]),
             ])
             ->where(function ($q) {
                 // ФИКС: Ищем даже удаленных юзеров
@@ -174,9 +174,9 @@ new #[Layout('layouts.admin')] class extends Component
         $avatarQuery = fn($q) => $q->select(['id', 'user_id', 'is_primary', 'status', 'path_thumb', 'path_medium', 'path_large', 'path_original'])->orderByDesc('is_primary')->limit(1);
 
         return UserMatch::with([
-                // ФИКС: Добавлено withTrashed()
-                'user1' => fn($q) => $q->withTrashed()->select('id', 'name', 'email', 'role', 'status', 'is_premium', 'premium_expires_at', 'last_seen')->with(['photos' => $avatarQuery]),
-                'user2' => fn($q) => $q->withTrashed()->select('id', 'name', 'email', 'role', 'status', 'is_premium', 'premium_expires_at', 'last_seen')->with(['photos' => $avatarQuery]),
+                // ФИКС: Добавлено 'deleted_at' в select!
+                'user1' => fn($q) => $q->withTrashed()->select('id', 'name', 'email', 'role', 'status', 'is_premium', 'premium_expires_at', 'last_seen', 'deleted_at')->with(['photos' => $avatarQuery]),
+                'user2' => fn($q) => $q->withTrashed()->select('id', 'name', 'email', 'role', 'status', 'is_premium', 'premium_expires_at', 'last_seen', 'deleted_at')->with(['photos' => $avatarQuery]),
             ])
             ->where(function ($q) {
                 $q->whereNull('user1_id')->orWhereHas('user1', fn($q2) => $q2->withTrashed()->excludeStaff());

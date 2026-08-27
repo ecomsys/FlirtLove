@@ -39,9 +39,8 @@ class Report extends Model
     }
 
     // На кого подали жалобу
-    public function reported(): BelongsTo
-    {
-        return $this->belongsTo(User::class, 'reported_id');
+    public function reported() {
+        return $this->belongsTo(User::class, 'reported_id')->withTrashed();
     }
 
     // Какой админ разбирал жалобу

@@ -125,7 +125,7 @@ new class extends Component
             } elseif ($hasUntil) {
                 $title = 'Временный бан';
                 $startDate = \Carbon\Carbon::parse($log->created_at);
-                $endDate = \Carbon\Carbon::parse($log->after['banned_until']);
+                $endDate = \Illuminate\Support\Carbon::parse($log->after['banned_until'] ?? null);
                 $days = $startDate->diffInDays($endDate);
                 $badge = ['variant' => 'destructive', 'label' => "На {$days} дн."];
                 $period = "С: <span class='text-foreground'>{$startDate->format('d.m.y H:i')}</span> | По: <span class='text-foreground'>{$endDate->format('d.m.y H:i')}</span>";

@@ -181,7 +181,18 @@ new class extends Component
                                     </div>
                                 </x-ui.table-cell>
                                 <x-ui.table-cell>
-                                    <span class="text-sm font-medium">{{ $trans->amount }} ₽</span>
+                                    @php
+                                        $amountColor = match($trans->status) {
+                                            'success' => 'text-green-500 font-semibold',
+                                            'refunded' => 'text-red-500 font-semibold',
+                                            'failed' => 'text-muted-foreground/50',
+                                            'pending' => 'text-yellow-500',
+                                            default => 'text-foreground'
+                                        };
+                                    @endphp
+                                    <span class="text-sm {{ $amountColor }}">
+                                        {{ $trans->amount }} ₽
+                                    </span>
                                 </x-ui.table-cell>
                                 <x-ui.table-cell>
                                     @if($trans->status === 'success')

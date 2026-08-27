@@ -122,8 +122,7 @@ new #[Layout('layouts.admin')] class extends Component
                     <x-user-status-sign :user="$this->user" />
                     {{ $this->user->name }}
                     <span class="text-xs text-muted-foreground font-normal">(ID: {{ $this->user->id }})</span>
-                    @if($this->user->has_active_premium) <x-lucide-crown class="w-5 h-5 text-yellow-500" /> @endif
-                    @if($this->user->is_verified) <x-lucide-badge-check class="w-5 h-5 text-blue-500" /> @endif
+                    @if($this->user->has_active_premium) <x-lucide-crown class="w-5 h-5 text-yellow-500" /> @endif                  
                 </h1>
                 <p class="text-sm text-muted-foreground">{{ $this->user->email }}</p>
             </div>

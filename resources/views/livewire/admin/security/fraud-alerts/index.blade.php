@@ -90,13 +90,26 @@ new #[Layout('layouts.admin')] class extends Component
         $this->filterVersion++;
     }
 
-      #[Computed]
+    public function resolveWithWarning(int $id, FraudAlertsAction $action): void
+    {
+        try {
+            $action->resolveWithWarning($id);
+            $this->dispatch('show-toast', type: 'success', message: 'Предупреждение отправлено в чат поддержки!');
+        } catch (\Exception $e) {
+            $this->dispatch('show-toast', type: 'error', message: 'Ошибка сервера!');
+        }
+    }
+
+       #[Computed]
     public function alerts()
     {
         $searchOperator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
 
         return FraudAlert::query()
-            // ФИКС: Грузим юзера (и его аватарки) даже если он мягко-удален (withTrashed)
+            // ФИКС: Исключаем алерты без юзера (полностью удаленные из БД) и исключаем админский состав
+            ->whereNotNull('user_id')
+            ->whereHas('user', fn($q) => $q->withTrashed()->excludeStaff())
+            // Грузим юзера (и его аватарки) даже если он мягко-удален
             ->with([
                 'user' => fn($q) => $q->withTrashed()->with(['photos' => fn($sq) => $sq->select(['id', 'user_id', 'is_primary', 'status', 'path_thumb', 'path_medium', 'path_large', 'path_original'])->orderByDesc('is_primary')->limit(1)]), 
                 'admin:id,name'
@@ -104,7 +117,6 @@ new #[Layout('layouts.admin')] class extends Component
             ->when($this->search, function ($q) use ($searchOperator) {
                 $q->where(function ($query) use ($searchOperator) {
                     $query->whereHas('user', function ($uq) use ($searchOperator) {
-                        // ФИКС: withTrashed() для поиска по имени удаленного юзера
                         $uq->withTrashed()
                            ->where('name', $searchOperator, "%{$this->search}%")
                            ->orWhere('email', $searchOperator, "%{$this->search}%");
@@ -123,6 +135,9 @@ new #[Layout('layouts.admin')] class extends Component
     public function counts(): array
     {
         $stats = FraudAlert::query()
+            // ФИКС: Применяем те же фильтры (без призраков и без админов) для корректных счетчиков
+            ->whereNotNull('user_id')
+            ->whereHas('user', fn($q) => $q->withTrashed()->excludeStaff())
             ->selectRaw("COUNT(*) as total")
             ->selectRaw("SUM(CASE WHEN status = 'open' THEN 1 ELSE 0 END) as open")
             ->selectRaw("SUM(CASE WHEN status = 'resolved' THEN 1 ELSE 0 END) as resolved")
@@ -138,7 +153,7 @@ new #[Layout('layouts.admin')] class extends Component
             'high_priority' => $stats->high_priority ?? 0,
         ];
     }
-
+    
     public function resolveAndBan(int $id, string $type = 'permanent', FraudAlertsAction $action): void
     {
         try {
@@ -359,6 +374,12 @@ new #[Layout('layouts.admin')] class extends Component
                                         </x-ui.dropdown-menu-item>
                                         <x-ui.dropdown-menu-item wire:click="resolveAndBan({{ $alert->id }}, 'permanent')" wire:confirm="Забанить навсегда и закрыть алерт?">
                                             <x-lucide-gavel class="w-4 h-4 text-red-500" /> Вечный бан
+                                        </x-ui.dropdown-menu-item>
+
+                                        <x-ui.dropdown-menu-separator />
+                                        
+                                        <x-ui.dropdown-menu-item wire:click="resolveWithWarning({{ $alert->id }})" wire:confirm="Отправить предупреждение в чат поддержки и закрыть алерт?">
+                                            <x-lucide-alert-triangle class="w-4 h-4 text-yellow-500" /> Предупредить в чате
                                         </x-ui.dropdown-menu-item>
                                     @else
                                         <x-ui.dropdown-menu-item wire:click="resolveAndBan({{ $alert->id }}, 'permanent')" wire:confirm="Закрыть алерт? (Аккаунт уже удален)">

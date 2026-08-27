@@ -53,7 +53,7 @@ new class extends Component
     #[Computed]
     public function commentsReceived()
     {
-        return PhotoComment::whereHas('photo', fn($q) => $q->where('user_id', $this->userId))
+        return PhotoComment::whereHas('photo', fn($q) => $q->withTrashed()->where('user_id', $this->userId))
             ->with([
                 'photo' => fn($q) => $q->withTrashed()->select('id', 'user_id'), 
                 'user' => $this->getAvatarQuery()

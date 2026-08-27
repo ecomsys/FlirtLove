@@ -200,7 +200,7 @@ new #[Layout('layouts.admin')] class extends Component
 
     // === ВЫЧИСЛЯЕМЫЕ СВОЙСТВА (DATA SOURCE) ===
 
-    #[Computed]
+       #[Computed]
     public function broadcasts()
     {
         $avatarQuery = fn($q) => $q->select(['user_id', 'is_primary', 'path_thumb', 'path_medium'])
@@ -210,7 +210,8 @@ new #[Layout('layouts.admin')] class extends Component
         $operator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
 
         $paginated = Broadcast::query()
-            ->with(['admin' => fn($q) => $q->select('id', 'name', 'email', 'last_seen')->with(['photos' => $avatarQuery])])
+            // ФИКС 1: withTrashed() для админа-автора рассылки
+            ->with(['admin' => fn($q) => $q->withTrashed()->select('id', 'name', 'email', 'last_seen')->with(['photos' => $avatarQuery])])
             ->when($this->search, function ($query) use ($operator) {
                 $search = '%' . $this->search . '%';
                 $query->where(function ($q) use ($search, $operator) {
@@ -236,7 +237,9 @@ new #[Layout('layouts.admin')] class extends Component
             ->all();
 
         if (!empty($targetUserIds)) {
+            // ФИКС 2: withTrashed() для юзера-получателя рассылки
             $targetUsers = User::with(['photos' => $avatarQuery])
+                ->withTrashed() // <-- ВОТ ЭТО ДОБАВИЛИ
                 ->whereIn('id', $targetUserIds)
                 ->get()
                 ->keyBy('id');

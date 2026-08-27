@@ -2,7 +2,7 @@
 
 namespace Database\Seeders;
 
-use App\Models\{AdminLog, BlogCategory, BlogPost, Broadcast, Chat, ChatParticipant, FraudAlert, Gift, Media, Message, Photo, PhotoComment, Album, Report, StopWord, SubscriptionPlan, Swipe, Transaction, User, UserGift, UserMatch, UserPreference, UserProfile, UserSubscription, Setting, Diary, DiaryComment, DiarySubscription, Rubric};
+use App\Models\{AdminLog, BlogCategory, BlogPost, Broadcast, Chat, ChatParticipant, FraudAlert, Gift, Media, Message, Photo, PhotoComment, Album, Report, StopWord, SubscriptionPlan, Swipe, Transaction, User, UserGift, UserMatch, UserPreference, UserProfile, UserSubscription, Setting, Diary, DiaryComment, DiarySubscription, Rubric, SupportTemplate, GeoIPLocation};
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -32,10 +32,12 @@ class DatabaseSeeder extends Seeder
         $this->command->info('');
 
         // ============================================
-        // 3. ОЧИСТКА КЕША НАСТРОЕК
+        // 3. ОЧИСТКА КЭША НАСТРОЕК
         // ============================================
         Cache::forget('settings_all'); 
         Cache::forget('stop_words_active'); // Сбрасываем кэш стоп-слов  
+        Cache::forget('geoip_blocked_iso_codes'); // Сбрасываем кэш гео-блокировок
+        Cache::forget('geoip_feed_blocked_ids'); // Сбрасываем кэш гео-блокировок
         $this->command->info('🗑️ Кеш настроек и безопасности очищен');
         $this->command->info('');
 
@@ -62,7 +64,7 @@ class DatabaseSeeder extends Seeder
             StopWordSeeder::class,
             PageSeeder::class,  
             RubricSeeder::class,
-            BlogSeeder::class, // <--- ДОБАВЛЕНО СЮДА
+            BlogSeeder::class,
         ]);
 
         // ЭТАП 3: КОНТЕНТ ЮЗЕРОВ
@@ -106,11 +108,13 @@ class DatabaseSeeder extends Seeder
             UserBlockSeeder::class,
         ]);
 
-        // ЭТАП 8: МАРКЕТИНГ, ЛОГИ И ГЕО
-        $this->command->info('📌 ЭТАП 8: Рассылки, логи и гео-справочники');
+        // ЭТАП 8: МАРКЕТИНГ, ЛОГИ, ГЕО И ПОДДЕРЖКА
+        $this->command->info('📌 ЭТАП 8: Рассылки, логи, гео и поддержка');
         $this->call([
             BroadcastSeeder::class,
             TestLogsSeeder::class,            
+            SupportTemplateSeeder::class,
+            GeoIPLocationsSeeder::class, // Если файла нет, просто удали эту строку
         ]);
 
         $this->command->info('');
@@ -133,11 +137,8 @@ class DatabaseSeeder extends Seeder
         $this->command->info('   │ 📔 Дневников              │ ' . str_pad(Diary::count(), 8, ' ', STR_PAD_LEFT) . ' │');
         $this->command->info('   │ 💬 Комментариев (дневник) │ ' . str_pad(DiaryComment::count(), 8, ' ', STR_PAD_LEFT) . ' │');
         $this->command->info('   │ 📁 Рубрик                 │ ' . str_pad(Rubric::count(), 8, ' ', STR_PAD_LEFT) . ' │');
-        
-        // ДОБАВЛЕННАЯ СТАТИСТИКА БЛОГА
         $this->command->info('   │ 📰 Рубрик (блог)         │ ' . str_pad(BlogCategory::count(), 8, ' ', STR_PAD_LEFT) . ' │');
         $this->command->info('   │ 📝 Статей (блог)         │ ' . str_pad(BlogPost::count(), 8, ' ', STR_PAD_LEFT) . ' │');
-
         $this->command->info('   │ 👉 Свайпов                │ ' . str_pad(Swipe::count(), 8, ' ', STR_PAD_LEFT) . ' │');
         $this->command->info('   │ ❤️ Матчей                 │ ' . str_pad(UserMatch::count(), 8, ' ', STR_PAD_LEFT) . ' │');
         $this->command->info('   │ 💌 Чатов                  │ ' . str_pad(Chat::count(), 8, ' ', STR_PAD_LEFT) . ' │');
@@ -152,6 +153,8 @@ class DatabaseSeeder extends Seeder
         $this->command->info('   │ 🕵️ Логов админа           │ ' . str_pad(AdminLog::count(), 8, ' ', STR_PAD_LEFT) . ' │');
         $this->command->info('   │ ⚙️ Настроек               │ ' . str_pad(Setting::count(), 8, ' ', STR_PAD_LEFT) . ' │');
         $this->command->info('   │ 📨 Рассылок               │ ' . str_pad(Broadcast::count(), 8, ' ', STR_PAD_LEFT) . ' │');
+        $this->command->info('   │ 💬 Шаблонов поддержки     │ ' . str_pad(SupportTemplate::count(), 8, ' ', STR_PAD_LEFT) . ' │');
+        $this->command->info('   │ 🌍 Гео-локаций           │ ' . str_pad(GeoIPLocation::count(), 8, ' ', STR_PAD_LEFT) . ' │');
         $this->command->info('   └───────────────────────────┴────────────┘');
         
         $this->command->info('');
@@ -176,6 +179,7 @@ class DatabaseSeeder extends Seeder
                 chat_participants,
                 chats,
                 fraud_alerts,
+                geoip_locations,
                 media, 
                 messages,
                 photo_comments,
@@ -183,6 +187,7 @@ class DatabaseSeeder extends Seeder
                 albums,
                 reports,
                 stop_words,
+                support_templates,
                 swipes,
                 user_gifts,
                 user_matches,
@@ -211,12 +216,14 @@ class DatabaseSeeder extends Seeder
             Message::query()->delete();
             Chat::query()->delete();
             FraudAlert::query()->delete();         
+            GeoIPLocation::query()->delete(); // ФИКС: Очистка гео
             Media::query()->delete(); 
             PhotoComment::query()->delete();
             Photo::query()->delete();
             Album::query()->delete();
             Report::query()->delete();
             StopWord::query()->delete();
+            SupportTemplate::query()->delete(); // ФИКС: Очистка шаблонов
             Swipe::query()->delete();
             UserGift::query()->delete();
             UserMatch::query()->delete();
@@ -236,10 +243,10 @@ class DatabaseSeeder extends Seeder
             
             $tables = [
                 'users', 'user_profiles', 'user_preferences', 'albums', 'photos', 
-                'photo_comments', 'reports', 'stop_words', 'swipes', 'user_matches', 
+                'photo_comments', 'reports', 'stop_words', 'support_templates', 'swipes', 'user_matches', 
                 'chats', 'chat_participants', 'messages', 'gifts', 'user_gifts', 
                 'subscription_plans', 'user_subscriptions', 'transactions', 'fraud_alerts', 
-                'admin_logs', 'broadcasts', 'settings', 'media',
+                'admin_logs', 'broadcasts', 'settings', 'media', 'geoip_locations',
                 'blog_categories', 
                 'blog_posts',      
                 'diary_comments', 'diary_subscriptions', 'diaries', 'rubrics'               

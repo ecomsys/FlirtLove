@@ -5,6 +5,7 @@ use App\Models\AdminLog;
 use Livewire\Attributes\Layout;
 use Livewire\Volt\Component;
 use Livewire\WithPagination;
+use Livewire\Attributes\Computed;
 
 new #[Layout('layouts.admin')] class extends Component 
 {
@@ -14,12 +15,23 @@ new #[Layout('layouts.admin')] class extends Component
     #[Url(as: 'q', except: '')]
     public string $search = '';
 
-    /** @var int|null ID активного чата для просмотра переписки */
+        /** @var int|null ID активного чата для просмотра переписки */
     #[Url(as: 'chat', except: '')]
     public ?int $activeChatId = null;
 
+    /** @var string Фильтр блокировки чата (all, locked, unlocked) */
+    #[Url(as: 'lock', except: 'all')]
+    public string $lockFilter = 'all';
+
     /** @var string URL для кнопки "Назад" */
     public string $backUrl = '';
+
+    public function updatedLockFilter(): void
+    {
+        $this->resetPage();
+        $this->activeChatId = null;
+    }
+   
 
     public function mount(): void
     {
@@ -30,7 +42,7 @@ new #[Layout('layouts.admin')] class extends Component
             : route('admin.dashboard');
     }
 
-    public function updatedSearch(): void
+        public function updatedSearch(): void
     {
         $this->resetPage();
 
@@ -39,11 +51,44 @@ new #[Layout('layouts.admin')] class extends Component
             $chat = Chat::find((int) $this->search);
             if ($chat) {
                 $this->activeChatId = $chat->id;
+                // ФИКС: Автоматически переключаем фильтр на нужную вкладку, чтобы чат не потерялся
+                $this->lockFilter = $chat->is_locked ? 'locked' : 'unlocked';
                 return;
             }
         }
         
         $this->activeChatId = null;
+    }
+
+    public function setLockFilter(string $status): void
+    {
+        $this->lockFilter = $status;
+        $this->search = ''; // ФИКС: Очищаем поиск при ручной смене фильтра
+        $this->resetPage();
+        $this->activeChatId = null;
+    }
+
+    /**
+     * Счетчики для кнопок фильтра (все, активные, заблокированные).
+     */
+    #[Computed]
+    public function chatStats(): array
+    {
+        $baseQuery = Chat::where('type', 'private')
+            ->whereHas('participants', fn($q) => $q->whereHas('user', fn($uq) => $uq->withTrashed()->excludeStaff()));
+
+        $stats = (clone $baseQuery)->selectRaw("COUNT(*) as total")
+            ->selectRaw("SUM(CASE WHEN is_locked = true THEN 1 ELSE 0 END) as locked")
+            ->first();
+
+        $total = $stats->total ?? 0;
+        $locked = $stats->locked ?? 0;
+
+        return [
+            'total' => $total,
+            'locked' => $locked,
+            'unlocked' => $total - $locked,
+        ];
     }
 
     public function clearSearch(): void
@@ -95,9 +140,11 @@ new #[Layout('layouts.admin')] class extends Component
         $operator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
         $avatarQuery = fn($q) => $q->select(['id', 'user_id', 'is_primary', 'status', 'path_thumb', 'path_medium', 'path_large', 'path_original'])->orderByDesc('is_primary')->limit(1);
 
-        // ФИКС: Жадно загружаем участников и отправителей сообщений ВКЛЮЧАЯ мягко-удаленных (withTrashed)
         $chats = Chat::where('type', 'private')
             ->whereHas('participants', fn($q) => $q->whereHas('user', fn($uq) => $uq->withTrashed()->excludeStaff()))
+            // ФИКС: Добавляем фильтр по блокировке
+            ->when($this->lockFilter === 'locked', fn($q) => $q->where('is_locked', true))
+            ->when($this->lockFilter === 'unlocked', fn($q) => $q->where('is_locked', false))
             ->with([
                 'participants' => fn($q) => $q->with(['user' => fn($uq) => $uq->withTrashed()->with(['photos' => $avatarQuery])]), 
                 'messages' => fn($q) => $q->latest()->limit(1)
@@ -163,8 +210,22 @@ new #[Layout('layouts.admin')] class extends Component
     <!-- Интерфейс чата (Список + Переписка) -->
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 bg-card border border-border rounded-lg p-4 min-h-[calc(100vh-16rem)]">
 
-        <!-- Левая панель: Список чатов -->
+               <!-- Левая панель: Список чатов -->
         <div wire:poll.15s class="lg:col-span-1 border-r border-border pr-4 flex flex-col h-[calc(100vh-16rem)]">
+
+                       <!-- ФИЛЬТР БЛОКИРОВКИ -->
+            <div class="flex gap-1.5 mb-3 shrink-0">
+                <x-ui.button title="Все чаты" wire:click="setLockFilter('all')" variant="{{ $lockFilter === 'all' ? 'default' : 'secondary' }}" size="sm" class="flex-1 text-xs">
+                    Все <x-ui.badge size="xs" class="ml-1">{{ $this->chatStats['total'] }}</x-ui.badge>
+                </x-ui.button>
+                <x-ui.button title="Активные чаты" wire:click="setLockFilter('unlocked')" variant="{{ $lockFilter === 'unlocked' ? 'default' : 'secondary' }}" size="sm" class="flex-1 text-xs">
+                    Акт. <x-ui.badge size="xs" class="ml-1">{{ $this->chatStats['unlocked'] }}</x-ui.badge>
+                </x-ui.button>
+                <x-ui.button title="Заблокированные чаты" wire:click="setLockFilter('locked')" variant="{{ $lockFilter === 'locked' ? 'destructive' : 'secondary' }}" size="sm" class="flex-1 text-xs">
+                    <x-lucide-lock class="w-3 h-3 inline mr-1" /><x-ui.badge size="xs" class="ml-1">{{ $this->chatStats['locked'] }}</x-ui.badge>
+                </x-ui.button>
+            </div>
+
             <div class="flex-1 min-h-0 overflow-y-auto space-y-2 pr-1 little-scroll">
                 @forelse ($chats as $chat)
                     @php 

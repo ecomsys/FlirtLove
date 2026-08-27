@@ -6,6 +6,7 @@ use App\Models\AdminLog;
 use App\Models\FraudAlert;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use App\Models\Chat;
 
 class FraudAlertsAction
 {
@@ -48,6 +49,48 @@ class FraudAlertsAction
                 ]
             );
         });
+    }
+
+        /**
+     * Вынести предупреждение и закрыть алерт.
+     * Создает системное сообщение в чате поддержки юзера.
+     */
+    public function resolveWithWarning(int $alertId): void
+    {
+        $alert = FraudAlert::findOrFail($alertId);
+        
+        // Закрываем алерт
+        $before = $alert->only(['id', 'status', 'trigger_type', 'severity']);
+        $alert->resolve(Auth::id());
+        $after = $alert->fresh()->only(['id', 'status', 'admin_id', 'resolved_at']);
+
+        AdminLog::record(
+            'fraud_alert.warning',
+            $alert,
+            Auth::user(),
+            $before,
+            [
+                'description' => 'Алерт разобран, вынесено предупреждение',
+                'action' => 'warning',
+                'after_status' => $after
+            ]
+        );
+
+        // Отправляем сообщение в чат поддержки
+        if ($alert->user_id && $alert->user) {
+            $admin = Auth::user();
+            $chat = Chat::getOrCreateSupportChat($admin->id, $alert->user->id);
+            
+            $warningText = "⚠️ Внимание! Администрация вынесла вам предупреждение за нарушение правил сервиса (Причина: {$alert->trigger_label}). Пожалуйста, ознакомьтесь с правилами платформы. При повторных нарушениях аккаунт может быть заблокирован.";
+            
+            $chat->messages()->create([
+                'sender_id' => null, // Системное сообщение
+                'type' => 'system',
+                'body' => $warningText,
+            ]);
+            
+            $chat->update(['last_message_at' => now()]);
+        }
     }
 
     /**

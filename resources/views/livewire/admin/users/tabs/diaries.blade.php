@@ -23,6 +23,7 @@ new class extends Component
     public function updatedSearch(): void
     {
         $this->resetPage();
+         unset($this->diaries); 
     }
 
     public function setRubricFilter(string $filter): void

@@ -265,9 +265,22 @@ new #[Layout('layouts.admin')] class extends Component
             ->latest('id') 
             ->paginate($this->perPage);
 
-                $reports->loadMorph('reportable', [
-            Photo::class => ['user' => fn($q) => $q->withTrashed()->select('id', 'name', 'status', 'deleted_at')]
-        ]);
+        // Ручная жадная загрузка полиморфной связи с поддержкой withTrashed
+        $photoIds = $reports->where('reportable_type', Photo::class)->pluck('reportable_id')->filter();
+        
+        if ($photoIds->isNotEmpty()) {
+            $photos = Photo::withTrashed()
+                ->with(['user' => fn($q) => $q->withTrashed()->select('id', 'name', 'status', 'deleted_at')])
+                ->whereIn('id', $photoIds)
+                ->get()
+                ->keyBy('id');
+            
+            $reports->each(function ($report) use ($photos) {
+                if ($report->reportable_type === Photo::class) {
+                    $report->setRelation('reportable', $photos->get($report->reportable_id));
+                }
+            });
+        }      
 
         return $reports;
     }

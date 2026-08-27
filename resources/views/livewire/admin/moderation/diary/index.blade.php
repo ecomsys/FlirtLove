@@ -269,7 +269,7 @@ new #[Layout('layouts.admin')] class extends Component
         $query->when($this->search, function ($q) use ($operator) {
             $q->where(function ($q) use ($operator) {
                 $q->where('title', $operator, "%{$this->search}%")
-                  ->orWhereHas('user', fn($uq) => $uq->where('name', $operator, "%{$this->search}%"));
+                  ->orWhereHas('user', fn($uq) => $uq->withTrashed()->where('name', $operator, "%{$this->search}%"));
                 if (is_numeric($this->search)) {
                     $q->orWhere('id', (int) $this->search);
                 }
@@ -469,7 +469,7 @@ new #[Layout('layouts.admin')] class extends Component
             ->when($this->rubricSearch, function ($q) use ($operator) {
                 $q->where(function ($q) use ($operator) {
                     $q->where('name', $operator, "%{$this->rubricSearch}%")
-                      ->orWhereHas('user', fn($uq) => $uq->where('name', $operator, "%{$this->rubricSearch}%"));
+                      ->orWhereHas('user', fn($uq) => $uq->withTrashed()->where('name', $operator, "%{$this->rubricSearch}%"));
                     
                     if (is_numeric($this->rubricSearch)) {
                         $q->orWhere('id', (int) $this->rubricSearch);
