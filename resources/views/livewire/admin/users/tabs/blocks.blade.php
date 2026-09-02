@@ -1,7 +1,6 @@
 <?php
 
-use App\Enums\UserBlockReason;
-use App\Models\AdminLog;
+use App\Actions\Admin\ManageUserBlocksAction;
 use App\Models\UserBlock;
 use App\Models\User;
 use Livewire\Attributes\Computed;
@@ -25,6 +24,13 @@ new class extends Component
     public function mount(int $userId): void
     {
         $this->userId = $userId;
+    }
+
+    // ФИКС: Добавили недостающее свойство user
+    #[Computed]
+    public function user(): User
+    {
+        return User::withTrashed()->findOrFail($this->userId);
     }
 
     private function getAvatarQuery(): \Closure
@@ -52,16 +58,13 @@ new class extends Component
             ->paginate(10, ['*'], 'blockersPage');
     }
 
-    // НОВЫЙ МЕТОД: Снятие блокировки админом
-    public function unblockUser(int $blockId): void
+    // ФИКС: Делегируем логику в Action
+    public function unblockUser(int $blockId, ManageUserBlocksAction $action): void
     {
         $block = UserBlock::find($blockId);
         if ($block) {
-            $logData = $block->toArray();
-            $block->delete();
-
-            // Записываем в журнал админа
-            AdminLog::record('user_block.delete', $this->user, auth()->user(), $logData, ['deleted' => true]);
+            $action->unblock($block, auth()->user());
+            
             $this->dispatch('show-toast', type: 'success', message: 'Блокировка снята администратором.');
             $this->refreshUser();
         }
@@ -75,6 +78,7 @@ new class extends Component
     }
 }; 
 ?>
+
 
 <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
     

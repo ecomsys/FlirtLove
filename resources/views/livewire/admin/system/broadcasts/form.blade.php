@@ -237,7 +237,7 @@ new #[Layout('layouts.admin')] class extends Component
         }
     }
 
-    /**
+       /**
      * Основное сохранение (создание или обновление).
      * Очищает HTML от XSS, формирует данные, пишет логи и редиректит.
      *
@@ -262,10 +262,8 @@ new #[Layout('layouts.admin')] class extends Component
                     'user_name' => $this->selectedUserName,
                 ];
             } else {
-                // Вычищаем пустые строки
                 $targetAudience = array_filter($this->filters, fn($value) => !is_null($value) && $value !== '');
                 
-                // ПРЕОБРАЗУЕМ СТРОКИ В НАСТОЯЩИЕ БУЛЕВЫ ЗНАЧЕНИЯ ДЛЯ БД
                 if (isset($targetAudience['is_premium'])) {
                     $targetAudience['is_premium'] = $targetAudience['is_premium'] === 'true';
                 }
@@ -291,20 +289,54 @@ new #[Layout('layouts.admin')] class extends Component
                 'scheduled_at' => $this->scheduledDate ?: null,
             ];
 
-            $logFields = ['title', 'message', 'email_body', 'type', 'data', 'target_audience', 'status', 'scheduled_at'];
-
             if ($this->broadcast && $this->broadcast->exists) {
-                $before = $this->broadcast->only($logFields);
-                $this->broadcast->update($data);
-                $after = $this->broadcast->fresh()->only($logFields);
+                // ФИКС: Берем только ключевые поля для диффа, чтобы не писать весь текст в БД
+                $before = [
+                    'title' => $this->broadcast->getOriginal('title'), 
+                    'status' => $this->broadcast->getOriginal('status'),
+                    'type' => $this->broadcast->getOriginal('type')
+                ];
                 
-                AdminLog::record('broadcast.update', $this->broadcast, auth()->user(), $before, $after);
+                $this->broadcast->update($data);
+                $this->broadcast->refresh();
+                
+                $targetUserId = $this->broadcast->target_audience['user_id'] ?? null;
+
+                $after = [
+                    'title' => $this->broadcast->title, 
+                    'status' => $this->broadcast->status,
+                    'context' => [
+                        'broadcast_id' => $this->broadcast->id,
+                        'title' => $this->broadcast->title,
+                        'type' => $this->broadcast->type,
+                        'admin_id' => auth()->id()
+                    ]
+                ];
+
+                $participants = $targetUserId ? [$targetUserId] : [];
+                
+                AdminLog::record('broadcast.update', $this->broadcast, auth()->user(), $before, $after, participants: $participants);
                 Log::info("Админ обновил рассылку", ['broadcast_id' => $this->broadcast->id, 'admin_id' => auth()->id()]);
                 
                 $this->dispatch('show-toast', type: 'success', message: 'Рассылка обновлена!');
             } else {
                 $broadcast = Broadcast::create($data);
-                AdminLog::record('broadcast.create', $broadcast, auth()->user());
+                
+                $targetUserId = $broadcast->target_audience['user_id'] ?? null;
+
+                $after = [
+                    'status' => 'created', 
+                    'context' => [
+                        'broadcast_id' => $broadcast->id,
+                        'title' => $broadcast->title,
+                        'type' => $broadcast->type,
+                        'admin_id' => auth()->id()
+                    ]
+                ];
+
+                $participants = $targetUserId ? [$targetUserId] : [];
+
+                AdminLog::record('broadcast.create', $broadcast, auth()->user(), null, $after, participants: $participants);
                 Log::info("Админ создал рассылку", ['broadcast_id' => $broadcast->id, 'admin_id' => auth()->id()]);
                 
                 $message = $status === 'scheduled' ? 'Рассылка запланирована!' : 'Рассылка сохранена как черновик!';

@@ -1,8 +1,7 @@
 <?php
 
-use App\Models\AdminLog;
+use App\Actions\Admin\ManagePagesAction;
 use App\Models\Page;
-use Illuminate\Support\Facades\Log;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Url;
@@ -13,139 +12,67 @@ new #[Layout('layouts.admin')] class extends Component
 {
     use WithPagination;
 
-    /** @var string Поисковый запрос */
     #[Url(as: 'q', except: '')]
     public string $search = '';
     
-    /** @var string Текущий фильтр статуса */
     #[Url(as: 'status', except: 'all')]
     public string $statusFilter = 'all';
     
-    /** @var int Количество элементов на странице */
     public int $perPage = 15;
 
-    /** @var string URL для кнопки "Назад" */
     public string $backUrl = '';
     
-    /** @var array Массив выбранных ID страниц для массовых действий */
     public array $selected = [];
-    
-    /** @var bool Состояние чекбокса "Выбрать всё" на текущей странице */
     public bool $selectAll = false;
-    
-    /** @var string Выбранное массовое действие (delete, activate, draft) */
     public string $bulkAction = '';
 
-    /**
-     * Удаление одной страницы по ID.
-     * Логирует действие в админ-лог и системный лог.
-     *
-     * @param int $id ID страницы
-     * @return void
-     */
-    public function deletePage(int $id): void
+    public function mount(): void
     {
-        try {
-            $page = Page::findOrFail($id);
-            AdminLog::record('page.delete', $page, auth()->user());
-            $page->delete();
-            
-            Log::info("Админ удалил страницу", ['page_id' => $id, 'admin_id' => auth()->id()]);
-            $this->dispatch('show-toast', type: 'success', message: 'Страница удалена');
-            $this->clearComputedCache();
-        } catch (\Exception $e) {
-            Log::error("Ошибка при удалении страницы: " . $e->getMessage(), ['page_id' => $id]);
-            $this->dispatch('show-toast', type: 'error', message: 'Ошибка сервера при удалении!');
-        }
-    }
-
-    /**
-     * Переключение статуса публикации страницы (Опубликована / Черновик).
-     *
-     * @param int $id ID страницы
-     * @return void
-     */
-    public function toggleStatus(int $id): void
-    {
-        try {
-            $page = Page::findOrFail($id);
-            $oldStatus = $page->is_active;
-            
-            $page->update(['is_active' => !$oldStatus]);
-            
-            AdminLog::record('page.update', $page, auth()->user(), ['is_active' => $oldStatus], ['is_active' => !$oldStatus]);
-            
-            Log::info("Админ изменил статус страницы", [
-                'page_id' => $id, 
-                'old_status' => $oldStatus, 
-                'new_status' => !$oldStatus, 
-                'admin_id' => auth()->id()
-            ]);
-            
-            $this->dispatch('show-toast', 
-                type: 'success', 
-                message: !$oldStatus ? 'Страница опубликована' : 'Страница снята с публикации'
-            );
-            $this->clearComputedCache();
-        } catch (\Exception $e) {
-            Log::error("Ошибка при смене статуса страницы: " . $e->getMessage(), ['page_id' => $id]);
-            $this->dispatch('show-toast', type: 'error', message: 'Ошибка сервера при смене статуса!');
-        }
-    }
-
-    /**
-     * Дублирование страницы.
-     * Создает копию с уникальным слагом и статусом "Черновик".
-     *
-     * @param int $id ID исходной страницы
-     * @return void
-     */
-    public function duplicatePage(int $id): void
-    {
-        try {
-            $page = Page::findOrFail($id);
-            $new = $page->replicate();
-            $new->slug = $page->slug . '-copy-' . time();
-            $new->title = $page->title . ' (Копия)';
-            $new->is_active = false; 
-            $new->save();
-
-            AdminLog::record('page.create', $new, auth()->user());
-            
-            Log::info("Админ продублировал страницу", [
-                'source_page_id' => $id, 
-                'new_page_id' => $new->id, 
-                'admin_id' => auth()->id()
-            ]);
-
-            $this->dispatch('show-toast', type: 'success', message: 'Страница продублирована');
-            $this->clearComputedCache();
-        } catch (\Exception $e) {
-            Log::error("Ошибка при дублировании страницы: " . $e->getMessage(), ['page_id' => $id]);
-            $this->dispatch('show-toast', type: 'error', message: 'Ошибка сервера при дублировании!');
-        }
-    }
-
-  
-       public function mount(): void
-    {
-        // ФИКС: Запоминаем URL "Назад" только при первой загрузке
         $previousUrl = url()->previous();
         $this->backUrl = ($previousUrl && $previousUrl !== url()->current()) 
             ? $previousUrl 
             : route('admin.dashboard');
     }
 
-      /**
-     * Установка фильтра статуса и сброс пагинации.
-     *
-     * @param string $status Статус фильтрации (all, active, draft)
-     * @return void
-     */
+    public function deletePage(int $id, ManagePagesAction $action): void
+    {
+        $page = Page::find($id);
+        if (!$page) return;
+
+        $action->delete($page, auth()->user());
+        $this->dispatch('show-toast', type: 'success', message: 'Страница удалена');
+        $this->clearComputedCache();
+    }
+
+    public function toggleStatus(int $id, ManagePagesAction $action): void
+    {
+        $page = Page::find($id);
+        if (!$page) return;
+
+        $action->toggleStatus($page, auth()->user());
+        
+        $this->dispatch('show-toast', 
+            type: 'success', 
+            message: $page->fresh()->is_active ? 'Страница опубликована' : 'Страница снята с публикации'
+        );
+        $this->clearComputedCache();
+    }
+
+    public function duplicatePage(int $id, ManagePagesAction $action): void
+    {
+        $page = Page::find($id);
+        if (!$page) return;
+
+        $action->duplicate($page, auth()->user());
+
+        $this->dispatch('show-toast', type: 'success', message: 'Страница продублирована');
+        $this->clearComputedCache();
+    }
+
     public function setStatusFilter(string $status): void
     {
         $this->statusFilter = $status;
-        $this->search = ''; // ФИКС: Очищаем поиск при смене вкладки
+        $this->search = '';
         $this->resetPage();
         $this->clearComputedCache();
     }
@@ -169,13 +96,6 @@ new #[Layout('layouts.admin')] class extends Component
         unset($this->counts);
     }
 
-    /**
-     * Обработка чекбокса "Выбрать всё".
-     * Извлекает коллекцию из пагинатора для корректного получения ID текущей страницы.
-     *
-     * @param mixed $value Значение чекбокса (true/false)
-     * @return void
-     */
     public function updatedSelectAll($value): void
     {
         if ($value) {
@@ -185,83 +105,37 @@ new #[Layout('layouts.admin')] class extends Component
         }
     }
 
-    /**
-     * Очистка выбранных элементов и сброс чекбокса "Выбрать всё".
-     *
-     * @return void
-     */
     public function clearSelection(): void
     {
         $this->selected = [];
         $this->selectAll = false;
     }
 
-    /**
-     * Применение массового действия к выбранным страницам.
-     * Поддерживает удаление, публикацию и снятие с публикации.
-     *
-     * @return void
-     */
-    public function applyBulkAction(): void
+    public function applyBulkAction(ManagePagesAction $action): void
     {
         if (empty($this->selected) || empty($this->bulkAction)) {
             return;
         }
 
-        $pages = Page::whereIn('id', $this->selected)->get();
-        $admin = auth()->user();
-        $message = '';
+        $count = $action->bulkAction($this->selected, $this->bulkAction, auth()->user());
 
-        try {
-            foreach ($pages as $page) {
-                if ($this->bulkAction === 'delete') {
-                    AdminLog::record('page.delete', $page, $admin);
-                    $page->delete();
-                    Log::info("Массовое удаление: страница #{$page->id} удалена", ['admin_id' => $admin->id]);
-                    $message = 'Страницы удалены';
-                } elseif ($this->bulkAction === 'activate') {
-                    if (!$page->is_active) {
-                        $page->update(['is_active' => true]);
-                        AdminLog::record('page.update', $page, $admin, ['is_active' => false], ['is_active' => true]);
-                        Log::info("Массовая активация: страница #{$page->id} опубликована", ['admin_id' => $admin->id]);
-                    }
-                    $message = 'Выбранные страницы опубликованы';
-                } elseif ($this->bulkAction === 'draft') {
-                    if ($page->is_active) {
-                        $page->update(['is_active' => false]);
-                        AdminLog::record('page.update', $page, $admin, ['is_active' => true], ['is_active' => false]);
-                        Log::info("Массовое снятие: страница #{$page->id} снята с публикации", ['admin_id' => $admin->id]);
-                    }
-                    $message = 'Выбранные страницы сняты с публикации';
-                }
-            }
+        $messages = [
+            'delete' => "Удалено страниц: {$count}",
+            'activate' => "Опубликовано страниц: {$count}",
+            'draft' => "Снято с публикации: {$count}"
+        ];
 
-            $this->dispatch('show-toast', type: 'success', message: $message);
-            $this->clearComputedCache();
-        } catch (\Exception $e) {
-            Log::error("Ошибка при массовом действии со страницами: " . $e->getMessage(), [
-                'selected_ids' => $this->selected,
-                'action' => $this->bulkAction
-            ]);
-            $this->dispatch('show-toast', type: 'error', message: 'Ошибка сервера при выполнении действия!');
-        }
-
+        $this->dispatch('show-toast', type: 'success', message: $messages[$this->bulkAction] ?? 'Действие выполнено');
+        $this->clearComputedCache();
         $this->clearSelection();
         $this->bulkAction = '';
     }
 
-    /**
-     * Получение списка страниц с фильтрацией и пагинацией.
-     * Внимание: Жесткое ограничение perPage (max 100) для защиты от DoS-атак.
-     *
-     * @return \Illuminate\Contracts\Pagination\LengthAwarePaginator
-     */
     #[Computed]
     public function pages()
     {
         $perPage = min(max($this->perPage, 1), 100);
-
-         $searchOperator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
+        $searchOperator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
 
         return Page::query()
             ->when($this->search, function ($query) use ($searchOperator) {
@@ -279,12 +153,6 @@ new #[Layout('layouts.admin')] class extends Component
             ->paginate($perPage);
     }
 
-    /**
-     * Подсчет количества страниц для вкладок фильтра.
-     * Оптимизация: 1 запрос в БД вместо 3-х с использованием условной агрегации.
-     *
-     * @return array
-     */
     #[Computed]
     public function counts(): array
     {

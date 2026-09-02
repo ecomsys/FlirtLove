@@ -4,67 +4,75 @@ namespace App\Actions\Admin;
 
 use App\Models\AdminLog;
 use App\Models\GeoIPLocation;
+use App\Models\User;
 use App\Services\GeoIPBlockService;
-use Illuminate\Support\Facades\Auth;
 
 class GeoIPLocationAction
 {
     /**
      * Переключить запрет регистрации для локации.
      */
-    public function toggleRegistration(GeoIPLocation $location): void
+    public function toggleRegistration(GeoIPLocation $location, User $admin): void
     {
-        $before = $this->prepareLogData($location);
+        $before = ['is_registration_blocked' => $location->getOriginal('is_registration_blocked')];
         
         $location->update(['is_registration_blocked' => !$location->is_registration_blocked]);
+        $location->refresh();
         
-        $after = $this->prepareLogData($location->fresh());
-
+        // Сохраняем твою очистку кэша!
         app(GeoIPBlockService::class)->clearCache();
 
-        AdminLog::record(
-            'geo.toggle_registration',
-            $location,
-            Auth::user(),
-            $before,
-            $after
-        );
+        $after = [
+            'is_registration_blocked' => $location->is_registration_blocked, 
+            'toggled_by' => $admin->id,
+            'context' => $this->prepareLogData($location, $admin)
+        ];
+
+        AdminLog::record('geo.toggle_registration', $location, $admin, $before, $after);
     }
 
     /**
      * Переключить скрытие из ленты для локации.
      */
-    public function toggleFeed(GeoIPLocation $location): void
+    public function toggleFeed(GeoIPLocation $location, User $admin): void
     {
-        $before = $this->prepareLogData($location);
+        $before = ['is_feed_blocked' => $location->getOriginal('is_feed_blocked')];
         
         $location->update(['is_feed_blocked' => !$location->is_feed_blocked]);
+        $location->refresh();
         
-        $after = $this->prepareLogData($location->fresh());
-
+        // Сохраняем твою очистку кэша!
         app(GeoIPBlockService::class)->clearCache();
 
-        AdminLog::record(
-            'geo.toggle_feed',
-            $location,
-            Auth::user(),
-            $before,
-            $after
-        );
+        $after = [
+            'is_feed_blocked' => $location->is_feed_blocked, 
+            'toggled_by' => $admin->id,
+            'context' => $this->prepareLogData($location, $admin)
+        ];
+
+        AdminLog::record('geo.toggle_feed', $location, $admin, $before, $after);
     }
 
     /**
-     * Хелпер для формирования красивого лога с привязкой к родителю.
+     * Хелпер для формирования красивого контекста лога с привязкой к родителю.
      */
-    private function prepareLogData(GeoIPLocation $location): array
+    private function prepareLogData(GeoIPLocation $location, User $admin): array
     {
-        $data = $location->only(['id', 'name', 'type', 'is_registration_blocked', 'is_feed_blocked']);
+        $data = [
+            'location_id' => $location->id,
+            'location_name' => $location->name,
+            'iso_code' => $location->iso_code,
+            'type' => $location->type,
+            'admin_id' => $admin->id
+        ];
         
         // Если есть родитель (например, страна у региона), добавляем его в лог для контекста
         if ($location->parent_id) {
             $parent = $location->parent;
             if ($parent) {
-                $data['parent_location'] = "{$parent->name} ({$parent->iso_code ?? '—'})";
+                // ФИКС: Вынесли ?? в отдельную переменную, чтобы PHP не ругался на синтаксис
+                $parentIso = $parent->iso_code ?? '—';
+                $data['parent_location'] = "{$parent->name} ({$parentIso})";
             }
         }
         

@@ -124,8 +124,17 @@ new #[Layout('layouts.admin')] class extends Component
             'sort_order' => (BlogCategory::max('sort_order') ?? 0) + 1,
         ]);
 
-        $this->category_id = (string) $category->id;
+        // НОВОЕ: Логируем создание рубрики
+        AdminLog::record('blog_category.create', $category, auth()->user(), null, [
+            'status' => 'created',
+            'context' => [
+                'category_id' => $category->id,
+                'name' => $category->name,
+                'admin_id' => auth()->id()
+            ]
+        ]);
 
+        $this->category_id = (string) $category->id;
         $this->showCategoryModal = false;
         $this->newCategoryName = '';
         
@@ -139,21 +148,29 @@ new #[Layout('layouts.admin')] class extends Component
         $category = BlogCategory::find($id);
         if (!$category) return;
 
-        // Защита: если удаляем рубрику, которая сейчас выбрана — сбрасываем выбор
+        $categoryId = $category->id;
+        $categoryName = $category->name;
+
         if ((string)$this->category_id === (string)$id) {
             $this->category_id = null;
         }
 
-        // Отвязываем посты от удаляемой рубрики (чтобы не падали ошибки FK)
-        // Они просто станут "Без рубрики"
         BlogPost::where('category_id', $id)->update(['category_id' => null]);
-        
         $category->delete();
         
-        // Сбрасываем кэш списка рубрик, чтобы они исчезли из селекта
+        // НОВОЕ: Логируем удаление рубрики
+        AdminLog::record('blog_category.delete', null, auth()->user(), null, [
+            'status' => 'destroyed',
+            'context' => [
+                'category_id' => $categoryId,
+                'name' => $categoryName,
+                'admin_id' => auth()->id()
+            ]
+        ]);
+
         unset($this->categories);
 
-        $this->dispatch('show-toast', type: 'success', message: 'Рубрика "' . $category->name . '" удалена!');
+        $this->dispatch('show-toast', type: 'success', message: 'Рубрика "' . $categoryName . '" удалена!');
     }
 
     protected function rules(): array
@@ -188,10 +205,10 @@ new #[Layout('layouts.admin')] class extends Component
             $validated['cover_media_id'] = $this->cover_media_id;
 
             if ($this->post && $this->post->exists) {
-                $action->updatePost($this->post, $validated);
+                $action->updatePost($this->post, $validated, auth()->user());
                 $this->dispatch('show-toast', type: 'success', message: 'Пост успешно обновлен!');
             } else {
-                $post = $action->createPost($validated);
+                $post = $action->createPost($validated, auth()->user());
                 $this->dispatch('show-toast', type: 'success', message: 'Пост создан!');
                 $this->redirect(route('admin.system.blog.edit', $post), navigate: true);
             }

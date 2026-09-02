@@ -1,6 +1,6 @@
 <?php
 
-use App\Models\AdminLog;
+use App\Actions\Admin\ManageSupportTemplatesAction;
 use App\Models\SupportTemplate;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Layout;
@@ -22,50 +22,36 @@ new #[Layout('layouts.admin')] class extends Component
     
     public bool $showFormModal = false;
     
-    /** @var string Поиск по названию или тексту */
     #[Url(as: 'q', except: '')]
     public string $search = '';
 
-    /** @var string Фильтр по категории (запоминается в сессии) */
     #[Session]
     public string $categoryFilter = 'all';
 
-    /** @var string URL для кнопки "Назад" */
     public string $backUrl = '';
 
     public function mount(): void
     {
-        // ФИКС: Запоминаем URL "Назад" только при первой загрузке
         $previousUrl = url()->previous();
         $this->backUrl = ($previousUrl && $previousUrl !== url()->current()) 
             ? $previousUrl 
             : route('admin.dashboard');
 
-        // По умолчанию новая категория при открытии формы
         $this->category = 'Общие';
     }
 
-    /**
-     * Установка фильтра категории.
-     */
     public function setCategoryFilter(string $category): void
     {
         $this->categoryFilter = $category;
         $this->resetPage();
     }
 
-    /**
-     * Очистка строки поиска.
-     */
     public function clearSearch(): void
     {
         $this->search = '';
         $this->resetPage();
     }
 
-    /**
-     * Получение списка категорий для кнопок фильтра.
-     */
     #[Computed]
     public function categories()
     {
@@ -75,9 +61,6 @@ new #[Layout('layouts.admin')] class extends Component
             ->pluck('category');
     }
 
-    /**
-     * Получение списка шаблонов с фильтрацией и пагинацией.
-     */
     #[Computed]
     public function templates()
     {
@@ -123,7 +106,8 @@ new #[Layout('layouts.admin')] class extends Component
         $this->showFormModal = true;
     }
 
-    public function save(): void
+    // ФИКС: Делегируем сохранение в Action
+    public function save(ManageSupportTemplatesAction $action): void
     {
         $this->validate([
             'category' => 'required|string|max:100',
@@ -143,13 +127,10 @@ new #[Layout('layouts.admin')] class extends Component
 
         if ($this->templateId) {
             $template = SupportTemplate::find($this->templateId);
-            $before = $template->getOriginal();
-            $template->update($data);
-            AdminLog::record('template.update', $template, auth()->user(), $before, $data);
+            $action->update($template, $data, auth()->user());
             $this->dispatch('show-toast', type: 'success', message: 'Шаблон обновлен!');
         } else {
-            $template = SupportTemplate::create($data);
-            AdminLog::record('template.create', $template, auth()->user());
+            $action->create($data, auth()->user());
             $this->dispatch('show-toast', type: 'success', message: 'Шаблон создан!');
         }
 
@@ -158,12 +139,12 @@ new #[Layout('layouts.admin')] class extends Component
         unset($this->categories); // Сбрасываем кэш категорий, если добавили новую
     }
 
-    public function deleteTemplate(int $id): void
+    // ФИКС: Делегируем удаление в Action
+    public function deleteTemplate(int $id, ManageSupportTemplatesAction $action): void
     {
         $template = SupportTemplate::find($id);
         if ($template) {
-            AdminLog::record('template.delete', $template, auth()->user());
-            $template->delete();
+            $action->delete($template, auth()->user());
             $this->dispatch('show-toast', type: 'warning', message: 'Шаблон удален.');
             unset($this->templates);
             unset($this->categories);
@@ -219,7 +200,7 @@ new #[Layout('layouts.admin')] class extends Component
     </div>
 
     <!-- Таблица шаблонов -->
-    <div class="bg-card border border-border rounded-lg overflow-hidden">
+
         <x-ui.table>
             <x-ui.table-header>
                 <x-ui.table-row>
@@ -280,7 +261,7 @@ new #[Layout('layouts.admin')] class extends Component
                 @endforelse
             </x-ui.table-body>
         </x-ui.table>
-    </div>
+    
 
     <!-- Пагинация -->
     @if ($this->templates->hasPages())

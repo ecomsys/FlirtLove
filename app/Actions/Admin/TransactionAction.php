@@ -56,13 +56,39 @@ class TransactionAction
                 }
             }
 
-            AdminLog::record('transaction.sync_success', $transaction, Auth::user(), ['status' => 'pending'], ['status' => 'success']);
+            $before = ['status' => $transaction->getOriginal('status')];
+            $after = [
+                'status' => 'success', 
+                'synced_by' => Auth::id(),
+                'context' => [
+                    'transaction_id' => $transaction->id,
+                    'user_id' => $transaction->user_id,
+                    'amount' => $transaction->amount,
+                    'type' => $transaction->type,
+                    'provider_id' => $bankResponse['provider_transaction_id'] ?? null
+                ]
+            ];
+
+            AdminLog::record('transaction.sync_success', $transaction, Auth::user(), $before, $after, participants: [$transaction->user_id]);
             
             return ['success' => true, 'message' => 'Синхронизация успешна! Платеж подтвержден.'];
         }
 
         $transaction->markAsFailed($bankResponse['message']);
-        AdminLog::record('transaction.sync_failed', $transaction, Auth::user(), ['status' => 'pending'], ['status' => 'failed']);
+        
+        $before = ['status' => $transaction->getOriginal('status')];
+        $after = [
+            'status' => 'failed', 
+            'bank_message' => $bankResponse['message'],
+            'context' => [
+                'transaction_id' => $transaction->id,
+                'user_id' => $transaction->user_id,
+                'amount' => $transaction->amount,
+                'type' => $transaction->type
+            ]
+        ];
+
+        AdminLog::record('transaction.sync_failed', $transaction, Auth::user(), $before, $after, participants: [$transaction->user_id]);
         
         return ['success' => false, 'message' => 'Банк отклонил платеж: ' . $bankResponse['message']];
     }
@@ -72,6 +98,8 @@ class TransactionAction
      */
     public function processRefund(Transaction $transaction, RefundReason $reason, ?string $comment = null): void
     {
+        $before = ['status' => $transaction->getOriginal('status')];
+
         $transaction->update([
             'meta' => array_merge($transaction->meta ?? [], [
                 'refund_reason' => $reason->label(),
@@ -80,7 +108,20 @@ class TransactionAction
             ])
         ]);
 
-        AdminLog::record('transaction.refund', $transaction, Auth::user(), ['status' => 'success'], ['status' => 'pending_refund', 'reason' => $reason->label()]);
+        $after = [
+            'status' => 'pending_refund', 
+            'reason' => $reason->label(),
+            'comment' => $comment,
+            'context' => [
+                'transaction_id' => $transaction->id,
+                'user_id' => $transaction->user_id,
+                'amount' => $transaction->amount,
+                'type' => $transaction->type,
+                'initiated_by' => Auth::id()
+            ]
+        ];
+
+        AdminLog::record('transaction.refund', $transaction, Auth::user(), $before, $after, participants: [$transaction->user_id]);
 
         ProcessRefundJob::dispatch($transaction->id);
     }

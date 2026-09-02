@@ -2,6 +2,7 @@
 
 namespace App\Actions\Admin;
 
+use App\Models\AdminLog;
 use App\Models\User;
 use App\Services\GeocodingService;
 use Illuminate\Support\Facades\DB;
@@ -25,7 +26,10 @@ class UpdateUserLocationAction
             $address = $user->profile?->address;
         }
 
-        DB::transaction(function () use ($user, $lat, $lng, $address, $city, $country) {
+        // ФИКС: Сохраняем старые данные до обновления
+        $before = $user->profile ? $user->profile->only(['address', 'city', 'country']) : null;
+
+        DB::transaction(function () use ($user, $lat, $lng, $address, $city, $country, $before) {
             $locationData = [
                 'address' => $address,
                 'city' => $city,
@@ -38,6 +42,22 @@ class UpdateUserLocationAction
             } else {
                 $user->profile()->create($locationData);
             }
+
+            // ФИКС: Формируем лог с диффами и контекстом
+            $after = [
+                'address' => $address,
+                'city' => $city,
+                'country' => $country,
+                'context' => [
+                    'user_id' => $user->id,
+                    'user_name' => $user->name,
+                    'admin_id' => auth()->id(),
+                    'lat' => $lat,
+                    'lng' => $lng
+                ]
+            ];
+
+            AdminLog::record('user.location_update', $user, auth()->user(), $before, $after, participants: [$user->id]);
 
             Log::info('Локация пользователя обновлена', [
                 'user_id' => $user->id, 'lat' => $lat, 'lng' => $lng, 'admin_id' => auth()->id(),

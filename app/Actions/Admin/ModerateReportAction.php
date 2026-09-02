@@ -1,8 +1,8 @@
 <?php
 
 namespace App\Actions\Admin;
-use App\Enums\ReportResolution;
 
+use App\Enums\ReportResolution;
 use App\Models\AdminLog;
 use App\Models\Report;
 use App\Models\User;
@@ -14,14 +14,34 @@ class ModerateReportAction
     /**
      * Принять жалобу (наказать).
      */
-   public function resolve(Report $report, User $admin, ReportResolution $resolution = ReportResolution::Warn, ?string $note = null): void
-{
-    $before = $report->only(['status', 'resolution', 'admin_id', 'resolved_at']);
-    
-    $report->resolve($admin->id, $resolution->value, $note);
+    public function resolve(Report $report, User $admin, ReportResolution $resolution = ReportResolution::Warn, ?string $note = null): void
+    {
+        $before = [
+            'status' => $report->getOriginal('status'), 
+            'resolution' => $report->getOriginal('resolution')
+        ];
         
-        $after = $report->fresh()->only(['status', 'resolution', 'admin_id', 'resolved_at']);
-        AdminLog::record('report.resolve', $report, $admin, $before, $after);
+        $report->resolve($admin->id, $resolution->value, $note);
+        $report->refresh();
+        
+        $after = [
+            'status' => 'resolved', 
+            'resolution' => $resolution->value, 
+            'resolved_by' => $admin->id, 
+            'resolved_at' => now()->toDateTimeString(),
+            'context' => [
+                'report_id' => $report->id,
+                'reporter_id' => $report->reporter_id,
+                'reported_id' => $report->reported_id,
+                'reason' => $report->reason,
+                'resolution_label' => $resolution->label(),
+                'note' => $note
+            ]
+        ];
+
+        $participants = array_filter([$report->reporter_id, $report->reported_id]);
+
+        AdminLog::record('report.resolve', $report, $admin, $before, $after, participants: $participants);
 
         if ($report->reporter) {
             $report->reporter->notify(new ReportModerated($report, 'resolved'));
@@ -33,13 +53,32 @@ class ModerateReportAction
      */
     public function reject(Report $report, User $admin, ?string $note = null): void
     {
-        $before = $report->only(['status', 'resolution', 'admin_id', 'resolved_at']);
+        $before = [
+            'status' => $report->getOriginal('status'), 
+            'resolution' => $report->getOriginal('resolution')
+        ];
         
         // Используем resolve модели, но передаем 'no_action' (модель сама поставит status='rejected')
         $report->resolve($admin->id, 'no_action', $note);
+        $report->refresh();
         
-        $after = $report->fresh()->only(['status', 'resolution', 'admin_id', 'resolved_at']);
-        AdminLog::record('report.reject', $report, $admin, $before, $after);
+        $after = [
+            'status' => 'rejected', 
+            'resolution' => 'no_action', 
+            'resolved_by' => $admin->id, 
+            'resolved_at' => now()->toDateTimeString(),
+            'context' => [
+                'report_id' => $report->id,
+                'reporter_id' => $report->reporter_id,
+                'reported_id' => $report->reported_id,
+                'reason' => $report->reason,
+                'note' => $note
+            ]
+        ];
+
+        $participants = array_filter([$report->reporter_id, $report->reported_id]);
+
+        AdminLog::record('report.reject', $report, $admin, $before, $after, participants: $participants);
 
         if ($report->reporter) {
             $report->reporter->notify(new ReportModerated($report, 'rejected'));
@@ -50,29 +89,42 @@ class ModerateReportAction
      * Массовое закрытие жалоб (например, при бане юзера или удалении фото).
      * Используется внутри toggleBan и deletePhoto.
      */
-        /**
-     * Массовое закрытие жалоб (например, при бане юзера или удалении фото).
-     * Используется внутри toggleBan и deletePhoto.
-     */
     public function bulkResolveReports($reports, User $admin, ReportResolution $resolution): void
-{
-    // Массив для запоминания, кому мы уже отправили уведомление
-    $notifiedReporters = [];
+    {
+        // Массив для запоминания, кому мы уже отправили уведомление
+        $notifiedReporters = [];
 
-    foreach ($reports as $report) {
-        // 1. Закрываем жалобу напрямую через модель (чтобы не триггерить отправку письма в resolve())
-        $before = $report->only(['status', 'resolution', 'admin_id', 'resolved_at']);
-        $report->resolve($admin->id, $resolution->value, "Автоматическое закрытие при: {$resolution->label()}");
-        $after = $report->fresh()->only(['status', 'resolution', 'admin_id', 'resolved_at']);
-        
-        // 2. Логируем
-        AdminLog::record('report.resolve', $report, $admin, $before, $after);
+        foreach ($reports as $report) {
+            $before = [
+                'status' => $report->getOriginal('status'), 
+                'resolution' => $report->getOriginal('resolution')
+            ];
+            
+            $report->resolve($admin->id, $resolution->value, "Автоматическое закрытие при: {$resolution->label()}");
+            $report->refresh();
+            
+            $after = [
+                'status' => 'resolved', 
+                'resolution' => $resolution->value, 
+                'resolved_by' => $admin->id, 
+                'resolved_at' => now()->toDateTimeString(),
+                'context' => [
+                    'report_id' => $report->id,
+                    'reporter_id' => $report->reporter_id,
+                    'reported_id' => $report->reported_id,
+                    'reason' => $report->reason,
+                    'auto_resolved' => true
+                ]
+            ];
+            
+            $participants = array_filter([$report->reporter_id, $report->reported_id]);
 
-        // 3. Отправляем уведомление только если этот юзер еще его не получал
-        if ($report->reporter && !in_array($report->reporter->id, $notifiedReporters)) {
-            $report->reporter->notify(new ReportModerated($report, 'resolved'));
-            $notifiedReporters[] = $report->reporter->id; // Записываем, что Васе уже отправили
+            AdminLog::record('report.resolve', $report, $admin, $before, $after, participants: $participants);
+
+            if ($report->reporter && !in_array($report->reporter->id, $notifiedReporters)) {
+                $report->reporter->notify(new ReportModerated($report, 'resolved'));
+                $notifiedReporters[] = $report->reporter->id;
+            }
         }
     }
-}
 }

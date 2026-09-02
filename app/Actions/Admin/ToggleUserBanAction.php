@@ -19,7 +19,7 @@ class ToggleUserBanAction
      * @param bool $forceBan Если true — только банит (игнорирует разбан). Нужно для массовых действий.
      * @return array
      */
-     public function execute(User $user, string $reason = 'Нарушение правил сервиса', string $type = 'permanent', bool $forceBan = false): array
+    public function execute(User $user, string $reason = 'Нарушение правил сервиса', string $type = 'permanent', bool $forceBan = false): array
     {
         if ($user->isStaff()) {
             return ['success' => false, 'message' => 'Нельзя забанить сотрудника (админа/модератора)'];
@@ -27,57 +27,77 @@ class ToggleUserBanAction
 
         $isCurrentlyBanned = ($user->status === 'banned' || $user->status === 'shadowbanned');
 
-        // Если флаг forceBan включен (вызвано из модалки) — мы ПРИНУДИТЕЛЬНО баним, 
-        // даже если юзер уже в бане. Это перезапишет старый тип/причину бана на новый.
         if ($forceBan) {
             return $this->ban($user, $reason, $type);
         }
 
-        // Если forceBan выключен (вызвано кнопкой "Разбанить" из списка) 
-        // и юзер реально забанен — снимаем бан.
         if ($isCurrentlyBanned) {
             return $this->unban($user);
         }
 
-        // Если forceBan выключен и юзер активен — баним (защита от случайных вызовов)
         return $this->ban($user, $reason, $type);
     }
     
-    
     protected function ban(User $user, string $reason, string $type): array
     {
-        $before = $user->only(['status', 'ban_reason', 'banned_until', 'is_verified']);
+        // ФИКС: Используем getOriginal для надежности
+        $before = [
+            'status' => $user->getOriginal('status'), 
+            'ban_reason' => $user->getOriginal('ban_reason'), 
+            'banned_until' => $user->getOriginal('banned_until')
+        ];
 
         $banData = match ($type) {
             'shadow' => [
                 'status' => 'shadowbanned',
                 'ban_reason' => $reason,
-                'banned_until' => null, // Теневой бан обычно бессрочный (снимается вручную)
+                'banned_until' => null,
             ],
             'temp' => [
                 'status' => 'banned',
                 'ban_reason' => $reason,
-                'banned_until' => now()->addDays(3), // Временный бан на 3 дня
+                'banned_until' => now()->addDays(3),
             ],
-            default => [ // 'permanent'
+            default => [
                 'status' => 'banned',
                 'ban_reason' => $reason,
-                'banned_until' => null, // Навсегда
+                'banned_until' => null,
             ],
         };
 
         DB::transaction(function () use ($user, $banData) {
             $user->update($banData);
-            // Снимаем с модерации все его фото
             $user->photos()->where('status', 'pending')->update(['status' => 'rejected', 'reject_reason' => 'user_banned']);
         });
 
         $user->refresh();
-        $after = $user->only(['status', 'ban_reason', 'banned_until', 'is_verified']);
 
-        AdminLog::record('user.ban', $user, auth()->user(), $before, $after);
+        $after = [
+            'status' => $banData['status'],
+            'ban_reason' => $banData['ban_reason'],
+            'banned_until' => $banData['banned_until']?->toDateTimeString(),
+            'ban_type' => $type,
+            'banned_at' => now()->toDateTimeString(),
+            // ФИКС: Добавлен context для истории
+            'context' => [
+                'user_id' => $user->id,
+                'user_name' => $user->name,
+                'admin_id' => auth()->id(),
+            ]
+        ];
+
+        // ФИКС: Динамически меняем название экшена для теневого бана
+        $actionName = $type === 'shadow' ? 'user.shadowban' : 'user.ban';
+
+        AdminLog::record(
+            $actionName, // <--- Было жестко 'user.ban'
+            $user, 
+            auth()->user(), 
+            $before, 
+            $after, 
+            participants: [$user->id]
+        );
         
-        // ФИКС: Отправляем уведомление ТОЛЬКО если это не теневой бан
         if ($type !== 'shadow') {
             try {
                 $user->notify(new UserBanned(true, "Ваш аккаунт заблокирован. Причина: {$reason}"));
@@ -98,7 +118,11 @@ class ToggleUserBanAction
     
     protected function unban(User $user): array
     {
-        $before = $user->only(['status', 'ban_reason', 'banned_until', 'is_verified']);
+        $before = [
+            'status' => $user->getOriginal('status'), 
+            'ban_reason' => $user->getOriginal('ban_reason'), 
+            'banned_until' => $user->getOriginal('banned_until')
+        ];
         
         $user->update([
             'status' => 'active',
@@ -107,11 +131,28 @@ class ToggleUserBanAction
         ]);
         
         $user->refresh();
-        $after = $user->only(['status', 'ban_reason', 'banned_until', 'is_verified']);
         
-        AdminLog::record('user.unban', $user, auth()->user(), $before, $after);
+        $after = [
+            'status' => 'active',
+            'unbanned_at' => now()->toDateTimeString(),
+            'unbanned_by' => auth()->id(),
+            // ФИКС: Добавлен context для истории
+            'context' => [
+                'user_id' => $user->id,
+                'user_name' => $user->name,
+                'admin_id' => auth()->id(),
+            ]
+        ];
         
-        // ФИКС: Если снимаем теневой бан — молчим. Юзер не должен знать, что был в бане.
+        AdminLog::record(
+            'user.unban', 
+            $user, 
+            auth()->user(), 
+            $before, 
+            $after, 
+            participants: [$user->id]
+        );
+        
         if ($before['status'] !== 'shadowbanned') {
             try {
                 $user->notify(new UserBanned(false, "Ваш аккаунт разблокирован. Приносим извинения за неудобства."));

@@ -23,7 +23,10 @@ class BroadcastsAction
         }
 
         try {
-            $before = $broadcast->only(['status', 'started_at']);
+            $before = [
+                'status' => $broadcast->getOriginal('status'), 
+                'started_at' => $broadcast->getOriginal('started_at')
+            ];
 
             $updated = Broadcast::where('id', $id)
                 ->whereIn('status', ['draft', 'scheduled'])
@@ -34,11 +37,25 @@ class BroadcastsAction
             
             if ($updated) {
                 $broadcast->refresh();
-                $after = $broadcast->only(['status', 'started_at']);
+                
+                $targetUserId = $broadcast->target_audience['user_id'] ?? null;
+
+                $after = [
+                    'status' => 'sending', 
+                    'started_at' => now()->toDateTimeString(),
+                    'context' => [
+                        'broadcast_id' => $broadcast->id,
+                        'title' => $broadcast->title,
+                        'type' => $broadcast->type,
+                        'target_user_id' => $targetUserId
+                    ]
+                ];
+
+                $participants = $targetUserId ? [$targetUserId] : [];
 
                 SendBroadcastJob::dispatch($broadcast->id, $broadcast->target_audience)->onQueue('broadcasts');
                 
-                AdminLog::record('broadcast.send_now', $broadcast, $admin, $before, $after);
+                AdminLog::record('broadcast.send_now', $broadcast, $admin, $before, $after, participants: $participants);
                 Log::info("Админ запустил рассылку вручную", ['broadcast_id' => $id, 'admin_id' => $admin->id]);
                 
                 return ['success' => true, 'message' => 'Рассылка поставлена в очередь'];
@@ -72,9 +89,22 @@ class BroadcastsAction
             $new->started_at = null;
             $new->save();
 
-            $after = ['new_id' => $new->id, 'new_title' => $new->title, 'status' => 'draft'];
+            $targetUserId = $new->target_audience['user_id'] ?? null;
 
-            AdminLog::record('broadcast.duplicate', $broadcast, $admin, $before, $after);
+            $after = [
+                'new_id' => $new->id, 
+                'new_title' => $new->title, 
+                'status' => 'draft',
+                'context' => [
+                    'source_broadcast_id' => $broadcast->id,
+                    'new_broadcast_id' => $new->id,
+                    'title' => $new->title
+                ]
+            ];
+
+            $participants = $targetUserId ? [$targetUserId] : [];
+
+            AdminLog::record('broadcast.duplicate', $broadcast, $admin, $before, $after, participants: $participants);
             Log::info("Админ продублировал рассылку", ['source_id' => $id, 'new_id' => $new->id]);
 
             return $new;
@@ -99,8 +129,27 @@ class BroadcastsAction
                 return ['success' => false, 'message' => 'Нельзя удалить рассылку в процессе отправки!'];
             }
 
-            $before = $broadcast->only(['id', 'title', 'type', 'status', 'target_audience']);
-            AdminLog::record('broadcast.delete', $broadcast, $admin, $before, null);
+            $targetUserId = $broadcast->target_audience['user_id'] ?? null;
+
+            $before = [
+                'status' => $broadcast->getOriginal('status'), 
+                'title' => $broadcast->getOriginal('title')
+            ];
+            
+            $after = [
+                'status' => 'destroyed', 
+                'deleted_by' => $admin->id,
+                'context' => [
+                    'broadcast_id' => $broadcast->id,
+                    'title' => $broadcast->title,
+                    'type' => $broadcast->type
+                ]
+            ];
+
+            $participants = $targetUserId ? [$targetUserId] : [];
+
+            AdminLog::record('broadcast.delete', $broadcast, $admin, $before, $after, participants: $participants);
+            
             $broadcast->delete();
             Log::info("Админ удалил рассылку", ['broadcast_id' => $id]);
 
@@ -127,8 +176,26 @@ class BroadcastsAction
                 ->get();
             
             foreach ($broadcasts as $broadcast) {
-                $before = $broadcast->only(['id', 'title', 'type', 'status', 'target_audience']);
-                AdminLog::record('broadcast.delete', $broadcast, $admin, $before, null);
+                $targetUserId = $broadcast->target_audience['user_id'] ?? null;
+
+                $before = [
+                    'status' => $broadcast->getOriginal('status'), 
+                    'title' => $broadcast->getOriginal('title')
+                ];
+                
+                $after = [
+                    'status' => 'destroyed', 
+                    'deleted_by' => $admin->id,
+                    'context' => [
+                        'broadcast_id' => $broadcast->id,
+                        'title' => $broadcast->title
+                    ]
+                ];
+
+                $participants = $targetUserId ? [$targetUserId] : [];
+
+                AdminLog::record('broadcast.delete', $broadcast, $admin, $before, $after, participants: $participants);
+                
                 $broadcast->delete();
                 $actualDeletedCount++;
             }

@@ -7,7 +7,6 @@ use App\Models\User;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\On;
 use Livewire\Volt\Component;
-use Illuminate\Support\Facades\DB;
 
 new class extends Component 
 {
@@ -43,7 +42,7 @@ new class extends Component
             ->where('type', 'profile')
             ->with('album:id,name')
             ->orderByDesc('is_primary')
-            ->latest('created_at') // ФИКС: Явное указание колонки
+            ->latest('created_at')
             ->get();
 
         return $allPhotos->groupBy(function($photo) {
@@ -115,8 +114,9 @@ new class extends Component
         $photo = Photo::find($photoId);
         if (!$photo) return;
 
-        $photo->delete();
-        \App\Models\AdminLog::record('photo.soft_delete', $photo, auth()->user(), ['deleted_at' => null], ['deleted_at' => now()]);
+        // ФИКС: Делегируем в Action
+        $this->moderatePhotoAction->softDelete($photo, auth()->user());
+        
         $this->dispatch('show-toast', type: 'warning', message: 'Фото перемещено в карантин');
         unset($this->albums);
     }
@@ -140,17 +140,9 @@ new class extends Component
         $photo = Photo::withTrashed()->find($photoId);
         if (!$photo) return;
 
-        DB::Transaction(function () use ($photo) {
-            $photo->restore();
-            $photo->update([
-                'status' => 'pending',
-                'reject_reason' => null,
-                'moderated_by' => null,
-                'moderated_at' => null,
-            ]);
-        });
-
-        \App\Models\AdminLog::record('photo.restore', $photo, auth()->user(), ['deleted_at' => 'set'], ['deleted_at' => null, 'status' => 'pending']);
+        // ФИКС: Делегируем в Action
+        $this->moderatePhotoAction->restore($photo, auth()->user());
+        
         $this->dispatch('show-toast', type: 'success', message: 'Фото восстановлено в очередь');
         unset($this->albums);
     }

@@ -17,25 +17,46 @@ class ModerateDatingAction
      */
     public function destroySwipe(Swipe $swipe, User $admin): void
     {
-        $before = $swipe->only(['id', 'user_id', 'target_user_id', 'type', 'rewinded_at']);
+        $before = [
+            'type' => $swipe->getOriginal('type'), 
+            'rewinded_at' => $swipe->getOriginal('rewinded_at')
+        ];
 
-        DB::transaction(function () use ($swipe, $admin, $before) {
-            // Если удаляем позитивный свайп, нужно разорвать мэтч (если он был)
+        $unmatchedMatch = false;
+
+        DB::transaction(function () use ($swipe, $admin, $before, &$unmatchedMatch) {
             if ($swipe->isPositive() && $swipe->user_id && $swipe->target_user_id) {
                 $u1 = min($swipe->user_id, $swipe->target_user_id);
                 $u2 = max($swipe->user_id, $swipe->target_user_id);
                 
-                // ИСПОЛЬЗУЕМ update, А НЕ delete! Сохраняем историю мэтча.
-                UserMatch::where('user1_id', $u1)->where('user2_id', $u2)->update([
+                $affected = UserMatch::where('user1_id', $u1)->where('user2_id', $u2)->update([
                     'status' => 'unmatched',
                     'unmatched_by' => $admin->id,
                     'unmatched_at' => now(),
                 ]);
+
+                if ($affected > 0) {
+                    $unmatchedMatch = true;
+                }
             }
-            
-            // Жестко удаляем сам свайп (админ захотел стереть факт оценки)
+
+            // ФИКС: Обернули ID юзеров в ключ context, чтобы calculateDiff их не вырезал
+            $after = [
+                'status' => 'destroyed', 
+                'deleted_by' => $admin->id, 
+                'deleted_at' => now()->toDateTimeString(),
+                'match_unmatched' => $unmatchedMatch,
+                'context' => [
+                    'user_id' => $swipe->user_id,
+                    'target_user_id' => $swipe->target_user_id
+                ]
+            ];
+
+            $participants = array_filter([$swipe->user_id, $swipe->target_user_id]);
+
+            AdminLog::record('swipe.destroy', $swipe, $admin, $before, $after, participants: $participants);
+
             $swipe->delete();
-            AdminLog::record('swipe.destroy', $swipe, $admin, $before, null);
         });
 
         Cache::forget('dating_admin_stats');
@@ -43,21 +64,34 @@ class ModerateDatingAction
 
     /**
      * Разрыв мэтча администратором (Принудительный Unmatch).
-     * НЕ удаляем запись из БД и НЕ удаляем свайпы!
      */
     public function destroyMatch(UserMatch $match, User $admin): void
     {
-        $before = $match->only(['status', 'unmatched_by', 'unmatched_at']);
+        $before = ['status' => $match->getOriginal('status')];
 
         DB::transaction(function () use ($match, $admin, $before) {
-            // Просто меняем статус. Свайпы остаются в БД, чтобы юзеры не увидели друг друга в ленте снова.
             $match->update([
                 'status' => 'unmatched',
                 'unmatched_by' => $admin->id,
                 'unmatched_at' => now(),
             ]);
 
-            AdminLog::record('match.unmatch', $match, $admin, $before, $match->fresh()->only(['status', 'unmatched_by', 'unmatched_at']));
+            $match->refresh();
+
+            $after = [
+                'status' => 'unmatched', 
+                'unmatched_by' => $admin->id, 
+                'unmatched_at' => now()->toDateTimeString(),
+                // ФИКС: Обернули ID юзеров в ключ context
+                'context' => [
+                    'user1_id' => $match->user1_id, 
+                    'user2_id' => $match->user2_id
+                ]
+            ];
+
+            $participants = array_filter([$match->user1_id, $match->user2_id]);
+
+            AdminLog::record('match.unmatch', $match, $admin, $before, $after, participants: $participants);
         });
 
         Cache::forget('dating_admin_stats');
@@ -68,7 +102,7 @@ class ModerateDatingAction
      */
     public function restoreMatch(UserMatch $match, User $admin): void
     {
-        $before = $match->only(['status', 'unmatched_by', 'unmatched_at']);
+        $before = ['status' => $match->getOriginal('status')];
 
         $match->update([
             'status' => 'active',
@@ -76,7 +110,23 @@ class ModerateDatingAction
             'unmatched_at' => null,
         ]);
 
-        AdminLog::record('match.restore', $match, $admin, $before, $match->fresh()->only(['status', 'unmatched_by', 'unmatched_at']));
+        $match->refresh();
+
+        $after = [
+            'status' => 'active', 
+            'restored_by' => $admin->id, 
+            'restored_at' => now()->toDateTimeString(),
+            // ФИКС: Обернули ID юзеров в ключ context
+            'context' => [
+                'user1_id' => $match->user1_id, 
+                'user2_id' => $match->user2_id
+            ]
+        ];
+
+        $participants = array_filter([$match->user1_id, $match->user2_id]);
+
+        AdminLog::record('match.restore', $match, $admin, $before, $after, participants: $participants);
+        
         Cache::forget('dating_admin_stats');
     }
 }

@@ -26,19 +26,27 @@ new class extends Component
         $this->userId = $userId;
     }
 
-    // Достаем юзера (хватит и обычного find, так как удаленные сюда не попадут)
+    // ФИКС: withTrashed() чтобы таб не падал с 404 при просмотре деактивированного аккаунта
     #[Computed]
     public function user(): User
     {
-        return User::findOrFail($this->userId);
+        return User::withTrashed()->findOrFail($this->userId);
     }
 
-    // Динамическая история банов (обновляется при действиях)
+    // ФИКС: Ищем логи по loggable_id ИЛИ по participants (если бан прилетел из антифрода)
     #[Computed]
     public function banHistory()
     {
-        return AdminLog::where('loggable_type', User::class)
-            ->where('loggable_id', $this->userId)
+        $userId = $this->userId;
+        
+        return AdminLog::where(function ($query) use ($userId) {
+                $query->where('loggable_type', User::class)
+                      ->where('loggable_id', $userId);
+            })
+            ->orWhere(function ($query) use ($userId) {
+                $query->whereNotNull('participants')
+                      ->whereRaw("participants::jsonb @> ?", [json_encode([$userId])]);
+            })
             ->whereIn('action', ['user.ban', 'user.unban', 'user.shadowban', 'user.delete', 'user.restore', 'user.mass_ban', 'user.mass_delete'])
             ->with('admin:id,name,email')
             ->latest()
@@ -46,7 +54,6 @@ new class extends Component
             ->get();
     }
 
-    // Слушаем обновления из родительского компонента
     #[On('user-action-performed')] 
     public function refreshUser(): void
     {
@@ -98,6 +105,9 @@ new class extends Component
         $icon = 'ban';
         $iconColor = 'text-destructive bg-destructive/10';
 
+        $after = $log->after ?? [];
+        $banType = $after['ban_type'] ?? null;
+
         if ($log->action === 'user.unban') {
             $title = 'Разблокирован';
             $badge = ['variant' => 'success', 'label' => 'Разбан'];
@@ -114,21 +124,23 @@ new class extends Component
             $icon = 'trash-2';
             $iconColor = 'text-muted-foreground bg-muted';
         } else {
-            $afterStatus = $log->after['status'] ?? null;
-            $hasUntil = !empty($log->after['banned_until']);
-
-            if ($afterStatus === 'shadowbanned') {
+            // ФИКС: Проверяем тип бана из лога, а не угадываем по датам
+            if ($banType === 'shadow' || ($after['status'] ?? null) === 'shadowbanned') {
                 $title = 'Теневой бан';
                 $badge = ['variant' => 'warning', 'label' => 'Теневой'];
                 $icon = 'eye-off';
                 $iconColor = 'text-purple-500 bg-purple-500/10';
-            } elseif ($hasUntil) {
+            } elseif ($banType === 'temp' || !empty($after['banned_until'])) {
                 $title = 'Временный бан';
-                $startDate = \Carbon\Carbon::parse($log->created_at);
-                $endDate = \Illuminate\Support\Carbon::parse($log->after['banned_until'] ?? null);
-                $days = $startDate->diffInDays($endDate);
+                $startDate = $log->created_at;
+                $endDate = isset($after['banned_until']) ? \Carbon\Carbon::parse($after['banned_until']) : null;
+                
+                $days = $endDate ? $startDate->diffInDays($endDate) : 0;
                 $badge = ['variant' => 'destructive', 'label' => "На {$days} дн."];
-                $period = "С: <span class='text-foreground'>{$startDate->format('d.m.y H:i')}</span> | По: <span class='text-foreground'>{$endDate->format('d.m.y H:i')}</span>";
+                
+                if ($endDate) {
+                    $period = "С: <span class='text-foreground'>{$startDate->format('d.m.y H:i')}</span> | По: <span class='text-foreground'>{$endDate->format('d.m.y H:i')}</span>";
+                }
             } else {
                 $title = 'Заблокирован';
                 $badge = ['variant' => 'destructive', 'label' => 'Вечный'];

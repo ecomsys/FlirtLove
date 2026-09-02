@@ -8,6 +8,7 @@ use App\Models\User;
 use App\Notifications\CommentModerated;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str; // <--- ДОБАВИЛИ ИМПОРТ
 
 class ModerateCommentAction
 {
@@ -17,16 +18,35 @@ class ModerateCommentAction
             return false;
         }
 
-        $before = $comment->only(['status', 'moderated_at', 'reject_reason']);
+        $before = [
+            'status' => $comment->getOriginal('status'), 
+            'reject_reason' => $comment->getOriginal('reject_reason')
+        ];
+        
         $comment->update([
             'status' => 'approved', 
             'moderated_at' => now(),
             'reject_reason' => null,
             'moderated_by' => $admin->id
         ]);
-        $after = $comment->fresh()->only(['status', 'moderated_at', 'reject_reason']);
         
-        AdminLog::record('comment.approve', $comment, $admin, $before, $after);
+        $comment->refresh();
+        
+        $after = [
+            'status' => 'approved', 
+            'moderated_by' => $admin->id, 
+            'moderated_at' => now()->toDateTimeString(),
+            'context' => [
+                'comment_id' => $comment->id,
+                'photo_id' => $comment->photo_id,
+                'author_id' => $comment->user_id,
+                'snippet' => Str::limit($comment->content, 50)
+            ]
+        ];
+        
+        $participants = array_filter([$comment->user_id, $comment->photo?->user_id]);
+        
+        AdminLog::record('comment.approve', $comment, $admin, $before, $after, participants: $participants);
         $this->notifyAuthor($comment, 'approved');
         
         return true;
@@ -34,46 +54,105 @@ class ModerateCommentAction
 
     public function reject(PhotoComment $comment, User $admin, string $reason = 'other'): void
     {
-        $before = $comment->only(['status', 'moderated_at', 'reject_reason']);
+        $before = [
+            'status' => $comment->getOriginal('status'), 
+            'reject_reason' => $comment->getOriginal('reject_reason')
+        ];
+        
         $comment->update([
             'status' => 'rejected', 
             'moderated_at' => now(),
             'reject_reason' => $reason,
             'moderated_by' => $admin->id
         ]);
-        $after = $comment->fresh()->only(['status', 'moderated_at', 'reject_reason']);
         
-        AdminLog::record('comment.reject', $comment, $admin, $before, $after);
+        $comment->refresh();
+        
+        $after = [
+            'status' => 'rejected', 
+            'reject_reason' => $reason, 
+            'moderated_by' => $admin->id, 
+            'moderated_at' => now()->toDateTimeString(),
+            'context' => [
+                'comment_id' => $comment->id,
+                'photo_id' => $comment->photo_id,
+                'author_id' => $comment->user_id,
+                'snippet' => Str::limit($comment->content, 50)
+            ]
+        ];
+        
+        $participants = array_filter([$comment->user_id, $comment->photo?->user_id]);
+        
+        AdminLog::record('comment.reject', $comment, $admin, $before, $after, participants: $participants);
         $this->notifyAuthor($comment, 'rejected');
     }
 
     public function markSpam(PhotoComment $comment, User $admin): void
     {
-        $before = $comment->only(['status', 'moderated_at', 'reject_reason']);
+        $before = [
+            'status' => $comment->getOriginal('status'), 
+            'reject_reason' => $comment->getOriginal('reject_reason')
+        ];
+        
         $comment->update([
             'status' => 'spam', 
             'moderated_at' => now(),
             'reject_reason' => 'spam',
             'moderated_by' => $admin->id
         ]);
-        $after = $comment->fresh()->only(['status', 'moderated_at', 'reject_reason']);
         
-        AdminLog::record('comment.spam', $comment, $admin, $before, $after);
+        $comment->refresh();
+        
+        $after = [
+            'status' => 'spam', 
+            'reject_reason' => 'spam', 
+            'moderated_by' => $admin->id, 
+            'moderated_at' => now()->toDateTimeString(),
+            'context' => [
+                'comment_id' => $comment->id,
+                'photo_id' => $comment->photo_id,
+                'author_id' => $comment->user_id,
+                'snippet' => Str::limit($comment->content, 50)
+            ]
+        ];
+        
+        $participants = array_filter([$comment->user_id, $comment->photo?->user_id]);
+        
+        AdminLog::record('comment.spam', $comment, $admin, $before, $after, participants: $participants);
         $this->notifyAuthor($comment, 'spam');
     }
 
     public function restore(PhotoComment $comment, User $admin): void
     {
-        $before = $comment->only(['status', 'moderated_at', 'reject_reason']);
+        $before = [
+            'status' => $comment->getOriginal('status'), 
+            'moderated_by' => $comment->getOriginal('moderated_by')
+        ];
+        
         $comment->update([
             'status' => 'pending',
             'moderated_at' => null,
             'reject_reason' => null,
             'moderated_by' => null
         ]);
-        $after = $comment->fresh()->only(['status', 'moderated_at', 'reject_reason']);
         
-        AdminLog::record('comment.restore', $comment, $admin, $before, $after);
+        $comment->refresh();
+        
+        $after = [
+            'status' => 'pending', 
+            'restored_by' => $admin->id, 
+            'restored_at' => now()->toDateTimeString(),
+            'context' => [
+                'comment_id' => $comment->id,
+                'photo_id' => $comment->photo_id,
+                'author_id' => $comment->user_id,
+                'snippet' => Str::limit($comment->content, 50)
+            ]
+        ];
+        
+        $participants = array_filter([$comment->user_id, $comment->photo?->user_id]);
+        
+        AdminLog::record('comment.restore', $comment, $admin, $before, $after, participants: $participants);
         $this->notifyAuthor($comment, 'restored');
     }
 
@@ -84,17 +163,17 @@ class ModerateCommentAction
         $approvedIds = [];
 
         DB::transaction(function () use ($comments, $admin, &$approvedCount, &$firstComment, &$approvedIds) {
-                foreach ($comments as $comment) {
-                    if ($comment->parent_id && $comment->parent && $comment->parent->status !== 'approved') {
-                        continue;
-                    }
+            foreach ($comments as $comment) {
+                if ($comment->parent_id && $comment->parent && $comment->parent->status !== 'approved') {
+                    continue;
+                }
 
-                    $comment->update([
-                        'status' => 'approved', 
-                        'moderated_at' => now(),
-                        'reject_reason' => null, // <--- ДОБАВИЛИ СБРОС ПРИЧИНЫ!
-                        'moderated_by' => $admin->id
-                    ]);
+                $comment->update([
+                    'status' => 'approved', 
+                    'moderated_at' => now(),
+                    'reject_reason' => null,
+                    'moderated_by' => $admin->id
+                ]);
                 $this->notifyAuthor($comment, 'approved');
                 
                 if (!$firstComment) $firstComment = $comment;
@@ -104,7 +183,17 @@ class ModerateCommentAction
         });
 
         if ($approvedCount > 0 && $firstComment) {
-            AdminLog::record('comment.mass_approve', $firstComment, $admin, null, ['count' => $approvedCount, 'ids' => $approvedIds]);
+            $after = [
+                'count' => $approvedCount, 
+                'ids' => $approvedIds, 
+                'moderated_by' => $admin->id,
+                'context' => [
+                    'user_id' => $firstComment->user_id
+                ]
+            ];
+            $participants = array_filter([$firstComment->user_id]);
+            
+            AdminLog::record('comment.mass_approve', $firstComment, $admin, null, $after, participants: $participants);
         }
 
         return $approvedCount;
@@ -126,7 +215,7 @@ class ModerateCommentAction
                     'reject_reason' => $reason,
                     'moderated_by' => $admin->id
                 ]);
-                 // Запоминаем, кому уже отправили
+                
                 if ($comment->user_id && !in_array($comment->user_id, $notifiedUsers)) {
                     $this->notifyAuthor($comment, 'rejected');
                     $notifiedUsers[] = $comment->user_id;
@@ -139,7 +228,18 @@ class ModerateCommentAction
         });
 
         if ($count > 0 && $firstComment) {
-            AdminLog::record('comment.mass_reject', $firstComment, $admin, null, ['count' => $count, 'ids' => $rejectedIds]);
+            $after = [
+                'count' => $count, 
+                'ids' => $rejectedIds, 
+                'reason' => $reason, 
+                'moderated_by' => $admin->id,
+                'context' => [
+                    'user_id' => $firstComment->user_id
+                ]
+            ];
+            $participants = array_filter([$firstComment->user_id]);
+            
+            AdminLog::record('comment.mass_reject', $firstComment, $admin, null, $after, participants: $participants);
         }
 
         return $count;

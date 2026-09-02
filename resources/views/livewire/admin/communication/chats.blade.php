@@ -1,7 +1,7 @@
 <?php
 
 use App\Models\Chat;
-use App\Models\AdminLog;
+use App\Actions\Admin\ManageChatsAction;
 use Livewire\Attributes\Layout;
 use Livewire\Volt\Component;
 use Livewire\WithPagination;
@@ -15,7 +15,7 @@ new #[Layout('layouts.admin')] class extends Component
     #[Url(as: 'q', except: '')]
     public string $search = '';
 
-        /** @var int|null ID активного чата для просмотра переписки */
+    /** @var int|null ID активного чата для просмотра переписки */
     #[Url(as: 'chat', except: '')]
     public ?int $activeChatId = null;
 
@@ -26,23 +26,47 @@ new #[Layout('layouts.admin')] class extends Component
     /** @var string URL для кнопки "Назад" */
     public string $backUrl = '';
 
+        public function mount(): void
+    {
+        $previousUrl = url()->previous();
+        $this->backUrl = ($previousUrl && $previousUrl !== url()->current()) 
+            ? $previousUrl 
+            : route('admin.dashboard');
+
+        // ФИКС: Читаем напрямую из Request, так как при wire:navigate Livewire 3 может еще не успеть гидратировать #[Url]
+        $qParam = request()->query('q', '');
+        $chatParam = request()->query('chat', '');
+
+        // Если пришли по прямой ссылке ?chat=123
+        if (!empty($chatParam)) {
+            $chat = Chat::find((int) $chatParam);
+            if ($chat) {
+                $this->activeChatId = $chat->id;
+                $this->search = (string) $chat->id; // Подставляем в поле поиска
+                $this->lockFilter = $chat->is_locked ? 'locked' : 'unlocked';
+                return;
+            }
+        } 
+        
+        // Если пришли по ссылке с поиском ?q=123
+        if (!empty($qParam) && is_numeric($qParam)) {
+            $chat = Chat::find((int) $qParam);
+            if ($chat) {
+                $this->activeChatId = $chat->id;
+                $this->search = (string) $qParam; // Подставляем в поле поиска
+                $this->lockFilter = $chat->is_locked ? 'locked' : 'unlocked';
+                return;
+            }
+        }
+    }
+
     public function updatedLockFilter(): void
     {
         $this->resetPage();
         $this->activeChatId = null;
     }
-   
 
-    public function mount(): void
-    {
-        // ФИКС: Запоминаем URL "Назад" только при первой загрузке
-        $previousUrl = url()->previous();
-        $this->backUrl = ($previousUrl && $previousUrl !== url()->current()) 
-            ? $previousUrl 
-            : route('admin.dashboard');
-    }
-
-        public function updatedSearch(): void
+    public function updatedSearch(): void
     {
         $this->resetPage();
 
@@ -68,9 +92,6 @@ new #[Layout('layouts.admin')] class extends Component
         $this->activeChatId = null;
     }
 
-    /**
-     * Счетчики для кнопок фильтра (все, активные, заблокированные).
-     */
     #[Computed]
     public function chatStats(): array
     {
@@ -103,46 +124,29 @@ new #[Layout('layouts.admin')] class extends Component
         $this->activeChatId = $chatId;
     }
 
-    public function toggleLockChat(int $chatId): void
+    
+    public function toggleLockChat(int $chatId, ManageChatsAction $action): void
     {
         $chat = Chat::find($chatId);
         if (!$chat) return;
 
-        $chat->update(['is_locked' => !$chat->is_locked]);
-
-        // Создаем системное сообщение в зависимости от нового статуса
-        $chat->messages()->create([
-            'sender_id' => null,
-            'type' => 'system',
-            'body' => $chat->is_locked 
-                ? 'Чат заблокирован администрацией.' 
-                : 'Чат разблокирован администрацией.',
-        ]);
-        
-        $chat->update(['last_message_at' => now()]);
-
-        AdminLog::record(
-            action: $chat->is_locked ? 'chat.lock' : 'chat.unlock', 
-            model: $chat, 
-            admin: auth()->user(), 
-            before: ['is_locked' => !$chat->is_locked], 
-            after: ['is_locked' => $chat->is_locked]
-        );
+        // Делегируем всю логику в Action
+        $isLocked = $action->toggleLock($chat, auth()->user());
 
         $this->dispatch('show-toast', 
-            type: $chat->is_locked ? 'warning' : 'success', 
-            message: $chat->is_locked ? 'Чат заблокирован. Общение остановлено.' : 'Чат разблокирован.'
+            type: $isLocked ? 'warning' : 'success', 
+            message: $isLocked ? 'Чат заблокирован. Общение остановлено.' : 'Чат разблокирован.'
         );
     }
 
-        public function with(): array
+
+    public function with(): array
     {
         $operator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
         $avatarQuery = fn($q) => $q->select(['id', 'user_id', 'is_primary', 'status', 'path_thumb', 'path_medium', 'path_large', 'path_original'])->orderByDesc('is_primary')->limit(1);
 
         $chats = Chat::where('type', 'private')
             ->whereHas('participants', fn($q) => $q->whereHas('user', fn($uq) => $uq->withTrashed()->excludeStaff()))
-            // ФИКС: Добавляем фильтр по блокировке
             ->when($this->lockFilter === 'locked', fn($q) => $q->where('is_locked', true))
             ->when($this->lockFilter === 'unlocked', fn($q) => $q->where('is_locked', false))
             ->with([
@@ -236,7 +240,10 @@ new #[Layout('layouts.admin')] class extends Component
 
                     <div wire:click="selectChat({{ $chat->id }})"
                         class="p-2 rounded-lg cursor-pointer transition-colors {{ $this->activeChatId === $chat->id ? 'bg-primary/10 border border-primary/30' : 'bg-muted/30 hover:bg-muted border border-transparent' }} {{ $chat->is_locked ? 'border-destructive/20' : '' }}"
-                        wire:key="chat-list-{{ $chat->id }}">
+                        wire:key="chat-list-{{ $chat->id }}"
+                        x-data="{ isHi: {{ $this->activeChatId === $chat->id ? 'true' : 'false' }} }"
+                        x-init="isHi && setTimeout(() => { $el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 200)"
+                    >
                         <div class="flex items-center gap-3">
                             <!-- Сдвоенные аватарки с онлайн статусом -->
                             <div class="relative shrink-0 flex flex-col ">
@@ -248,14 +255,14 @@ new #[Layout('layouts.admin')] class extends Component
                                 <div class="flex justify-between items-start gap-1">
                                     <div class="flex flex-col gap-1 min-w-0">
                                         <!-- Юзер 1 (кликабельный) -->
-                                        <div class="flex items-center gap-1">
+                                        <div class="flex items-center gap-1 min-w-0">
                                             @if($u1)
-                                                <x-user-status-sign :user="$u1" />
+                                                <x-user-status-sign :user="$u1" class="shrink-0" />
                                                 <span class="text-sm font-medium truncate">{{ $u1->name }}</span>
-                                                @if($u1->has_active_premium) <x-lucide-crown class="w-3 h-3 text-yellow-500" /> @endif                                                
+                                                @if($u1->has_active_premium) <x-lucide-crown class="w-3 h-3 text-yellow-500 shrink-0" /> @endif                                                
                                             @else <span class="text-sm text-muted-foreground truncate">Удален</span> @endif
                                         </div>
-                                         <p class="text-xs text-muted-foreground truncate mt-1">
+                                        <p class="text-xs text-muted-foreground truncate mt-1">
                                             @if ($lastMsg)
                                                 @if ($lastMsg->type === 'system')
                                                     <span class="text-blue-500 font-medium">Системное</span>
@@ -267,11 +274,11 @@ new #[Layout('layouts.admin')] class extends Component
                                             @endif
                                         </p>
                                         <!-- Юзер 2 (кликабельный) -->
-                                        <div class="flex items-center gap-1">
+                                        <div class="flex items-center gap-1 min-w-0">
                                             @if($u2)
-                                                <x-user-status-sign :user="$u2" />
+                                                <x-user-status-sign :user="$u2" class="shrink-0" />
                                                 <span class="text-sm font-medium truncate">{{ $u2->name }}</span>
-                                                @if($u2->has_active_premium) <x-lucide-crown class="w-3 h-3 text-yellow-500" /> @endif                                               
+                                                @if($u2->has_active_premium) <x-lucide-crown class="w-3 h-3 text-yellow-500 shrink-0" /> @endif                                               
                                             @else <span class="text-sm text-muted-foreground truncate">Удален</span> @endif
                                         </div>
                                     </div>
@@ -285,7 +292,7 @@ new #[Layout('layouts.admin')] class extends Component
                                         @if ($chat->last_message_at)
                                             <span class="text-[10px] text-muted-foreground whitespace-nowrap">{{ $chat->last_message_at->diffForHumans() }}</span>
                                         @endif
-                                         @if ($chat->id)
+                                        @if ($chat->id)
                                             <span class="text-[10px] text-muted-foreground bg-muted p-1 rounded-xs whitespace-nowrap">#{{ $chat->id }}</span>
                                         @endif
                                     </div>
