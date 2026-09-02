@@ -185,38 +185,27 @@ new #[Layout('layouts.admin')] class extends Component
         $this->dispatch('show-toast', type: 'success', message: 'Установлено как аватар');
     }
 
-    /**
+       /**
      * Мягкое удаление (перемещение в карантин).
      */
-    public function softDelete(int $photoId): void
+    public function softDelete(int $photoId, ModeratePhotoAction $action): void
     {
         $photo = Photo::find($photoId);
         if (!$photo) return;
 
-        $photo->delete();
-        AdminLog::record('photo.soft_delete', $photo, auth()->user(), ['deleted_at' => null], ['deleted_at' => now()]);
+        $action->softDelete($photo, auth()->user());
         $this->dispatch('show-toast', type: 'warning', message: 'Фото перемещено в карантин');
     }
 
     /**
      * Восстановление из карантина (возвращение в очередь на модерацию).
      */
-    public function restorePhoto(int $photoId): void
+    public function restorePhoto(int $photoId, ModeratePhotoAction $action): void
     {
         $photo = Photo::withTrashed()->find($photoId);
         if (!$photo) return;
 
-        DB::transaction(function () use ($photo) {
-            $photo->restore();
-            $photo->update([
-                'status' => 'pending',
-                'reject_reason' => null,
-                'moderated_by' => null,
-                'moderated_at' => null,
-            ]);
-        });
-
-        AdminLog::record('photo.restore', $photo, auth()->user(), ['status' => 'rejected', 'deleted_at' => 'set'], ['status' => 'pending', 'deleted_at' => null]);
+        $action->restore($photo, auth()->user());
         $this->dispatch('show-toast', type: 'success', message: 'Фото восстановлено в очередь');
     }
 

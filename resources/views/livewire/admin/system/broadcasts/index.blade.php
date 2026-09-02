@@ -288,7 +288,7 @@ new #[Layout('layouts.admin')] class extends Component
             </a>
             <h1 class="text-2xl font-semibold flex items-center gap-2">
                 <x-lucide-radio class="w-6 h-6" />
-                Рассылки
+                Рассылка уведомлений
                 @if ($this->counts['draft'] > 0)
                     <x-ui.badge variant="warning" size="sm">{{ $this->counts['draft'] }} черновиков</x-ui.badge>
                 @endif

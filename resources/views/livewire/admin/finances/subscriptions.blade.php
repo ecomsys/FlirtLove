@@ -1,7 +1,7 @@
 <?php
 
+use App\Actions\Admin\ManageSubscriptionPlansAction;
 use App\Models\SubscriptionPlan;
-use App\Models\AdminLog;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Url;
 use Livewire\Volt\Component;
@@ -24,16 +24,11 @@ new #[Layout('layouts.admin')] class extends Component
     public int $duration_days = 30;
     public bool $is_active = true;
     public int $sort_order = 0;
-       public string $apple_product_id = '';
+    public string $apple_product_id = '';
     public string $google_product_id = '';
 
-    /** @var string URL для кнопки "Назад" */
     public string $backUrl = '';
 
-    /**
-     * Инициализация компонента.
-     * Запоминаем URL "Назад" только при первой загрузке.
-     */
     public function mount(): void
     {
         $previousUrl = url()->previous();
@@ -42,15 +37,11 @@ new #[Layout('layouts.admin')] class extends Component
             : route('admin.dashboard');
     }
 
-    /**
-     * Очистка строки поиска.
-     */
     public function clearSearch(): void
     {
         $this->search = '';
     }
 
-    // Хардкодим списки фичей для вывода в UI
     public array $premiumFeatures = [
         'Свободно пиши всем девушкам, которые понравились',
         'Посмотри, кто поставил тебе лайк и не против встретиться',
@@ -99,7 +90,7 @@ new #[Layout('layouts.admin')] class extends Component
         $this->showPlanModal = true;
     }
 
-    public function save(): void
+    public function save(ManageSubscriptionPlansAction $action): void
     {
         $validated = $this->validate([
             'name' => 'required|string|max:255',
@@ -112,41 +103,27 @@ new #[Layout('layouts.admin')] class extends Component
             'google_product_id' => 'nullable|string|max:255',
         ]);
 
-        // Жестко задаем валюту и очищаем пустые поля
-        $validated['currency'] = 'RUB';
-        $validated['old_price'] = !empty($validated['old_price']) ? $validated['old_price'] : null;
-        $validated['apple_product_id'] = $validated['apple_product_id'] ?: null;
-        $validated['google_product_id'] = $validated['google_product_id'] ?: null;
-
         if ($this->editingPlanId) {
             $plan = SubscriptionPlan::find($this->editingPlanId);
-            $before = $plan->only(array_keys($validated));
-            $plan->update($validated);
-            AdminLog::record('plan.update', $plan, auth()->user(), $before, $plan->fresh()->only(array_keys($validated)));
+            $action->updatePlan($plan, $validated, auth()->user());
             $this->dispatch('show-toast', type: 'success', message: 'Тариф обновлен');
         } else {
             $validated['tier'] = $this->activeTab;
             $validated['is_active'] = $this->is_active;
-            
-            $plan = SubscriptionPlan::create($validated);
-            AdminLog::record('plan.create', $plan, auth()->user(), null, $plan->only(array_keys($validated)));
+            $action->createPlan($validated, auth()->user());
             $this->dispatch('show-toast', type: 'success', message: 'Тариф создан');
         }
 
         $this->showPlanModal = false;
     }
 
-    public function toggleActive(int $planId): void
+    public function toggleActive(int $planId, ManageSubscriptionPlansAction $action): void
     {
         $plan = SubscriptionPlan::find($planId);
         if (!$plan) return;
 
-        $before = ['is_active' => $plan->is_active];
-        $plan->update(['is_active' => !$plan->is_active]);
-        $after = ['is_active' => $plan->fresh()->is_active];
-
-        AdminLog::record('plan.toggle_active', $plan, auth()->user(), $before, $after);
-        $this->dispatch('show-toast', type: 'success', message: $after['is_active'] ? 'Тариф активирован' : 'Тариф скрыт');
+        $isActive = $action->toggleActive($plan, auth()->user());
+        $this->dispatch('show-toast', type: 'success', message: $isActive ? 'Тариф активирован' : 'Тариф скрыт');
     }
 
     public function with(): array

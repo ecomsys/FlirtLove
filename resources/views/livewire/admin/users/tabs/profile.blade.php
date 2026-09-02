@@ -1,15 +1,13 @@
 <?php
 
-use App\Models\AdminLog;
+use App\Actions\Admin\ManageUserProfileAction;
 use App\Models\User;
-use App\Notifications\ProfileFieldCleared;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\On;
 use Livewire\Volt\Component;
 
 new class extends Component 
 {
-    // ПРИНИМАЕМ ТОЛЬКО ID (Спасает от 404/500 при рендере)
     public int $userId;
 
     public function mount(int $userId): void
@@ -17,7 +15,6 @@ new class extends Component
         $this->userId = $userId;
     }
 
-    // ДОСТАЕМ ЮЗЕРА (с удаленными, чтобы не падать)
     #[Computed]
     public function user(): User
     {
@@ -26,7 +23,6 @@ new class extends Component
             ->findOrFail($this->userId);
     }
 
-    // Слушаем обновления из родительского компонента
     #[On('user-action-performed')] 
     public function refreshUser(): void
     {
@@ -34,42 +30,25 @@ new class extends Component
     }
 
     /**
-     * Очистка текстового поля модератором с логированием и уведомлением.
+     * Очистка текстового поля модератором.
      */
-    public function clearProfileField(string $field): void
+    public function clearProfileField(string $field, ManageUserProfileAction $action): void
     {
-        $allowedFields = ['headline', 'bio', 'looking_for'];
-        if (!in_array($field, $allowedFields)) return;
+        // Делегируем всю логику в Action
+        $success = $action->clearField($this->user, $field, auth()->user());
 
-        $user = $this->user;
-        $profile = $user->profile;
-        if (!$profile) return;
-
-        $oldValue = $profile->{$field};
-        if (empty($oldValue)) {
-            $this->dispatch('show-toast', type: 'error', message: 'Это поле уже пустое.');
-            return;
+        if ($success) {
+            $fieldLabels = ['headline' => 'Заголовок', 'bio' => 'О себе', 'looking_for' => 'Кого я ищу'];
+            $this->dispatch('show-toast', type: 'success', message: "Поле '{$fieldLabels[$field]}' очищено. Юзеру отправлено уведомление.");
+        } else {
+            $this->dispatch('show-toast', type: 'error', message: 'Это поле уже пустое или недоступно для очистки.');
         }
-
-        // Очищаем поле в БД
-        $profile->update([$field => null]);
-
-        // Логируем в AdminLog (before/after)
-        AdminLog::record('profile.clear_field', $user, auth()->user(), [$field => $oldValue], [$field => null]);
-
-        // Отправляем юзеру уведомление (если он не удален)
-        if (!$user->trashed()) {
-            $user->notify(new ProfileFieldCleared($field));
-        }
-
-        $fieldLabels = ['headline' => 'Заголовок', 'bio' => 'О себе', 'looking_for' => 'Кого я ищу'];
-        $this->dispatch('show-toast', type: 'success', message: "Поле '{$fieldLabels[$field]}' очищено. Юзеру отправлено уведомление.");
         
         $this->refreshUser();
     }
 
     // ============================================
-    // ХЕЛПЕРЫ ДЛЯ ВЫВОДА (Твои методы)
+    // ХЕЛПЕРЫ ДЛЯ ВЫВОДА
     // ============================================
 
     public function getOptionLabel(string $type, int|string|null $value): ?string

@@ -97,9 +97,9 @@ new #[Layout('layouts.admin')] class extends Component
     {
         $loc = GeoIPLocation::find($id);
         if ($loc) {
-            $action->toggleRegistration($loc);
+            $action->toggleRegistration($loc, auth()->user()); // <--- Передаем админа
             $this->dispatch('show-toast', type: 'success', message: 'Правило регистрации обновлено');
-            $this->clearComputedCache(); // ФИКС: Обновляем таблицу мгновенно
+            $this->clearComputedCache();
         }
     }
 
@@ -107,9 +107,9 @@ new #[Layout('layouts.admin')] class extends Component
     {
         $loc = GeoIPLocation::find($id);
         if ($loc) {
-            $action->toggleFeed($loc);
+            $action->toggleFeed($loc, auth()->user()); // <--- Передаем админа
             $this->dispatch('show-toast', type: 'success', message: 'Правило ленты обновлено');
-            $this->clearComputedCache(); // ФИКС: Обновляем таблицу мгновенно
+            $this->clearComputedCache();
         }
     }
 

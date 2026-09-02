@@ -1,8 +1,8 @@
 <?php
 
 use App\Actions\Admin\ToggleUserBanAction;
+use App\Actions\Admin\DeleteUserAction;
 use App\Models\User;
-use App\Models\AdminLog;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\On;
@@ -49,6 +49,7 @@ new #[Layout('layouts.admin')] class extends Component
 
     /** @var ToggleUserBanAction Экземпляр экшена для логики бана/разбана */
     private ToggleUserBanAction $toggleUserBanAction;
+    private DeleteUserAction $deleteUserAction;
 
     /**
      * Инициализация свойств при первом рендере компонента.
@@ -56,11 +57,11 @@ new #[Layout('layouts.admin')] class extends Component
      *
      * @param ToggleUserBanAction $toggleUserBanAction
      */
-    public function boot(ToggleUserBanAction $toggleUserBanAction): void
+      public function boot(ToggleUserBanAction $toggleUserBanAction, DeleteUserAction $deleteUserAction): void
     {
         $this->toggleUserBanAction = $toggleUserBanAction;
+        $this->deleteUserAction = $deleteUserAction;
     }
-
     /**
      * Хуки Livewire: сброс пагинации на 1-ю страницу при изменении любого фильтра.
      * Предотвращает баг, когда юзер на 5-й странице меняет фильтр и видит пустоту.
@@ -265,19 +266,14 @@ new #[Layout('layouts.admin')] class extends Component
 
         /**
      * Восстановление деактивированного пользователя прямо из списка.
-     *
-     * @param int $userId ID пользователя
      */
     public function restoreUser(int $userId): void
     {
-        // Ищем даже среди удаленных
         $user = User::withTrashed()->find($userId);
         if (!$user || !$user->trashed()) return;
 
-        $user->restore();
-        $user->update(['status' => 'active']);
-
-        AdminLog::record('user.restore', $user, auth()->user());
+        // Делегируем логику в Action
+        $this->deleteUserAction->restore($user, auth()->user());
 
         $this->dispatch('show-toast', type: 'success', message: "Пользователь {$user->name} восстановлен");
         $this->refreshUsers();

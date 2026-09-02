@@ -232,7 +232,7 @@ new class extends Component {
     <a href="{{ $exists ? route($route) : '#' }}" {{ $exists ? 'wire:navigate' : '' }}
         class="flex items-start gap-2 px-3 py-2 rounded-md text-sm font-medium {{ request()->routeIs('admin.system.journal-logs') ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-accent hover:text-foreground' }}">
         <x-lucide-scroll-text class="w-4 h-4" />
-        Журнал действий
+        Журнал админов
     </a>
 
       @php $route = 'admin.system.geo-ip-locations.index'; $exists = Route::has($route); @endphp

@@ -2,8 +2,7 @@
 
 use App\Actions\Admin\BlogPostsAction;
 use App\Models\BlogPost;
-use App\Models\AdminLog;
-use Illuminate\Support\Str;
+
 use Illuminate\Support\Facades\Log;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Layout;
@@ -31,16 +30,18 @@ new #[Layout('layouts.admin')] class extends Component
     /** @var string URL для кнопки "Назад" */
     public string $backUrl = '';
 
-    public function mount(): void
+       public function mount(): void
     {
-        // ФИКС: Запоминаем URL "Назад" только при первой загрузке
         $previousUrl = url()->previous();
         $this->backUrl = ($previousUrl && $previousUrl !== url()->current()) 
             ? $previousUrl 
             : route('admin.dashboard');
 
-        if (is_numeric($this->search) && $this->search !== '') {
-            $this->statusFilter = 'all';
+        // ФИКС: Читаем напрямую из URL, чтобы перебить Session
+        $qParam = request()->query('q', '');
+        if (!empty($qParam) && is_numeric($qParam)) {
+            $this->search = (string) $qParam;
+            $this->statusFilter = 'all'; // Сбрасываем фильтр статуса, чтобы пост 100% нашелся
         }
     }
 
@@ -56,7 +57,7 @@ new #[Layout('layouts.admin')] class extends Component
     public function deletePost(int $id, BlogPostsAction $action): void
     {       
         try {
-            $action->delete(BlogPost::findOrFail($id));
+            $action->delete(BlogPost::findOrFail($id), auth()->user());
             $this->dispatch('show-toast', type: 'success', message: 'Пост удален');
             $this->clearComputedCache(); // ФИКС: Сбрасываем кэш
         } catch (\Exception $e) {
@@ -68,7 +69,7 @@ new #[Layout('layouts.admin')] class extends Component
     public function toggleStatus(int $id, BlogPostsAction $action): void
     {
         try {
-            $action->toggle(BlogPost::findOrFail($id));
+            $action->toggle(BlogPost::findOrFail($id), auth()->user());
             $this->dispatch('show-toast', type: 'success', message: 'Статус обновлен');
             $this->clearComputedCache();
         } catch (\Exception $e) {
@@ -80,7 +81,7 @@ new #[Layout('layouts.admin')] class extends Component
     public function archivePost(int $id, BlogPostsAction $action): void
     {
         try {
-            $action->archive(BlogPost::findOrFail($id));
+            $action->archive(BlogPost::findOrFail($id), auth()->user());
             $this->dispatch('show-toast', type: 'success', message: 'Пост перемещен в архив');
             $this->clearComputedCache();
         } catch (\Exception $e) {
@@ -92,7 +93,7 @@ new #[Layout('layouts.admin')] class extends Component
     public function restorePost(int $id, BlogPostsAction $action): void
     {
         try {
-            $action->restore(BlogPost::findOrFail($id));
+            $action->restore(BlogPost::findOrFail($id), auth()->user());
             $this->dispatch('show-toast', type: 'success', message: 'Пост восстановлен');
             $this->clearComputedCache();
         } catch (\Exception $e) {
@@ -101,20 +102,12 @@ new #[Layout('layouts.admin')] class extends Component
         }
     }
 
-    public function duplicatePost(int $id): void
+        public function duplicatePost(int $id, BlogPostsAction $action): void
     {
         try {
             $post = BlogPost::findOrFail($id);
-            $new = $post->replicate();
-            // ФИКС: Делаем красивый слаг без времени
-            $new->slug = $post->slug . '-copy-' . Str::random(6);
-            $new->title = $post->title . ' (Копия)';
-            $new->status = 'draft'; 
-            $new->is_featured = false;
-            $new->views_count = 0;
-            $new->save();
+            $action->duplicate($post, auth()->user());
             
-            AdminLog::record('blog.create', $new, auth()->user());
             $this->dispatch('show-toast', type: 'success', message: 'Пост продублирован');
             $this->clearComputedCache();
         } catch (\Exception $e) {
@@ -134,7 +127,7 @@ new #[Layout('layouts.admin')] class extends Component
         }
 
         try {
-            $message = $action->applyBulk($this->selected, $this->bulkAction, $this->statusFilter === 'archived');
+            $message = $action->applyBulk($this->selected, $this->bulkAction, $this->statusFilter === 'archived', auth()->user());
             $this->dispatch('show-toast', type: 'success', message: $message);
             $this->clearComputedCache();
         } catch (\Exception $e) {
@@ -185,7 +178,7 @@ new #[Layout('layouts.admin')] class extends Component
         $this->selectAll = false; 
     }
 
-    #[Computed]
+        #[Computed]
     public function posts()
     {
         $searchOperator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
@@ -193,9 +186,16 @@ new #[Layout('layouts.admin')] class extends Component
         return BlogPost::query()
             ->with(['category', 'cover']) 
             ->when($this->search, function ($query) use ($searchOperator) {
-                $query->where('title', $searchOperator, "%{$this->search}%")
-                      ->orWhere('slug', $searchOperator, "%{$this->search}%")
-                      ->orWhereRaw("CAST(id AS TEXT) {$searchOperator} ?", ["%{$this->search}%"]);
+                $search = $this->search;
+                $query->where(function ($q) use ($search, $searchOperator) {
+                    $q->where('title', $searchOperator, "%{$search}%")
+                      ->orWhere('slug', $searchOperator, "%{$search}%");
+                    
+                    // ФИКС: Если ищем число, ищем точное совпадение по ID
+                    if (is_numeric($search)) {
+                        $q->orWhere('id', (int) $search);
+                    }
+                });
             })
             ->when($this->statusFilter === 'uncategorized', fn($q) => $q->whereNull('category_id'))
             ->when(!in_array($this->statusFilter, ['all', 'uncategorized']), fn($q) => $q->where('status', $this->statusFilter))

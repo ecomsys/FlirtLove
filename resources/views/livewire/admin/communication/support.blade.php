@@ -3,7 +3,7 @@
 use App\Models\Chat;
 use App\Models\ChatParticipant;
 use App\Models\Message;
-use App\Models\AdminLog;
+use App\Actions\Admin\ManageSupportChatsAction;
 use App\Models\SupportTemplate;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Layout;
@@ -16,30 +16,19 @@ new #[Layout('layouts.admin')] class extends Component
 {
     use WithPagination;
 
-        /** @var string Фильтр списка тикетов (active, unread, archived) */
     public string $chatFilter = 'unread';
     
-    /** @var int|null ID активного чата для просмотра переписки */
     #[Url(as: 'chat', except: '')]
     public ?int $activeChatId = null;
     
-    /** @var string Текст сообщения для отправки */
     public string $messageBody = '';
     
-    /** @var string Поиск по имени или ID чата */
     #[Url(as: 'q', except: '')]
     public string $search = '';
     
-    /** @var bool Видимость модалки создания нового тикета */
     public bool $showNewTicketModal = false;
-
-    /** @var string URL для кнопки "Назад" */
     public string $backUrl = '';
 
-    /**
-     * Инициализация компонента.
-     * Запоминаем URL "Назад" и обрабатываем умный поиск по ID или прямой старт с юзером.
-     */
     public function mount($user_id = null): void
     {
         $previousUrl = url()->previous();
@@ -53,43 +42,47 @@ new #[Layout('layouts.admin')] class extends Component
             return;
         }
 
-        // ФИКС: Проверяем, существует ли чат по URL (?chat=678) и принадлежит ли он текущему админу
-        if ($this->activeChatId) {
-            $chat = Chat::where('type', 'support')
-                ->whereHas('participants', fn($q) => $q->where('user_id', $adminId))
-                ->find($this->activeChatId);
+        // ФИКС: Читаем напрямую из Request
+        $qParam = request()->query('q', '');
+        $chatParam = request()->query('chat', '');
 
+        // 1. Если пришли по прямой ссылке ?chat=678
+        if (!empty($chatParam)) {
+            $chat = Chat::where('type', 'support')->find((int) $chatParam);
             if ($chat) {
-                $participant = $chat->participants->firstWhere('user_id', $adminId);
-                if ($participant) {
-                    $this->chatFilter = $participant->is_hidden ? 'archived' : 'active';
-                }
-                $this->selectChat($chat->id);
-                return;
-            } else {
-                // Если чат не найден или чужой — сбрасываем, чтобы не падала страница
-                $this->activeChatId = null;
-            }
-        }
-
-               // Умный поиск: если пришли по ссылке ?q=123, автоматически открываем чат
-        if (!empty($this->search) && is_numeric($this->search)) {
-            // Убрали whereHas('participants', ... auth()->id()), чтобы можно было открыть любой чат по ID
-            $chat = Chat::where('type', 'support')->find((int) $this->search);
+                $this->activeChatId = $chat->id;
+                $this->search = (string) $chat->id; // Подставляем в поле поиска
                 
-            if ($chat) {
                 $participant = $chat->participants->firstWhere('user_id', $adminId);
                 if ($participant) {
                     $this->chatFilter = $participant->is_hidden ? 'archived' : ($participant->unread_count > 0 ? 'unread' : 'active');
                 } else {
-                    // Если админ не участник, открываем как активный
-                    $this->chatFilter = 'active';
+                    $this->chatFilter = 'active'; // Если админ не участник, открываем как активный
                 }
-                $this->selectChat($chat->id);
+                return;
+            } else {
+                $this->activeChatId = null;
+            }
+        }
+
+        // 2. Если пришли по ссылке с поиском ?q=123
+        if (!empty($qParam) && is_numeric($qParam)) {
+            $chat = Chat::where('type', 'support')->find((int) $qParam);
+            if ($chat) {
+                $this->activeChatId = $chat->id;
+                $this->search = (string) $qParam; // Подставляем в поле поиска
+                
+                $participant = $chat->participants->firstWhere('user_id', $adminId);
+                if ($participant) {
+                    $this->chatFilter = $participant->is_hidden ? 'archived' : ($participant->unread_count > 0 ? 'unread' : 'active');
+                } else {
+                    $this->chatFilter = 'active'; // Если админ не участник, открываем как активный
+                }
                 return;
             }
         }
 
+        // 3. Дефолтная логика, если нет параметров
         $unreadChat = Chat::where('type', 'support')
             ->whereHas('participants', fn($q) => $q->where('user_id', $adminId)->where('unread_count', '>', 0)->where('is_hidden', false))
             ->latest('last_message_at')
@@ -108,24 +101,18 @@ new #[Layout('layouts.admin')] class extends Component
         }
     }
 
-    /**
-     * Хук Livewire: сброс пагинации и умная подсветка при поиске.
-     */
-     public function updatedSearch(): void
+    public function updatedSearch(): void
     {
         $this->resetPage();
+        $adminId = auth()->id(); // ФИКС: Объявили переменную!
 
-               // Умный поиск: если пришли по ссылке ?q=123, автоматически открываем чат
         if (!empty($this->search) && is_numeric($this->search)) {
-            // Убрали whereHas('participants', ... auth()->id()), чтобы можно было открыть любой чат по ID
             $chat = Chat::where('type', 'support')->find((int) $this->search);
-                
             if ($chat) {
                 $participant = $chat->participants->firstWhere('user_id', $adminId);
                 if ($participant) {
                     $this->chatFilter = $participant->is_hidden ? 'archived' : ($participant->unread_count > 0 ? 'unread' : 'active');
                 } else {
-                    // Если админ не участник, открываем как активный
                     $this->chatFilter = 'active';
                 }
                 $this->selectChat($chat->id);
@@ -133,12 +120,9 @@ new #[Layout('layouts.admin')] class extends Component
             }
         }
         
-        // Если не нашли как ID тикета — оставляем как обычный поиск (по имени)
         $this->activeChatId = null;
     }
-    /**
-     * Очистка строки поиска.
-     */
+
     public function clearSearch(): void
     {
         $this->search = '';
@@ -174,14 +158,13 @@ new #[Layout('layouts.admin')] class extends Component
     public function startChatWithUser(int $id): void
     {
         $admin = auth()->user();
-         $user = \App\Models\User::withTrashed()->find($id);
+        $user = \App\Models\User::withTrashed()->find($id);
 
         if ($user) {
             if ($this->chatFilter !== 'active') {
                 $this->chatFilter = 'active';
                 $this->resetPage();
             }
-
             $chat = Chat::getOrCreateSupportChat($admin->id, $user->id);
             $this->selectChat($chat->id);
         }
@@ -190,43 +173,35 @@ new #[Layout('layouts.admin')] class extends Component
         unset($this->chats);
     }    
 
-        public function selectChat(int $chatId): void
+    public function selectChat(int $chatId): void
     {
         $this->activeChatId = $chatId;
         $this->messageBody = '';
-
-        // ФИКС: УБРАЛИ обнуление unread_count отсюда! Чат остается непрочитанным, пока админ не ответит или не нажмет "Прочитано".
-        
         unset($this->stats); 
         unset($this->chats);
-        
         $this->dispatch('scroll-to-active-chat');
         $this->dispatch('focus-message-input');
         $this->dispatch('scroll-chat-bottom');
     }
 
-    /**
-     * НОВЫЙ МЕТОД: Ручная отметка тикета как прочитанного.
-     */
-    public function markAsRead(int $chatId): void
+    public function markAsRead(int $chatId, ManageSupportChatsAction $action): void
     {
-        ChatParticipant::where('chat_id', $chatId)
-            ->where('user_id', auth()->id())
-            ->update(['unread_count' => 0]);
+        $chat = Chat::find($chatId);
+        if (!$chat) return;
+
+        $action->markAsRead($chat, auth()->user());
 
         unset($this->stats); 
         unset($this->chats);
-        
         $this->dispatch('show-toast', type: 'success', message: 'Тикет отмечен как прочитанный.');
     }
 
-
-    public function archiveChat(int $chatId): void
+    public function archiveChat(int $chatId, ManageSupportChatsAction $action): void
     {
-        ChatParticipant::where('chat_id', $chatId)
-            ->where('user_id', auth()->id())
-            ->update(['is_hidden' => true]);
-        AdminLog::record('support.archive', Chat::find($chatId), auth()->user());
+        $chat = Chat::find($chatId);
+        if (!$chat) return;
+
+        $action->archiveChat($chat, auth()->user());
 
         $this->activeChatId = null;
         unset($this->chats);
@@ -234,12 +209,12 @@ new #[Layout('layouts.admin')] class extends Component
         $this->dispatch('show-toast', type: 'info', message: 'Тикет архивирован.');
     }
 
-    public function unarchiveChat(int $chatId): void
+    public function unarchiveChat(int $chatId, ManageSupportChatsAction $action): void
     {
-        ChatParticipant::where('chat_id', $chatId)
-            ->where('user_id', auth()->id())
-            ->update(['is_hidden' => false]);
-        AdminLog::record('support.unarchive', Chat::find($chatId), auth()->user());
+        $chat = Chat::find($chatId);
+        if (!$chat) return;
+
+        $action->unarchiveChat($chat, auth()->user());
 
         $this->activeChatId = null;
         unset($this->chats);
@@ -250,44 +225,25 @@ new #[Layout('layouts.admin')] class extends Component
     public function setFilter(string $filter): void
     {
         $this->chatFilter = $filter;
+        $this->search = ''; 
         $this->activeChatId = null;
         $this->resetPage();
         unset($this->chats);
     }
 
-    public function sendMessage(): void
+    public function sendMessage(ManageSupportChatsAction $action): void
     {
         $this->validate(['messageBody' => 'required|string|max:2000']);
+        
         $chat = Chat::find($this->activeChatId);
         if (!$chat) return;
-        $sender = auth()->user();
 
-        \DB::transaction(function () use ($chat, $sender) {
-            Message::create([
-                'chat_id' => $chat->id,
-                'sender_id' => $sender->id,
-                'type' => 'text',
-                'body' => $this->messageBody,
-            ]);
-            $chat->update(['last_message_at' => now()]);
-            
-            // ФИКС: Увеличиваем счетчик непрочитанных ТОЛЬКО обычным юзерам (role = 'user')
-            // Это защитит админов от получения +1 к счетчику, когда отвечает коллега.
-            ChatParticipant::where('chat_id', $chat->id)
-                ->whereHas('user', fn($q) => $q->where('role', 'user'))
-                ->increment('unread_count');
-            
-            // Если отправитель является участником чата (например, он создатель), обнуляем ему счетчик
-            ChatParticipant::where('chat_id', $chat->id)
-                ->where('user_id', $sender->id)
-                ->update(['unread_count' => 0]);
-        });
+        $action->sendMessage($chat, auth()->user(), $this->messageBody);
 
-        AdminLog::record('support.message_sent', $chat, auth()->user());
         $this->messageBody = '';
         
         unset($this->chats);
-        unset($this->stats); // ВАЖНО: Обновляем бейджи после отправки!
+        unset($this->stats);
         $this->dispatch('scroll-chat-bottom');
     }
 
@@ -312,29 +268,26 @@ new #[Layout('layouts.admin')] class extends Component
     public function chats()
     {
         $operator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
-        $avatarQuery = fn($q) => $q
-            ->select(['id', 'user_id', 'is_primary', 'status', 'path_thumb', 'path_medium', 'path_large', 'path_original'])
-            ->orderByDesc('is_primary')
-            ->limit(1);
+        $avatarQuery = fn($q) => $q->select(['id', 'user_id', 'is_primary', 'status', 'path_thumb', 'path_medium', 'path_large', 'path_original'])->orderByDesc('is_primary')->limit(1);
 
-        return Chat::where('type', 'support')
-            ->whereHas('participants', fn($q) => $q->where('user_id', auth()->id()))
-            ->when($this->chatFilter === 'archived', function ($q) {
-                $q->whereHas('participants', fn($sub) => $sub->where('user_id', auth()->id())->where('is_hidden', true));
-            })
-            ->when($this->chatFilter === 'active', function ($q) {
-                // ФИКС: Активные = не скрытые и прочитанные
-                $q->whereHas('participants', fn($sub) => $sub->where('user_id', auth()->id())->where('is_hidden', false)->where('unread_count', 0));
-            })
-            ->when($this->chatFilter === 'unread', function ($q) {
-                // ФИКС: Непрочитанные = не скрытые и unread_count > 0
-                $q->whereHas('participants', fn($sub) => $sub->where('user_id', auth()->id())->where('is_hidden', false)->where('unread_count', '>', 0));
-            })
-            ->when($this->search, function ($query) use ($operator) {
-                $query->where(function ($q) use ($operator) {
-                    $q->whereHas('participants.user', fn($sub) => $sub->withTrashed()->where('name', $operator, "%{$this->search}%"));
-                    if (is_numeric($this->search)) {
-                        $q->orWhere('id', (int) $this->search);
+        // ФИКС: Если мы ищем по ID, не ограничиваем список "только моими чатами", чтобы чужой чат появился в списке
+        $isIdSearch = is_numeric($this->search) && !empty($this->search);
+
+        $query = Chat::where('type', 'support');
+
+        if (!$isIdSearch) {
+            $query->whereHas('participants', fn($q) => $q->where('user_id', auth()->id()))
+                ->when($this->chatFilter === 'archived', fn($q) => $q->whereHas('participants', fn($sub) => $sub->where('user_id', auth()->id())->where('is_hidden', true)))
+                ->when($this->chatFilter === 'active', fn($q) => $q->whereHas('participants', fn($sub) => $sub->where('user_id', auth()->id())->where('is_hidden', false)->where('unread_count', 0)))
+                ->when($this->chatFilter === 'unread', fn($q) => $q->whereHas('participants', fn($sub) => $sub->where('user_id', auth()->id())->where('is_hidden', false)->where('unread_count', '>', 0)));
+        }
+
+        return $query->when($this->search, function ($q) use ($operator, $isIdSearch) {
+                $q->where(function ($sub) use ($operator, $isIdSearch) {
+                    if ($isIdSearch) {
+                        $sub->where('id', (int) $this->search);
+                    } else {
+                        $sub->whereHas('participants.user', fn($uq) => $uq->withTrashed()->where('name', $operator, "%{$this->search}%"));
                     }
                 });
             })
@@ -343,13 +296,13 @@ new #[Layout('layouts.admin')] class extends Component
             ->paginate(15);
     }
 
-       public function with(): array
+    public function with(): array
     {
         $avatarQuery = fn($q) => $q->select(['id', 'user_id', 'is_primary', 'status', 'path_thumb', 'path_medium', 'path_large', 'path_original'])->orderByDesc('is_primary')->limit(1);
         
         $partner = null;
         $activeMessages = collect();
-        $activeUnreadCount = 0; // НОВОЕ: Счетчик непрочитанных в активном чате
+        $activeUnreadCount = 0;
 
         if ($this->activeChatId) {
             $activeChat = $this->chats->firstWhere('id', $this->activeChatId);
@@ -377,10 +330,11 @@ new #[Layout('layouts.admin')] class extends Component
             'stats' => $this->stats,
             'partner' => $partner,
             'activeMessages' => $activeMessages,
-            'activeUnreadCount' => $activeUnreadCount, // ПЕРЕДАЕМ В ШАБЛОН
+            'activeUnreadCount' => $activeUnreadCount,
         ];
     }
-};?>
+}; 
+?>
 
 <div class="space-y-6">
     <div class="flex items-center justify-between flex-wrap gap-4">
@@ -452,44 +406,44 @@ new #[Layout('layouts.admin')] class extends Component
                         $chatPartner = $chat->participants->firstWhere('user_id', '!=', auth()->id())?->user;
                         $lastMsg = $chat->messages->first();
                     @endphp
-
                     <div wire:click="selectChat({{ $chat->id }})"
                         class="p-3 rounded-lg cursor-pointer transition-colors relative overflow-hidden {{ $this->activeChatId === $chat->id ? 'chat-active bg-primary/10 border border-primary/30' : ($unreadCount > 0 ? 'bg-red-500/5 border border-red-500/30 hover:bg-red-500/10' : 'bg-muted/30 hover:bg-muted border border-transparent') }}"
-                        wire:key="sup-chat-{{ $chat->id }}">
-
+                        wire:key="sup-chat-{{ $chat->id }}"
+                        {{-- НОВОЕ: Авто-скролл к активному чату --}}
+                        x-data="{ isHi: {{ $this->activeChatId === $chat->id ? 'true' : 'false' }} }"
+                        x-init="isHi && setTimeout(() => { $el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 200)"
+                    >
                         @if ($unreadCount > 0)
                             <div class="absolute left-0 top-0 bottom-0 w-0.5 bg-red-500"></div>
                         @endif
 
-                        <div class="flex items-center gap-3">
-                            <div class="relative">
-                                <x-avatar src="{{ $chatPartner?->avatar_url }}" name="{{ $chatPartner?->name }}" size="sm" userId="{{ $chatPartner?->id }}" showStatus="true" :isOnline="$chatPartner?->is_online" />                  
-                            </div>
-
-                            <div class="flex-1 min-w-0">
-                                <div class="flex justify-between items-center gap-2">
-                                    <div class="flex flex-col gap-1">
-                                        <div class="flex items-center gap-1 min-w-0">
-                                            <x-user-status-sign :user="$chatPartner" />
-                                            <a href="{{ route('admin.users.show', $chatPartner?->id) }}" wire:navigate class="text-sm truncate hover:text-primary {{ $unreadCount > 0 ? 'font-bold text-red-600 dark:text-red-400' : 'font-medium' }}" @if(!$chatPartner) style="pointer-events: none;" @endif>{{ $chatPartner?->name ?? 'Удален' }}</a>
-                                            @if ($chatPartner?->has_active_premium) <x-lucide-crown class="w-3 h-3 text-yellow-500" /> @endif                                        
-                                        </div>
-                                        <p class="text-xs truncate mt-1 {{ $unreadCount > 0 ? 'text-foreground font-medium' : 'text-muted-foreground' }}">
-                                            @if ($lastMsg) {{ Str::limit($lastMsg->body, 30) }} @else <span class="italic">Нет сообщений</span> @endif
-                                        </p>
+                        <div class="flex items-center gap-2">                            
+                            <x-avatar src="{{ $chatPartner?->avatar_url }}" name="{{ $chatPartner?->name }}" size="sm" userId="{{ $chatPartner?->id }}" showStatus="true" :isOnline="$chatPartner?->is_online" />                                              
+                            
+                            <div class="flex-1 min-w-0 flex justify-between items-center gap-0">
+                                {{-- ФИКС: Добавлен min-w-0, чтобы этот блок сжимался первым --}}
+                                <div class="flex flex-1 flex-col min-w-0">
+                                    <div class="flex items-center gap-1 min-w-0">
+                                        <x-user-status-sign :user="$chatPartner" />
+                                        <a href="{{ route('admin.users.show', $chatPartner?->id) }}" wire:navigate class="text-sm truncate hover:text-primary {{ $unreadCount > 0 ? 'font-bold text-red-600 dark:text-red-400' : 'font-medium' }}" @if(!$chatPartner) style="pointer-events: none;" @endif>{{ $chatPartner?->name ?? 'Удален' }}</a>
+                                        @if ($chatPartner?->has_active_premium) <x-lucide-crown class="w-3 h-3 text-yellow-500 shrink-0" /> @endif                                        
                                     </div>
+                                    <p class="text-xs truncate mt-1 {{ $unreadCount > 0 ? 'text-foreground font-medium' : 'text-muted-foreground' }}">
+                                        @if ($lastMsg) {{ Str::limit($lastMsg->body, 30) }} @else <span class="italic">Нет сообщений</span> @endif
+                                    </p>
+                                </div>
 
-                                    <div class="flex flex-col items-end shrink-0">
-                                        @if ($chat->last_message_at)
-                                            <span class="text-[10px] {{ $unreadCount > 0 ? 'text-red-500 font-medium' : 'text-muted-foreground' }}">{{ $chat->last_message_at->diffForHumans() }}</span>
-                                        @endif
-                                        <span class="text-[10px] text-muted-foreground bg-muted px-1 py-0.5 rounded-xs whitespace-nowrap">#{{ $chat->id }}</span>
-                                        @if ($unreadCount > 0)
-                                            <span class="bg-red-500 text-white text-[10px] font-bold rounded-full h-5 min-w-[20px] flex items-center justify-center px-0.5">{{ $unreadCount }}</span>
-                                        @endif
-                                    </div>
-                                </div>                              
-                            </div>
+                                <div class="flex flex-col items-end shrink-0">
+                                    @if ($chat->last_message_at)
+                                        {{-- ФИКС: Добавлен whitespace-nowrap, чтобы дата не переносилась --}}
+                                        <span class="text-[10px] whitespace-nowrap {{ $unreadCount > 0 ? 'text-red-500 font-medium' : 'text-muted-foreground' }}">{{ $chat->last_message_at->diffForHumans() }}</span>
+                                    @endif
+                                    <span class="text-[10px] text-muted-foreground bg-muted px-1 py-0.5 rounded-xs whitespace-nowrap">#{{ $chat->id }}</span>
+                                    @if ($unreadCount > 0)
+                                        <span class="bg-red-500 text-white text-[10px] font-bold rounded-full h-5 min-w-[20px] flex items-center justify-center px-0.5 whitespace-nowrap">{{ $unreadCount }}</span>
+                                    @endif
+                                </div>
+                            </div>                              
                         </div>
                     </div>
                 @empty

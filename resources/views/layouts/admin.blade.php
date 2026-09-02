@@ -19,6 +19,9 @@
     <link href="https://fonts.bunny.net/css?family=instrument-sans:400,500,600,700&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fancyapps/ui@5.0/dist/fancybox/fancybox.css" />
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    
+    <style>[x-cloak] { display: none !important; }</style>
+    
     @stack('styles')
    <script>
         (function() {
@@ -44,25 +47,28 @@
     </script>
     @vite(['resources/css/app.css', 'resources/js/app.js'])
 </head>
+<body class="font-sans antialiased bg-background text-foreground">
+    
+    {{-- 1. Главный контейнер: занимает ровно 100% высоты экрана, скрывает внешний скролл --}}
+    <div class="flex flex-col h-screen overflow-hidden">
 
-<body class="font-sans antialiased bg-background text-foreground min-h-screen">
-    <div class="flex flex-col min-h-screen">
-
-        <!-- Шапка -->
+        <!-- Шапка (убедись, что в самом компоненте навигации задана высота, например h-16) -->
         <livewire:layout.admin-navigation />
 
-        <div class="flex flex-1 relative">
+        {{-- 2. Контейнер для сайдбара и контента. flex-1 заставляет его занять всё оставшееся место --}}
+        <div class="flex flex-row flex-1 overflow-hidden max-h-[calc(100dvh-4rem)]">
+            
             <!-- Сайдбар -->
-            <aside class="fixed little-scroll top-[4rem] left-0 z-40 w-64 h-[calc(100vh-4rem)] bg-card border-r border-border flex flex-col px-4 pt-4 pb-10 overflow-y-auto">
+            <aside class="w-64 h-full overflow-y-auto little-scroll bg-card border-r border-border flex flex-col px-4 pt-4 pb-10 shrink-0">
                 <livewire:layout.admin-sidebar />
             </aside>
 
-            <!-- Основной контент -->
-            <div class="flex-1 flex flex-col ml-64">
-                <main class="flex-1 p-8">
-                    {{ $slot }}
-                </main>
-            </div>
+            {{-- 3. Основной контент. 
+                 min-w-0 — КРИТИЧЕСКИ ВАЖНО для flex, чтобы таблицы не рвали верстку. 
+                 overflow-y-auto — скролл контента внутри. --}}
+            <main class="flex-1 h-full overflow-y-auto overflow-x-hidden little-scroll p-4 md:p-8 min-w-0">                
+                {{ $slot }}                
+            </main>
         </div>
     </div>
 
@@ -85,3 +91,4 @@
 </body>
 
 </html>
+

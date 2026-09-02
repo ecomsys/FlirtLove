@@ -1,29 +1,27 @@
 <?php
 
-use App\Models\AdminLog;
+use App\Actions\Admin\DeleteUserAction;
 use App\Models\Photo;
 use App\Models\User;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\On;
-use Livewire\Attributes\Url; // <--- ДОБАВИЛИ ИМПОРТ
+use Livewire\Attributes\Url;
 use Livewire\Volt\Component;
 
 new #[Layout('layouts.admin')] class extends Component 
 {
     public int $userId;
     
-    // ФИКС: Привязываем таб к URL. history: true - записывает каждый переход в историю браузера
     #[Url(as: 'tab', except: 'profile', history: true)]
     public string $activeTab = 'profile';
 
-    private array $allowedTabs = ['profile', 'bans', 'reports','blocks', 'photos', 'photo-comments', 'finance', 'social', 'diaries', 'diary-comments', 'dating', 'finances'];
+    private array $allowedTabs = ['sessions', 'admin-logs', 'profile', 'bans', 'reports','blocks', 'photos', 'photo-comments', 'finance', 'chats', 'diaries', 'diary-comments', 'dating', 'finances', 'gifts', 'broadcasts'];
 
     public function mount(int $user): void
     {
         $this->userId = $user;
         
-        // Защита: если кто-то ввел несуществующий таб в URL, возвращаем на профиль
         if (!in_array($this->activeTab, $this->allowedTabs)) {
             $this->activeTab = 'profile';
         }
@@ -50,7 +48,6 @@ new #[Layout('layouts.admin')] class extends Component
         return $photo?->thumb_url ?: '';
     }
 
-    // ФИКС: Убрали session(), теперь URL обновляется автоматически благодаря #[Url]
     public function setTab(string $tab): void
     {
         if (!in_array($tab, $this->allowedTabs)) return;
@@ -84,15 +81,13 @@ new #[Layout('layouts.admin')] class extends Component
         $this->refreshUser();
     }
 
-    public function restoreUser(): void
+    // ФИКС: Делегируем логику в DeleteUserAction
+    public function restoreUser(DeleteUserAction $action): void
     {
         $user = $this->user;
         if (!$user->trashed()) return;
 
-        $user->restore();
-        $user->update(['status' => 'active']);
-
-        AdminLog::record('user.restore', $user, auth()->user());
+        $action->restore($user, auth()->user());
 
         $this->dispatch('show-toast', type: 'success', message: "Пользователь {$user->name} восстановлен");
         $this->refreshUser();
@@ -102,7 +97,6 @@ new #[Layout('layouts.admin')] class extends Component
 
 <div class="space-y-3">
     {{-- ШАПКА ПРОФИЛЯ --}}
-    {{-- Обращаемся к $this->user и $this->avatarUrl (Volt автоматически мапит их) --}}
     <div class="flex items-center justify-between flex-wrap gap-4" wire:key="user-header-{{ $this->user->id }}-{{ $this->user->status }}-{{ $this->user->deleted_at }}">
         <div class="flex items-center gap-4">
             @php
@@ -143,6 +137,9 @@ new #[Layout('layouts.admin')] class extends Component
                     @if($this->user->deleted_at)
                         <x-ui.dropdown-menu-label>Аккаунт удален</x-ui.dropdown-menu-label>
                         <x-ui.dropdown-menu-separator />
+                        <x-ui.dropdown-menu-item wire:click="restoreUser" wire:confirm="Восстановить аккаунт пользователя?">
+                            <x-lucide-rotate-ccw class="w-4 h-4 text-green-500" /> Восстановить
+                        </x-ui.dropdown-menu-item>
                         <x-ui.dropdown-menu-item href="{{ route('admin.users.index') }}" wire:navigate>
                             <x-lucide-arrow-left class="w-4 h-4" /> Назад к списку
                         </x-ui.dropdown-menu-item>
@@ -176,26 +173,39 @@ new #[Layout('layouts.admin')] class extends Component
         </div>
     </div>
 
-        {{-- EMPTY STATE ДЛЯ УДАЛЕННОГО ЮЗЕРА --}}
-    @if($this->user->deleted_at)
-        <div class="flex flex-col items-center justify-center py-16 text-center border border-dashed border-border rounded-lg bg-card">
-            <x-lucide-user-x class="w-16 h-16 text-red-500/20 mb-4" />
-            <h2 class="text-xl font-semibold text-foreground">Аккаунт удален</h2>
-            <p class="text-sm text-muted-foreground mt-1 max-w-sm">
-                Пользователь был деактивирован. Данные сохранены в базе для безопасности, но профиль недоступен для просмотра.
-            </p>
-            
-            <div class="flex items-center gap-3 mt-6">
-                <x-ui.button wire:click="restoreUser" variant="default" size="sm" wire:confirm="Восстановить аккаунт пользователя?">
-                    <x-lucide-rotate-ccw class="w-4 h-4 mr-2" /> Восстановить аккаунт
-                </x-ui.button>
+    {{-- ОБЕРТКА ДЛЯ ТАБОВ И КОНТЕНТА С ОВЕРЛЕЕМ --}}
+    <div class="relative">
+        
+        @if($this->user->deleted_at)
+            {{-- ОВЕРЛЕЙ ДЛЯ ДЕАКТИВИРОВАННОГО ЮЗЕРА --}}
+            {{-- ФИКС: Добавили x-data для управления видимостью на клиенте, исправили позиционирование на absolute inset-0 --}}
+            <div x-data="{ showOverlay: true }" x-show="showOverlay" x-transition.opacity
+                 class="fixed left-[16rem] top-[4rem] right-0 bottom-0 z-20 flex flex-col items-center justify-center pointer-events-none bg-blue-500/5 backdrop-blur-[1px] rounded-lg pb-12">
                 
-                <x-ui.button variant="outline" size="sm" wire:navigate href="{{ route('admin.users.index') }}">
-                    <x-lucide-arrow-left class="w-4 h-4 mr-2" /> К списку пользователей
-                </x-ui.button>
+                <div class="relative flex flex-col items-center gap-2 p-6 pointer-events-auto bg-card/95 border border-dashed border-border rounded-xl shadow-2xl text-center max-w-sm">
+                    
+                    {{-- КНОПКА ЗАКРЫТИЯ ОВЕРЛЕЯ --}}
+                    <button @click="showOverlay = false" class="absolute top-3 right-3 p-1 rounded-md text-muted-foreground hover:bg-accent hover:text-foreground transition-colors" title="Закрыть и просмотреть данные">
+                        <x-lucide-x class="w-4 h-4" />
+                    </button>
+
+                    <x-lucide-snowflake class="w-12 h-12 text-blue-500 animate-pulse" />
+                    <span class="font-bold text-lg text-foreground">Аккаунт деактивирован</span>
+                    <p class="text-sm text-muted-foreground">
+                        Пользователь заморожен. Данные доступны для просмотра и копирования.
+                    </p>
+                    <div class="flex items-center gap-3 mt-4">
+                        <x-ui.button wire:click="restoreUser" variant="default" size="sm" wire:confirm="Восстановить аккаунт пользователя?">
+                            <x-lucide-rotate-ccw class="w-4 h-4 mr-2" /> Восстановить аккаунт
+                        </x-ui.button>
+                        <x-ui.button variant="outline" size="sm" wire:navigate href="{{ route('admin.users.index') }}">
+                            <x-lucide-arrow-left class="w-4 h-4 mr-2" /> К списку
+                        </x-ui.button>
+                    </div>
+                </div>
             </div>
-        </div>
-    @else
+        @endif
+
         {{-- МЕНЮ ТАБОВ --}}
         <div class="border-b border-border">
             <nav class="flex gap-x-4 flex-wrap">
@@ -204,6 +214,9 @@ new #[Layout('layouts.admin')] class extends Component
                 </button>
                 <button wire:click="setTab('bans')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {{ $activeTab === 'bans' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
                     <x-lucide-shield class="w-4 h-4 inline mr-1" /> Статус и Баны
+                </button>
+                <button wire:click="setTab('sessions')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {{ $activeTab === 'sessions' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
+                    <x-lucide-shield-check class="w-4 h-4 inline mr-1" /> Сессии
                 </button>
                 <button wire:click="setTab('reports')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {{ $activeTab === 'reports' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
                     <x-lucide-flag class="w-4 h-4 inline mr-1" /> Жалобы
@@ -215,32 +228,45 @@ new #[Layout('layouts.admin')] class extends Component
                     <x-lucide-image class="w-4 h-4 inline mr-1" /> Фото
                 </button>       
                 <button wire:click="setTab('photo-comments')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {{ $activeTab === 'photo-comments' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
-                    <x-lucide-message-square class="w-4 h-4 inline mr-1" /> Комментарии к фото
+                    <x-lucide-message-square class="w-4 h-4 inline mr-1" /> Комм. фото
                 </button>    
                 <button wire:click="setTab('diaries')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {{ $activeTab === 'diaries' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
                     <x-lucide-book-open class="w-4 h-4 inline mr-1" /> Дневники
                 </button>
                  <button wire:click="setTab('diary-comments')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {{ $activeTab === 'diary-comments' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
-                    <x-lucide-message-square class="w-4 h-4 inline mr-1" /> Комментарии к дневникам
+                    <x-lucide-message-square class="w-4 h-4 inline mr-1" /> Комм. дневников
                 </button>
                 <button wire:click="setTab('dating')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {{ $activeTab === 'dating' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
-                    <x-lucide-wallet class="w-4 h-4 inline mr-1" /> Знакомства
+                    <x-lucide-heart class="w-4 h-4 inline mr-1" /> Знакомства
                 </button>
                 <button wire:click="setTab('finances')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {{ $activeTab === 'finances' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
                     <x-lucide-wallet class="w-4 h-4 inline mr-1" /> Финансы
+                </button>     
+                                
+                {{-- НОВЫЕ ВКЛАДКИ --}}
+                <button wire:click="setTab('chats')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {{ $activeTab === 'chats' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
+                    <x-lucide-message-circle class="w-4 h-4 inline mr-1" /> Чаты
                 </button>
-                <button wire:click="setTab('social')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {{ $activeTab === 'social' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
-                    <x-lucide-heart class="w-4 h-4 inline mr-1" /> Социальный граф
+                <button wire:click="setTab('gifts')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {{ $activeTab === 'gifts' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
+                    <x-lucide-gift class="w-4 h-4 inline mr-1" /> Подарки
+                </button>
+                <button wire:click="setTab('broadcasts')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {{ $activeTab === 'broadcasts' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
+                    <x-lucide-bell class="w-4 h-4 inline mr-1" /> Уведомления
+                </button>
+                <button wire:click="setTab('admin-logs')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {{ $activeTab === 'admin-logs' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
+                    <x-lucide-history class="w-4 h-4 inline mr-1" /> Логи админов
                 </button>
             </nav>
         </div>
 
-                {{-- КОНТЕНТ ТАБОВ --}}
-         <div class="bg-card border border-border rounded-lg p-6">
+        {{-- КОНТЕНТ ТАБОВ --}}
+        <div class="bg-card border border-border rounded-lg p-6 mt-4">
             @if($activeTab === 'profile')
                 <livewire:admin.users.tabs.profile :userId="$this->userId" :key="'profile-'.$this->userId" />
             @elseif($activeTab === 'bans')
                 <livewire:admin.users.tabs.status-bans :userId="$this->userId" :key="'bans-'.$this->userId" />
+            @elseif($activeTab === 'sessions')
+                <livewire:admin.users.tabs.sessions :userId="$this->userId" :key="'sessions-'.$this->userId" />
             @elseif($activeTab === 'reports')
                 <livewire:admin.users.tabs.reports :userId="$this->userId" :key="'reports-'.$this->userId" />                    
             @elseif($activeTab === 'blocks')
@@ -257,9 +283,15 @@ new #[Layout('layouts.admin')] class extends Component
                 <livewire:admin.users.tabs.dating :userId="$this->userId" :key="'dating-'.$this->userId" />
             @elseif($activeTab === 'finances')
                 <livewire:admin.users.tabs.finances :userId="$this->userId" :key="'finances-'.$this->userId" />
-            {{--  @elseif($activeTab === 'social') 
-                <div class="text-center text-muted-foreground py-12">Компонент графа будет тут</div> --}}
+            @elseif($activeTab === 'chats')
+                <livewire:admin.users.tabs.chats :userId="$this->userId" :key="'chats-'.$this->userId" />
+            @elseif($activeTab === 'gifts')
+                <livewire:admin.users.tabs.gifts :userId="$this->userId" :key="'gifts-'.$this->userId" />
+            @elseif($activeTab === 'broadcasts')
+                <livewire:admin.users.tabs.broadcasts :userId="$this->userId" :key="'broadcasts-'.$this->userId" />
+            @elseif($activeTab === 'admin-logs')
+                <livewire:admin.users.tabs.admin-logs :userId="$this->userId" :key="'admin-logs-'.$this->userId" />
             @endif
         </div> 
-    @endif
+    </div>
 </div>

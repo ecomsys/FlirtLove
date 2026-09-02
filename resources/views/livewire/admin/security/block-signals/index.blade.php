@@ -90,13 +90,14 @@ new #[Layout('layouts.admin')] class extends Component
         $this->viewingUserId = null;
     }
 
-        public function banUser(int $id, string $type): void
+    public function banUser(int $id, string $type, int $totalBlocks = 0, int $recentBlocks = 0): void
     {
         $user = User::withTrashed()->findOrFail($id);
         $action = app(ToggleUserBanAction::class);
         
-        // ФИКС: Убираем total_blocks_count, так как его нет в модели при findOrFail
-        $reason = "Массовые блокировки от пользователей";
+        // ФИКС: Формируем информативную причину с цифрами для истории
+        $reason = "Сигнал блокировок: Всего {$totalBlocks}, За 7 дней: {$recentBlocks}";
+        
         $result = $action->execute($user, $reason, $type, true);
 
         $this->dispatch('show-toast', type: $result['success'] ? 'success' : 'error', message: $result['message']);
@@ -219,13 +220,13 @@ new #[Layout('layouts.admin')] class extends Component
                                         <x-ui.dropdown-menu-label>Забанить</x-ui.dropdown-menu-label>
                                         <x-ui.dropdown-menu-separator />
                                         
-                                        <x-ui.dropdown-menu-item wire:click="banUser({{ $user->id }}, 'shadow')" wire:confirm="Наложить теневой бан?">
+                                       <x-ui.dropdown-menu-item wire:click="banUser({{ $user->id }}, 'shadow', {{ $user->total_blocks_count }}, {{ $user->recent_blocks_count }})" wire:confirm="Наложить теневой бан?">
                                             <x-lucide-eye-off class="w-4 h-4 text-purple-500" /> Теневой бан
                                         </x-ui.dropdown-menu-item>
-                                        <x-ui.dropdown-menu-item wire:click="banUser({{ $user->id }}, 'temp')" wire:confirm="Забанить на 3 дня?">
+                                        <x-ui.dropdown-menu-item wire:click="banUser({{ $user->id }}, 'temp', {{ $user->total_blocks_count }}, {{ $user->recent_blocks_count }})" wire:confirm="Забанить на 3 дня?">
                                             <x-lucide-clock class="w-4 h-4 text-yellow-500" /> Бан на 3 дня
                                         </x-ui.dropdown-menu-item>
-                                        <x-ui.dropdown-menu-item wire:click="banUser({{ $user->id }}, 'permanent')" wire:confirm="Забанить навсегда?">
+                                        <x-ui.dropdown-menu-item wire:click="banUser({{ $user->id }}, 'permanent', {{ $user->total_blocks_count }}, {{ $user->recent_blocks_count }})" wire:confirm="Забанить навсегда?">
                                             <x-lucide-gavel class="w-4 h-4 text-red-500" /> Вечный бан
                                         </x-ui.dropdown-menu-item>
                                     @else

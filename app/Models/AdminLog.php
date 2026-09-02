@@ -9,7 +9,6 @@ use Illuminate\Support\Facades\Request;
 
 class AdminLog extends Model
 {
-    // ВАЖНО: Никаких Soft Deletes! Логи нельзя удалять или скрывать.
     protected $fillable = [
         'admin_id',
         'action',          
@@ -19,11 +18,13 @@ class AdminLog extends Model
         'after',           
         'ip_address',
         'user_agent',
+        'participants'
     ];
 
     protected $casts = [
         'before' => 'array',
         'after' => 'array',
+        'participants' => 'array',
     ];
 
     // ============================================
@@ -40,7 +41,6 @@ class AdminLog extends Model
         return $this->morphTo();
     }
 
-    
     // ============================================
     // СКОПЫ (Для фильтрации в админке)
     // ============================================
@@ -60,7 +60,6 @@ class AdminLog extends Model
         return $query->where('loggable_type', $type)->where('loggable_id', $id);
     }
 
-
     // ============================================
     // ХЕЛПЕР: ВЫЧИСЛЕНИЕ ЧИСТОГО ДИФФА
     // ============================================
@@ -74,15 +73,12 @@ class AdminLog extends Model
         $cleanBefore = [];
         $cleanAfter = [];
         
-        // Поля, которые меняются автоматически и не несут ценности для лога
         $ignoreFields = ['updated_at', 'last_seen', 'last_login_at', 'remember_token'];
 
         foreach ($after as $key => $value) {
             if (in_array($key, $ignoreFields)) continue;
 
-            // Если поля не было раньше или оно изменилось
             if (!array_key_exists($key, $before) || $before[$key] !== $value) {
-                // Не пишем в before, если это огромный текст (body), который не менялся
                 if ($key === 'body' && ($before[$key] ?? null) === $value) {
                     continue;
                 }
@@ -101,9 +97,9 @@ class AdminLog extends Model
 
     /**
      * Универсальный метод для записи действия в лог.
-     * Автоматически вычисляет дифф, если переданы массивы before и after.
+     * Объединяет диффы, IP, User-Agent и поддержку участников (для чатов).
      */
-    public static function record(string $action, ?Model $model = null, ?User $admin = null, ?array $before = null, ?array $after = null): ?self
+    public static function record(string $action, ?Model $model = null, ?User $admin = null, ?array $before = null, ?array $after = null, array $participants = []): ?self
     {
         // Если админ не передан явно, берем текущего авторизованного (если есть)
         $admin = $admin ?? auth()->user();
@@ -113,8 +109,8 @@ class AdminLog extends Model
             [$before, $after] = self::calculateDiff($before, $after);
             
             // Если ничего не изменилось (кроме updated_at), не пишем пустой лог в БД
-            if (empty($before) && empty($after)) {
-                return null; // <--- ИСПРАВЛЕНО: Возвращаем null, а не пустую модель
+            if (empty($before) && empty($after) && empty($participants)) {
+                return null; 
             }
         }
 
@@ -125,8 +121,9 @@ class AdminLog extends Model
             'loggable_id'   => $model?->id,
             'before'        => $before,
             'after'         => $after,
-            'ip_address'    => app()->runningInConsole() ? 'CLI' : Request::ip(), // Пишем 'CLI' для крон-задач
+            'ip_address'    => app()->runningInConsole() ? 'CLI' : Request::ip(),
             'user_agent'    => app()->runningInConsole() ? null : Request::userAgent(),
+            'participants'  => !empty($participants) ? $participants : null,
         ]);
     }
 }

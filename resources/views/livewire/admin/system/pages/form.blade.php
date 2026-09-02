@@ -1,6 +1,6 @@
 <?php
 
-use App\Models\AdminLog;
+use App\Actions\Admin\ManagePagesAction;
 use App\Models\Page;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Log;
@@ -118,64 +118,35 @@ new #[Layout('layouts.admin')] class extends Component
         ];
     }
 
-    /**
+        /**
      * Сохранение (создание или обновление) страницы.
-     * Включает очистку HTML от XSS, транзакционное логирование и обработку ошибок.
      *
      * @return void
      */
-    public function save(): void
+    public function save(ManagePagesAction $action): void
     {
         try {
             $validated = $this->validate();
         } catch (\Illuminate\Validation\ValidationException $e) {
             $this->dispatch('show-toast', type: 'error', message: 'Ошибка валидации: проверьте выделенные поля.');
-            throw $e; // Пробрасываем ошибку дальше, чтобы Livewire подсветил поля красным
+            throw $e;
         }
 
         try {
-            // 1. Очистка HTML от XSS (Требуется установленный mews/purifier)
-            if (class_exists(\Mews\Purifier\Facades\Purifier::class)) {
-                $validated['body'] = clean($validated['body']);
-            }
-
             if ($this->page && $this->page->exists) {
-                // Получаем оригинальные данные ДО обновления для логирования
-                $before = $this->page->getOriginal();
-                
-                $this->page->update($validated);
-                
-                $after = $this->page->fresh()->toArray();
-                
-                // Логируем в админ-логи
-                AdminLog::record('page.update', $this->page, auth()->user(), $before, $after);
-                
-                // Логируем в системные логи Laravel (storage/logs/laravel.log)
-                Log::info("Админ обновил страницу", [
-                    'page_id' => $this->page->id,
-                    'admin_id' => auth()->id(),
-                    'admin_email' => auth()->user()->email ?? 'unknown',
-                ]);
+                // Делегируем обновление в Action
+                $action->update($this->page, $validated, auth()->user());
                 
                 $this->dispatch('show-toast', type: 'success', message: 'Страница успешно обновлена!');
             } else {
-                $page = Page::create($validated);
-                
-                AdminLog::record('page.create', $page, auth()->user());
-                
-                Log::info("Админ создал новую страницу", [
-                    'page_id' => $page->id,
-                    'title' => $page->title,
-                    'admin_id' => auth()->id(),
-                    'admin_email' => auth()->user()->email ?? 'unknown',
-                ]);
+                // Делегируем создание в Action
+                $page = $action->create($validated, auth()->user());
                 
                 $this->dispatch('show-toast', type: 'success', message: 'Страница создана!');
                 
                 $this->redirect(route('admin.system.pages.edit', $page), navigate: true);
             }
         } catch (\Exception $e) {
-            // Если что-то пошло не так (например, база упала), пишем ошибку в логи
             Log::error("Ошибка при сохранении страницы админом: " . $e->getMessage(), [
                 'admin_id' => auth()->id(),
                 'trace' => $e->getTraceAsString()

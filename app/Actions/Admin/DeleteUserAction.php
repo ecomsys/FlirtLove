@@ -21,27 +21,62 @@ class DeleteUserAction
             return; // Защита от удаления админов
         }
 
-        $before = $user->only(['status', 'is_premium', 'premium_expires_at', 'deleted_at']);
+        $before = [
+            'status' => $user->getOriginal('status'), 
+            'is_premium' => $user->getOriginal('is_premium'), 
+            'deleted_at' => $user->getOriginal('deleted_at')
+        ];
 
         DB::transaction(function () use ($user, $admin, $before, $reason) {
             $user->update([
                 'status' => 'deactivated',
                 'is_premium' => false,
                 'premium_expires_at' => null,
-                // Можно добавить поле deletion_reason в таблицу users, 
-                // но для экономии полей достаточно хранить это только в AdminLog
             ]);
             
             $user->delete(); // Soft Delete
 
-            // Записываем причину в лог
             $after = [
                 'status' => 'deactivated', 
                 'deleted_at' => now()->toDateTimeString(),
-                'reason' => $reason ?: 'Причина не указана'
+                'context' => [
+                    'user_id' => $user->id,
+                    'user_name' => $user->name,
+                    'admin_id' => $admin->id,
+                    'reason' => $reason ?: 'Причина не указана'
+                ]
             ];
             
-            AdminLog::record('user.delete', $user, $admin, $before, $after);
+            AdminLog::record('user.delete', $user, $admin, $before, $after, participants: [$user->id]);
         });
+    }
+
+        /**
+     * Восстановление деактивированного пользователя.
+     */
+    public function restore(User $user, User $admin): void
+    {
+        if (!$user->trashed()) return;
+
+        $before = [
+            'status' => $user->getOriginal('status'), 
+            'deleted_at' => $user->getOriginal('deleted_at')
+        ];
+
+        $user->restore();
+        $user->update(['status' => 'active']);
+        $user->refresh();
+
+        $after = [
+            'status' => 'active', 
+            'restored_at' => now()->toDateTimeString(),
+            'context' => [
+                'user_id' => $user->id,
+                'user_name' => $user->name,
+                'admin_id' => $admin->id
+            ]
+        ];
+
+        AdminLog::record('user.restore', $user, $admin, $before, $after, participants: [$user->id]);
     }
 }

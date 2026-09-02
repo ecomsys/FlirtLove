@@ -17,8 +17,10 @@ class ModeratePhotoAction
      */
     public function approve(Photo $photo, User $admin): Photo
     {
-        // Сохраняем состояние ДО (с указанием ID фото)
-        $before = ['photo_id' => $photo->id, 'status' => $photo->status];
+        $before = [
+            'status' => $photo->getOriginal('status'), 
+            'is_primary' => $photo->getOriginal('is_primary')
+        ];
 
         $photo->markAsApproved($admin->id);
         ProcessApprovedPhoto::dispatch($photo->id);
@@ -35,11 +37,20 @@ class ModeratePhotoAction
             }
         }
 
-        // Сохраняем состояние ПОСЛЕ
-        $after = ['photo_id' => $photo->id, 'status' => 'approved'];
+        $photo->refresh();
+
+        $after = [
+            'status' => 'approved', 
+            'moderated_by' => $admin->id, 
+            'moderated_at' => now()->toDateTimeString(),
+            'context' => [
+                'photo_id' => $photo->id,
+                'user_id' => $photo->user_id,
+                'url' => $photo->getOriginal('path_original')
+            ]
+        ];
         
-        // ЛОГИРУЕМ ЮЗЕРА, а не фото! (Ссылка на юзера никогда не сломается)
-        AdminLog::record('photo.approve', $photo->user, $admin, $before, $after);
+        AdminLog::record('photo.approve', $photo, $admin, $before, $after, participants: [$photo->user_id]);
 
         return $photo;
     }
@@ -51,16 +62,17 @@ class ModeratePhotoAction
     {
         $user = $photo->user;
         
-        $before = ['photo_id' => $photo->id, 'status' => $photo->status, 'is_primary' => $photo->is_primary];
+        $before = [
+            'status' => $photo->getOriginal('status'), 
+            'is_primary' => $photo->getOriginal('is_primary')
+        ];
 
         $photo->markAsRejected($admin->id, $reason);
         
-        //  Если отклонили аватарку, снимаем флаг is_primary!
         if ($photo->is_primary) {
             $photo->update(['is_primary' => false]);
             
-            // Опционально: Автоматически делаем главным любое другое одобренное фото
-            $nextAvatar = $photo->user?->photos()->approved()->where('id', '!=', $photo->id)->first();
+            $nextAvatar = $user?->photos()->approved()->where('id', '!=', $photo->id)->first();
             if ($nextAvatar) {
                 $nextAvatar->update(['is_primary' => true]);
             }
@@ -70,9 +82,22 @@ class ModeratePhotoAction
             $user->notify(new PhotoModerated($photo->id, $photo->user_id, 'rejected', 1));
         }
 
-        $after = ['photo_id' => $photo->id, 'status' => 'rejected', 'reason' => $reason, 'is_primary' => false];
+        $photo->refresh();
+
+        $after = [
+            'status' => 'rejected', 
+            'reject_reason' => $reason, 
+            'is_primary' => $photo->is_primary, 
+            'moderated_by' => $admin->id, 
+            'moderated_at' => now()->toDateTimeString(),
+            'context' => [
+                'photo_id' => $photo->id,
+                'user_id' => $photo->user_id,
+                'url' => $photo->getOriginal('path_original')
+            ]
+        ];
         
-        AdminLog::record('photo.reject', $user, $admin, $before, $after);
+        AdminLog::record('photo.reject', $photo, $admin, $before, $after, participants: [$photo->user_id]);
     }
 
     /**
@@ -80,12 +105,93 @@ class ModeratePhotoAction
      */
     public function destroy(Photo $photo, User $admin): void
     {
-        $before = ['photo_id' => $photo->id, 'status' => $photo->status];
+        $userId = $photo->user_id;
+        $photoId = $photo->id;
+        $photoPath = $photo->getOriginal('path_original'); // Сохраняем путь до удаления
+        
+        $before = [
+            'status' => $photo->getOriginal('status'), 
+            'path' => $photoPath
+        ];
+
+        $after = [
+            'status' => 'destroyed', 
+            'deleted_by' => $admin->id, 
+            'deleted_at' => now()->toDateTimeString(),
+            'context' => [
+                'photo_id' => $photoId,
+                'user_id' => $userId,
+                'url' => $photoPath
+            ]
+        ];
+
+        // ВАЖНО: Пишем лог ДО физического удаления, чтобы связь не сломалась
+        AdminLog::record('photo.destroy', $photo, $admin, $before, $after, participants: [$userId]);
 
         // Модель Photo удалит файлы через слушатель forceDeleting
         $photo->forceDelete();
+    }
 
-        AdminLog::record('photo.destroy', $photo->user, $admin, $before, null);
+        /**
+     * Мягкое удаление (перемещение в карантин).
+     */
+    public function softDelete(Photo $photo, User $admin): void
+    {
+        $before = [
+            'status' => $photo->getOriginal('status'), 
+            'deleted_at' => $photo->getOriginal('deleted_at')
+        ];
+
+        $photo->delete();
+
+        $after = [
+            'status' => 'quarantined', 
+            'deleted_at' => now()->toDateTimeString(), 
+            'deleted_by' => $admin->id,
+            'context' => [
+                'photo_id' => $photo->id,
+                'user_id' => $photo->user_id,
+                'url' => $photo->getOriginal('path_original')
+            ]
+        ];
+
+        AdminLog::record('photo.soft_delete', $photo, $admin, $before, $after, participants: [$photo->user_id]);
+    }
+
+    /**
+     * Восстановление из карантина (возвращение в очередь на модерацию).
+     */
+    public function restore(Photo $photo, User $admin): void
+    {
+        $before = [
+            'status' => $photo->getOriginal('status'), 
+            'deleted_at' => $photo->getOriginal('deleted_at')
+        ];
+
+        DB::Transaction(function () use ($photo) {
+            $photo->restore();
+            $photo->update([
+                'status' => 'pending',
+                'reject_reason' => null,
+                'moderated_by' => null,
+                'moderated_at' => null,
+            ]);
+        });
+
+        $photo->refresh();
+
+        $after = [
+            'status' => 'pending', 
+            'restored_at' => now()->toDateTimeString(), 
+            'restored_by' => $admin->id,
+            'context' => [
+                'photo_id' => $photo->id,
+                'user_id' => $photo->user_id,
+                'url' => $photo->getOriginal('path_original')
+            ]
+        ];
+
+        AdminLog::record('photo.restore', $photo, $admin, $before, $after, participants: [$photo->user_id]);
     }
    
     /**
@@ -93,17 +199,29 @@ class ModeratePhotoAction
      */
     public function setPrimary(Photo $photo, User $admin): void
     {
-        $before = ['photo_id' => $photo->id, 'is_primary' => $photo->is_primary];
+        $before = [
+            'is_primary' => $photo->getOriginal('is_primary'), 
+            'status' => $photo->getOriginal('status')
+        ];
 
         DB::transaction(function () use ($photo) {
             Photo::where('user_id', $photo->user_id)->update(['is_primary' => false]);
             $photo->update(['is_primary' => true]);
         });
 
-        $after = ['photo_id' => $photo->id, 'is_primary' => true];
+        $photo->refresh();
         
-        // ЛОГИРУЕМ ЮЗЕРА
-        AdminLog::record('photo.set_primary', $photo->user, $admin, $before, $after);
+        $after = [
+            'is_primary' => true, 
+            'set_by' => $admin->id,
+            'context' => [
+                'photo_id' => $photo->id,
+                'user_id' => $photo->user_id,
+                'url' => $photo->getOriginal('path_original')
+            ]
+        ];
+        
+        AdminLog::record('photo.set_primary', $photo, $admin, $before, $after, participants: [$photo->user_id]);
     }
 
     /**
@@ -119,7 +237,6 @@ class ModeratePhotoAction
         $before = ['status' => 'pending', 'count' => $count];
 
         DB::transaction(function () use ($photoIds, $user, $admin) {
-            // Обновляем статус и админа для всех фото сразу
             Photo::whereIn('id', $photoIds)->update([
                 'status' => 'approved',
                 'moderated_by' => $admin->id,
@@ -139,10 +256,17 @@ class ModeratePhotoAction
 
         $user->notify(new PhotoModerated($photoIds->first(), $user->id, 'approved', $count));
 
-        $after = ['status' => 'approved', 'count' => $count, 'photo_ids' => $photoIds->toArray()];
+        $after = [
+            'status' => 'approved', 
+            'count' => $count, 
+            'photo_ids' => $photoIds->toArray(), 
+            'moderated_by' => $admin->id,
+            'context' => [
+                'user_id' => $user->id
+            ]
+        ];
         
-        // Логируем массовое действие, привязывая лог к модели Юзера
-        AdminLog::record('photo.mass_approve', $user, $admin, $before, $after);
+        AdminLog::record('photo.mass_approve', $user, $admin, $before, $after, participants: [$user->id]);
 
         return $count;
     }
@@ -161,15 +285,23 @@ class ModeratePhotoAction
 
         DB::transaction(function () use ($photos, $admin) {
             foreach ($photos as $photo) {
-                // Вызывает нашу же Action-логику (снятие is_primary, логирование и т.д.)
                 $this->reject($photo, $admin, 'mass_reject');
             }
         });
 
         $user->notify(new PhotoModerated($photoIds->first(), $user->id, 'rejected', $count));
         
-        $after = ['status' => 'rejected', 'count' => $count, 'photo_ids' => $photoIds->toArray()];
-        AdminLog::record('photo.mass_reject', $user, $admin, $before, $after);
+        $after = [
+            'status' => 'rejected', 
+            'count' => $count, 
+            'photo_ids' => $photoIds->toArray(), 
+            'reject_reason' => 'mass_reject',
+            'context' => [
+                'user_id' => $user->id
+            ]
+        ];
+        
+        AdminLog::record('photo.mass_reject', $user, $admin, $before, $after, participants: [$user->id]);
 
         return $count;
     }

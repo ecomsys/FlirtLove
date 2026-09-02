@@ -1,8 +1,8 @@
 <?php
 
+use App\Actions\Admin\ManageGiftsAction;
 use App\Models\Gift;
 use App\Models\UserGift;
-use App\Models\AdminLog;
 use App\Enums\GiftCategory;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rules\Enum;
@@ -13,38 +13,24 @@ use Livewire\WithPagination;
 use Livewire\Attributes\On;
 use Livewire\Attributes\Url;
 
-// Helpers (переход с другой страницы по id)
-// <a href="{{ route('admin.gifts.index', ['catalog_search' => $gift->id]) }}" wire:navigate>Перейти к подарку</a>
-// <a href="{{ route('admin.gifts.index', ['history_search' => $uGift->id]) }}" wire:navigate>Перейти к транзакции</a>
-
 new #[Layout('layouts.admin')] class extends Component 
 {
     use WithPagination;
 
-        /** @var bool Флаг процесса выбора картинки из менеджера */
     public bool $isSelectingMedia = false;
-
-    /** @var string Активная вкладка (catalog или history) */
     public string $activeTab = 'catalog';
     
-    /** @var string Поиск в каталоге */
     #[Url(as: 'catalog_search', except: '')]
     public string $catalogSearch = '';
     
-    /** @var string Фильтр категории в каталоге */
     public string $categoryFilter = 'all';
 
-    /** @var string Поиск в истории дарений */
     #[Url(as: 'history_search', except: '')]
     public string $historySearch = '';
     
-    /** @var string Фильтр приватности (all, public, private) */
     public string $privacyFilter = 'all';
 
-    /** @var bool Состояние модалки создания/редактирования */
     public bool $showGiftModal = false;
-    
-    /** @var int|null ID редактируемого подарка (null = создание) */
     public ?int $editingGiftId = null;
     
     public string $modalName = '';
@@ -54,47 +40,34 @@ new #[Layout('layouts.admin')] class extends Component
     public string $modalCategory = 'romantic';
     public bool $modalIsActive = true;
 
-  
-    /** @var string URL для кнопки "Назад" */
     public string $backUrl = '';
   
-    /**     
-     * Инициализация. Восстанавливаем активную вкладку из сессии или из URL.
-     */       
     public function mount(): void
     {
-        // ФИКС: Запоминаем URL "Назад" только при первой загрузке
         $previousUrl = url()->previous();
         $this->backUrl = ($previousUrl && $previousUrl !== url()->current()) 
             ? $previousUrl 
             : route('admin.dashboard');
 
-        // Если перешли по прямой ссылке с поиском истории дарений
         if (request()->has('history_search')) {
             $this->activeTab = 'history';
-            $this->privacyFilter = 'all'; // Сбрасываем фильтр, чтобы точно найти транзакцию
+            $this->privacyFilter = 'all';
             return;
         }
         
-        // Если перешли по прямой ссылке с поиском в каталоге
         if (request()->has('catalog_search')) {
             $this->activeTab = 'catalog';
-            $this->categoryFilter = 'all'; // Сбрасываем категорию, чтобы точно найти подарок
+            $this->categoryFilter = 'all';
             return;
         }
 
         $this->activeTab = session('admin_gifts_tab', 'catalog');
     }
 
-     /**
-     * Счетчики для фильтров приватности в истории дарений.
-     */
     #[Computed]
     public function historyCounts(): array
     {
-        // ФИКС: withTrashed() вызывается сразу на модели, query() не нужен
         $baseQuery = UserGift::withTrashed();
-
         return [
             'all' => (clone $baseQuery)->count(),
             'public' => (clone $baseQuery)->where('is_private', false)->count(),
@@ -102,40 +75,29 @@ new #[Layout('layouts.admin')] class extends Component
         ];
     }
 
-    /**
-     * Слушатель события выбора медиафайла из MediaManager.
-     */
     #[On('media-selected')]
     public function setMediaFromManager(int $mediaId, string $diskPath, string $collection): void
     {
         if ($collection === 'gift') {
-            $this->modalImageUrl = $diskPath; // Сохраняем чистый путь (media/gifts/...)
+            $this->modalImageUrl = $diskPath;
         }
-          $this->isSelectingMedia = false;
+        $this->isSelectingMedia = false;
     }
 
-    /**
-     * Переключение вкладок с сохранением в сессию и очисткой поиска.
-     */
     public function setTab(string $tab): void
     {
         $this->activeTab = $tab;
-        
-        // ФИКС: Очищаем поиск при переключении, чтобы он не применялся к другой вкладке
         $this->catalogSearch = '';
         $this->historySearch = '';
-        
         session(['admin_gifts_tab' => $tab]);
         $this->resetPage();
+        
+        unset($this->gifts);
+        unset($this->userGifts);
+        unset($this->tabCounts);
+        unset($this->historyCounts);
     }
 
-    // ============================================
-    // ВСПОМОГАТЕЛЬНЫЕ ДАННЫЕ (СЧЕТЧИКИ)
-    // ============================================
-
-    /**
-     * Счетчики для бейджей на вкладках.
-     */
     #[Computed]
     public function tabCounts(): array
     {
@@ -145,16 +107,16 @@ new #[Layout('layouts.admin')] class extends Component
         ];
     }
 
-    // ============================================
-    // КАТАЛОГ ПОДАРКОВ
-    // ============================================
-
-    public function updatedCatalogSearch(): void { $this->resetPage(); }
-    public function updatedCategoryFilter(): void { $this->resetPage(); }
+    public function updatedCatalogSearch(): void { $this->resetPage(); unset($this->gifts); }
+    public function updatedCategoryFilter(): void { $this->resetPage(); unset($this->gifts); }
     
-    /**
-     * Автогенерация slug при вводе названия (только при создании).
-     */
+    public function clearCatalogSearch(): void
+    {
+        $this->catalogSearch = '';
+        $this->resetPage();
+        unset($this->gifts);
+    }
+
     public function updatedModalName(string $value): void
     {
         if (is_null($this->editingGiftId)) {
@@ -162,9 +124,6 @@ new #[Layout('layouts.admin')] class extends Component
         }
     }
 
-    /**
-     * Открыть модалку создания подарка.
-     */
     public function createGiftModal(): void
     {
         $this->reset(['modalName', 'modalSlug', 'modalImageUrl', 'modalPrice', 'modalCategory', 'modalIsActive', 'editingGiftId']);
@@ -174,9 +133,6 @@ new #[Layout('layouts.admin')] class extends Component
         $this->showGiftModal = true;
     }
 
-    /**
-     * Открыть модалку редактирования подарка.
-     */
     public function editGiftModal(int $id): void
     {
         $gift = Gift::find($id);
@@ -185,10 +141,7 @@ new #[Layout('layouts.admin')] class extends Component
         $this->editingGiftId = $id;
         $this->modalName = $gift->name;
         $this->modalSlug = $gift->slug;
-        
-        // getRawOriginal берет чистое значение из БД, минуя аксессор.
         $this->modalImageUrl = $gift->getRawOriginal('image_url'); 
-        
         $this->modalPrice = $gift->price;
         $this->modalCategory = $gift->category;
         $this->modalIsActive = $gift->is_active;
@@ -197,111 +150,89 @@ new #[Layout('layouts.admin')] class extends Component
         $this->showGiftModal = true;
     }
 
-    /**
-     * Вычисляемое свойство для чистого URL в модалке.
-     */
     #[Computed]
     public function previewImageUrl(): string
     {
         if (empty($this->modalImageUrl)) return '';
-
-        // Если админ вставил внешний URL (http...)
         if (filter_var($this->modalImageUrl, FILTER_VALIDATE_URL)) {
             return $this->modalImageUrl;
         }
-
-        // Иначе это путь к нашему файлу (media/gifts/...)
         return \Illuminate\Support\Facades\Storage::url($this->modalImageUrl);
     }
 
-    /**
-     * Сохранить новый подарок.
-     */
-    public function saveGift(): void
+    public function saveGift(ManageGiftsAction $action): void
     {
         $this->validate($this->giftRules());
 
-        $gift = Gift::create([
+        $data = [
             'name' => $this->modalName,
             'slug' => $this->modalSlug,
             'image_url' => $this->modalImageUrl,
             'price' => $this->modalPrice,
             'category' => $this->modalCategory,
             'is_active' => $this->modalIsActive,
-        ]);
+        ];
 
-        AdminLog::record('gift.create', $gift, auth()->user());
+        $action->createGift($data, auth()->user());
+
         $this->dispatch('show-toast', type: 'success', message: 'Подарок добавлен в каталог!');
         $this->showGiftModal = false;
+        unset($this->gifts);
+        unset($this->tabCounts);
     }
 
-    /**
-     * Обновить существующий подарок.
-     */
-    public function updateGift(): void
+    public function updateGift(ManageGiftsAction $action): void
     {
         $this->validate($this->giftRules());
 
         $gift = Gift::find($this->editingGiftId);
         if (!$gift) return;
 
-        $before = $gift->only(['name', 'slug', 'image_url', 'price', 'category', 'is_active']);
-        
-        $gift->update([
+        $data = [
             'name' => $this->modalName,
             'slug' => $this->modalSlug,
             'image_url' => $this->modalImageUrl,
             'price' => $this->modalPrice,
             'category' => $this->modalCategory,
             'is_active' => $this->modalIsActive,
-        ]);
+        ];
 
-        AdminLog::record('gift.update', $gift, auth()->user(), $before, $gift->fresh()->only(['name', 'slug', 'image_url', 'price', 'category', 'is_active']));
+        $action->updateGift($gift, $data, auth()->user());
+
         $this->dispatch('show-toast', type: 'success', message: 'Подарок обновлен!');
         $this->showGiftModal = false;
+        unset($this->gifts);
     }
 
-    /**
-     * Удалить подарок (с защитой от физического удаления, если уже дарился).
-     */
-    public function deleteGift(int $id): void
+    public function deleteGift(int $id, ManageGiftsAction $action): void
     {
         $gift = Gift::find($id);
         if (!$gift) return;
 
         $sentCount = UserGift::where('gift_id', $gift->id)->count();
-        if ($sentCount > 0) {
-            $before = ['is_active' => $gift->is_active];
-            $gift->update(['is_active' => false]);
-            AdminLog::record('gift.deactivate', $gift, auth()->user(), $before, ['is_active' => false]);
-            $this->dispatch('show-toast', type: 'warning', message: "Подарок был отправлен {$sentCount} раз. Он скрыт из продажи, но сохранен в БД.");
-            return;
-        }
+        $isDeleted = $action->deleteGift($gift, auth()->user());
 
-        AdminLog::record('gift.delete', $gift, auth()->user(), ['id' => $gift->id, 'name' => $gift->name], null);
-        $gift->delete();
-        $this->dispatch('show-toast', type: 'success', message: 'Подарок удален из каталога');
+        if (!$isDeleted && $sentCount > 0) {
+            $this->dispatch('show-toast', type: 'warning', message: "Подарок был отправлен {$sentCount} раз. Он скрыт из продажи, но сохранен в БД.");
+        } else {
+            $this->dispatch('show-toast', type: 'success', message: 'Подарок удален из каталога');
+        }
+        
+        unset($this->gifts);
+        unset($this->tabCounts);
     }
 
-    /**
-     * Быстрое переключение статуса "В продаже/Скрыт".
-     */
-    public function toggleGiftStatus(int $id): void
+    public function toggleGiftStatus(int $id, ManageGiftsAction $action): void
     {
         $gift = Gift::find($id);
         if (!$gift) return;
 
-        $before = ['is_active' => $gift->is_active];
-        $gift->update(['is_active' => !$gift->is_active]);
-        $after = ['is_active' => $gift->fresh()->is_active];
-        
-        AdminLog::record('gift.toggle_status', $gift, auth()->user(), $before, $after);
-        $this->dispatch('show-toast', type: 'success', message: $gift->is_active ? 'Подарок в продаже' : 'Подарок скрыт');
+        $action->toggleStatus($gift, auth()->user());
+
+        $this->dispatch('show-toast', type: 'success', message: $gift->fresh()->is_active ? 'Подарок в продаже' : 'Подарок скрыт');
+        unset($this->gifts);
     }
 
-    /**
-     * Правила валидации для модалки.
-     */
     protected function giftRules(): array
     {
         $slugRule = 'required|alpha_dash|unique:gifts,slug';
@@ -319,9 +250,6 @@ new #[Layout('layouts.admin')] class extends Component
         ];
     }
 
-    /**
-     * Получение списка подарков для каталога.
-     */
     #[Computed]
     public function gifts()
     {
@@ -344,55 +272,45 @@ new #[Layout('layouts.admin')] class extends Component
             ->paginate(15);
     }
 
-    // ============================================
-    // ИСТОРИЯ ДАРЕНИЙ (ОТПРАВЛЕННЫХ ПОДАРКОВ)
-    // ============================================
+    public function updatedHistorySearch(): void { $this->resetPage(); unset($this->userGifts); }
+    public function updatedPrivacyFilter(): void { $this->resetPage(); unset($this->userGifts); }
+    
+    public function clearHistorySearch(): void
+    {
+        $this->historySearch = '';
+        $this->resetPage();
+        unset($this->userGifts);
+    }
 
-    public function updatedHistorySearch(): void { $this->resetPage(); }
-    public function updatedPrivacyFilter(): void { $this->resetPage(); }
-
-    /**
-     * Скрыть подарок из профиля получателя (Soft Delete).
-     * Кредиты отправителю НЕ возвращаются.
-     */
-    public function deleteUserGift(int $id): void
+    public function deleteUserGift(int $id, ManageGiftsAction $action): void
     {
         $userGift = UserGift::find($id);
-        if ($userGift) {
-            $before = ['deleted_at' => $userGift->deleted_at];
-            $userGift->delete(); // Soft delete
-            $after = ['deleted_at' => $userGift->fresh()->deleted_at];
-            
-            AdminLog::record('user_gift.hide', $userGift, auth()->user(), $before, $after);
-            $this->dispatch('show-toast', type: 'success', message : 'Подарок отозван и скрыт из профиля юзера');
-        }
+        if (!$userGift) return;
+
+        $action->hideUserGift($userGift, auth()->user());
+
+        $this->dispatch('show-toast', type: 'success', message : 'Подарок отозван и скрыт из профиля юзера');
+        unset($this->userGifts);
+        unset($this->historyCounts);
     }
 
-        /**
-     * Вернуть скрытый подарок обратно в профиль получателя.
-     */
-    public function restoreUserGift(int $id): void
+    public function restoreUserGift(int $id, ManageGiftsAction $action): void
     {
         $userGift = UserGift::withTrashed()->find($id);
-        if ($userGift) {
-            $before = ['deleted_at' => $userGift->deleted_at];
-            $userGift->restore(); // Снимает метку deleted_at
-            $after = ['deleted_at' => null];
-            
-            AdminLog::record('user_gift.restore', $userGift, auth()->user(), $before, $after);
-            $this->dispatch('show-toast', type: 'success', message : 'Подарок возвращен в профиль юзера');
-        }
+        if (!$userGift) return;
+
+        $action->restoreUserGift($userGift, auth()->user());
+
+        $this->dispatch('show-toast', type: 'success', message : 'Подарок возвращен в профиль юзера');
+        unset($this->userGifts);
+        unset($this->historyCounts);
     }
 
-    /**
-     * Получение истории транзакций дарений.
-     */
     #[Computed]
     public function userGifts()
     {
         $operator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
         
-        // Жадная загрузка юзеров с траншем (чтобы видеть удаленных)
         $userQuery = fn($q) => $q->withTrashed()->select('id', 'name', 'email', 'status', 'is_premium', 'premium_expires_at', 'last_seen', 'deleted_at')
             ->with(['photos' => fn($sq) => $sq->select('id', 'user_id', 'is_primary', 'status', 'path_thumb')->orderByDesc('is_primary')->limit(1)]);
 
@@ -471,9 +389,9 @@ new #[Layout('layouts.admin')] class extends Component
                     <div class="relative w-64">
                         <x-ui.input wire:model.live.debounce.300ms="catalogSearch" type="search" placeholder="Поиск по названию или ID..." class="pl-9 pr-8" />
                         <x-lucide-search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                        @if(!empty($catalogSearch))
-                            <button wire:click="$set('catalogSearch', '')" class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"><x-lucide-x class="w-4 h-4" /></button>
-                        @endif
+                      @if(!empty($catalogSearch))
+                        <button wire:click="clearCatalogSearch" class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"><x-lucide-x class="w-4 h-4" /></button>
+                    @endif
                     </div>
                 </div>
 
@@ -604,8 +522,8 @@ new #[Layout('layouts.admin')] class extends Component
                 <div class="relative w-64">
                     <x-ui.input wire:model.live.debounce.300ms="historySearch" type="search" placeholder="Поиск по имени или ID..." class="pl-9 pr-8" />
                     <x-lucide-search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                    @if(!empty($historySearch))
-                        <button wire:click="$set('historySearch', '')" class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"><x-lucide-x class="w-4 h-4" /></button>
+                  @if(!empty($historySearch))
+                        <button wire:click="clearHistorySearch" class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"><x-lucide-x class="w-4 h-4" /></button>
                     @endif
                 </div>
             </div>
@@ -618,8 +536,7 @@ new #[Layout('layouts.admin')] class extends Component
                         <x-ui.table-head></x-ui.table-head>
                         <x-ui.table-head>Получатель</x-ui.table-head>
                         <x-ui.table-head>Подарок (Снапшот)</x-ui.table-head>
-                        <x-ui.table-head>Цена</x-ui.table-head>
-                        <!-- ФИКС: Добавлена колонка Статус -->
+                        <x-ui.table-head>Цена</x-ui.table-head>                      
                         <x-ui.table-head>Статус</x-ui.table-head>
                         <x-ui.table-head class="min-w-[200px]">Сообщение</x-ui.table-head>
                         <x-ui.table-head>Дата</x-ui.table-head>
@@ -628,9 +545,14 @@ new #[Layout('layouts.admin')] class extends Component
                 </x-ui.table-header>
 
                 <x-ui.table-body>
-                    @forelse ($this->userGifts as $uGift)
-                        <x-ui.table-row wire:key="ugift-{{ $uGift->id }}-{{ $uGift->trashed() ? 'hidden' : 'visible' }}">
-                            <x-ui.table-cell class="text-muted-foreground text-xs font-mono">
+                 @forelse ($this->userGifts as $uGift)
+                    @php $isHighlighted = is_numeric($this->historySearch) && $uGift->id == (int)$this->historySearch; @endphp
+                    <x-ui.table-row wire:key="ugift-{{ $uGift->id }}-{{ $uGift->trashed() ? 'hidden' : 'visible' }}" 
+                        class="{{ $isHighlighted ? 'bg-blue-500/10 ring-2 ring-blue-500/50' : '' }}"
+                        x-data="{ isHi: {{ $isHighlighted ? 'true' : 'false' }} }"
+                        x-init="isHi && setTimeout(() => { $el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 200)"
+                    >
+                   <x-ui.table-cell class="text-muted-foreground text-xs font-mono">
                                 #{{ $uGift->id }}
                             </x-ui.table-cell>
                             <x-ui.table-cell>
@@ -684,7 +606,7 @@ new #[Layout('layouts.admin')] class extends Component
                                         @endif
                                     </div>
                                     <div>
-                                        <div class="text-sm font-medium">{{ $uGift->snapshot_name }}</div>
+                                        <div class="text-sm font-medium truncate">{{ $uGift->snapshot_name }}</div>
                                         @if($uGift->is_private)
                                             <x-ui.badge variant="warning" size="xs" class="mt-0.5">Приватный</x-ui.badge>
                                         @endif

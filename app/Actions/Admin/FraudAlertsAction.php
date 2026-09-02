@@ -22,7 +22,7 @@ class FraudAlertsAction
         $alert = FraudAlert::findOrFail($alertId);
         
         DB::transaction(function () use ($alert, $banType) {
-            // 1. Баним юзера, если он есть
+            // 1. Баним юзера, если он есть (ToggleUserBanAction сама напишет лог в participants)
             if ($alert->user_id && $alert->user) {
                 $banAction = app(ToggleUserBanAction::class);
                 $reason = "Антифрод алерт #{$alert->id}: " . $alert->trigger_label;
@@ -30,28 +30,36 @@ class FraudAlertsAction
             }
 
             // 2. Логируем само закрытие алерта
-            $before = $alert->only(['id', 'status', 'trigger_type', 'severity']);
+            $before = [
+                'status' => $alert->getOriginal('status'), 
+                'severity' => $alert->getOriginal('severity')
+            ];
             
             $alert->resolve(Auth::id());
+            $alert->refresh();
             
-            $after = $alert->fresh()->only(['id', 'status', 'admin_id', 'resolved_at']);
-
-            AdminLog::record(
-                'fraud_alert.resolve',
-                $alert,
-                Auth::user(),
-                $before,
-                [
-                    'description' => 'Алерт разобран и подтвержден',
-                    'action' => 'resolved',
-                    'ban_type_applied' => $alert->user ? $banType : 'none (user deleted)',
-                    'after_status' => $after
+            $after = [
+                'status' => 'resolved', 
+                'resolved_by' => Auth::id(), 
+                'resolved_at' => now()->toDateTimeString(),
+                'context' => [
+                    'alert_id' => $alert->id,
+                    'user_id' => $alert->user_id,
+                    'trigger_type' => $alert->trigger_type,
+                    'trigger_label' => $alert->trigger_label,
+                    'severity' => $alert->severity,
+                    'ban_type_applied' => $alert->user ? $banType : 'none (user deleted)'
                 ]
-            );
+            ];
+
+            // ФИКС: Передаем user_id в participants
+            $participants = $alert->user_id ? [$alert->user_id] : [];
+
+            AdminLog::record('fraud_alert.resolve', $alert, Auth::user(), $before, $after, participants: $participants);
         });
     }
 
-        /**
+    /**
      * Вынести предупреждение и закрыть алерт.
      * Создает системное сообщение в чате поддержки юзера.
      */
@@ -59,22 +67,31 @@ class FraudAlertsAction
     {
         $alert = FraudAlert::findOrFail($alertId);
         
-        // Закрываем алерт
-        $before = $alert->only(['id', 'status', 'trigger_type', 'severity']);
+        $before = [
+            'status' => $alert->getOriginal('status'), 
+            'severity' => $alert->getOriginal('severity')
+        ];
+        
         $alert->resolve(Auth::id());
-        $after = $alert->fresh()->only(['id', 'status', 'admin_id', 'resolved_at']);
-
-        AdminLog::record(
-            'fraud_alert.warning',
-            $alert,
-            Auth::user(),
-            $before,
-            [
-                'description' => 'Алерт разобран, вынесено предупреждение',
-                'action' => 'warning',
-                'after_status' => $after
+        $alert->refresh();
+        
+        $after = [
+            'status' => 'resolved', 
+            'resolved_by' => Auth::id(), 
+            'resolved_at' => now()->toDateTimeString(),
+            'action_taken' => 'warning',
+            'context' => [
+                'alert_id' => $alert->id,
+                'user_id' => $alert->user_id,
+                'trigger_type' => $alert->trigger_type,
+                'trigger_label' => $alert->trigger_label,
+                'severity' => $alert->severity
             ]
-        );
+        ];
+
+        $participants = $alert->user_id ? [$alert->user_id] : [];
+
+        AdminLog::record('fraud_alert.warning', $alert, Auth::user(), $before, $after, participants: $participants);
 
         // Отправляем сообщение в чат поддержки
         if ($alert->user_id && $alert->user) {
@@ -84,7 +101,7 @@ class FraudAlertsAction
             $warningText = "⚠️ Внимание! Администрация вынесла вам предупреждение за нарушение правил сервиса (Причина: {$alert->trigger_label}). Пожалуйста, ознакомьтесь с правилами платформы. При повторных нарушениях аккаунт может быть заблокирован.";
             
             $chat->messages()->create([
-                'sender_id' => null, // Системное сообщение
+                'sender_id' => null,
                 'type' => 'system',
                 'body' => $warningText,
             ]);
@@ -100,23 +117,30 @@ class FraudAlertsAction
     {
         $alert = FraudAlert::findOrFail($alertId);
         
-        // 1. Логируем закрытие алерта как ложняка
-        $before = $alert->only(['id', 'status', 'trigger_type', 'severity']);
+        $before = [
+            'status' => $alert->getOriginal('status'), 
+            'severity' => $alert->getOriginal('severity')
+        ];
         
         $alert->markAsFalsePositive(Auth::id());
+        $alert->refresh();
         
-        $after = $alert->fresh()->only(['id', 'status', 'admin_id', 'resolved_at']);
-
-        AdminLog::record(
-            'fraud_alert.false_positive',
-            $alert,
-            Auth::user(),
-            $before,
-            [
-                'description' => 'Алерт отмечен как ложное срабатывание',
-                'action' => 'false_positive',
-                'after_status' => $after
+        $after = [
+            'status' => 'false_positive', 
+            'resolved_by' => Auth::id(), 
+            'resolved_at' => now()->toDateTimeString(),
+            'context' => [
+                'alert_id' => $alert->id,
+                'user_id' => $alert->user_id,
+                'trigger_type' => $alert->trigger_type,
+                'trigger_label' => $alert->trigger_label,
+                'severity' => $alert->severity
             ]
-        );
+        ];
+
+        // Даже если это ложняк, пишем в лог юзера, чтобы саппорт видел, что система ошибалась
+        $participants = $alert->user_id ? [$alert->user_id] : [];
+
+        AdminLog::record('fraud_alert.false_positive', $alert, Auth::user(), $before, $after, participants: $participants);
     }
 }

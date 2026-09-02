@@ -1,9 +1,7 @@
 <?php
 
-use App\Models\AdminLog;
+use App\Actions\Admin\ManageUserRolesAction;
 use App\Models\User;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Log;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Layout;
 use Livewire\Volt\Component;
@@ -16,83 +14,53 @@ new #[Layout('layouts.admin')] class extends Component
     public string $promoteSearch = '';
     public array $selectedRoles = [];
     
-       // Доступные роли (public для доступа из Blade)
     public array $rolesList = [
         'admin' => 'Суперадмин',
         'moderator' => 'Модератор',
         'support' => 'Саппорт',
     ];
 
-    /** @var string URL для кнопки "Назад" */
     public string $backUrl = '';
 
-    /**
-     * Авторизация: только админы могут управлять ролями.
-     */
     public function mount(): void
     {
         abort_unless(auth()->user()?->role === 'admin', 403);
 
-        // ФИКС: Запоминаем URL "Назад" только при первой загрузке
         $previousUrl = url()->previous();
         $this->backUrl = ($previousUrl && $previousUrl !== url()->current()) 
             ? $previousUrl 
             : route('admin.dashboard');
     }
 
-    /**
-     * Проверка на владельца проекта (иммунитет к увольнению).
-     */
     private function isFounder(User $user): bool
     {
         return in_array($user->id, config('app.founders', []));
     }
 
-    /**
-     * Мгновенное повышение юзера в Staff.
-     */
-    public function promoteToRole(int $userId, string $role): void
+    public function promoteToRole(int $userId, string $role, ManageUserRolesAction $action): void
     {
-        if (!in_array($role, ['admin', 'moderator', 'support'])) return;
-
         try {
             $user = User::find($userId);
-            if (!$user || $user->isStaff()) return;
+            if (!$user) return;
 
-            $oldRole = $user->role;
-            $user->update(['role' => $role]);
+            $success = $action->promote($user, $role, auth()->user());
 
-            AdminLog::record('user.role_change', $user, auth()->user(), 
-                ['role' => $oldRole], 
-                ['role' => $role]
-            );
-
-            Log::info("Админ повысил пользователя", [
-                'user_id' => $userId, 
-                'new_role' => $role, 
-                'admin_id' => auth()->id()
-            ]);
-
-            $this->selectedRoles[$userId] = $role;
-            unset($this->staffMembers); // Сбрасываем кэш
-
-            $this->dispatch('show-toast', type: 'success', message: "{$user->name} повышен до «{$this->rolesList[$role]}»!");
+            if ($success) {
+                $this->selectedRoles[$userId] = $role;
+                unset($this->staffMembers);
+                $this->dispatch('show-toast', type: 'success', message: "{$user->name} повышен до «{$this->rolesList[$role]}»!");
+            }
         } catch (\Exception $e) {
-            Log::error("Ошибка при повышении пользователя: " . $e->getMessage(), ['user_id' => $userId]);
             $this->dispatch('show-toast', type: 'error', message: 'Ошибка сервера при повышении!');
         }
     }
 
-    /**
-     * Понижение сотрудника до обычного юзера.
-     */
-    public function demoteToUser(int $userId): void
+    public function demoteToUser(int $userId, ManageUserRolesAction $action): void
     {
         try {
             $user = User::find($userId);
-            if (!$user || !$user->isStaff()) return;
+            if (!$user) return;
 
-            // Защита владельцев и самого себя
             if ($this->isFounder($user)) {
                 $this->dispatch('show-toast', type: 'error', message: 'Владельцев проекта нельзя разжаловать!');
                 return;
@@ -103,111 +71,52 @@ new #[Layout('layouts.admin')] class extends Component
                 return;
             }
 
-            $oldRole = $user->role;
-            $user->update(['role' => 'user']);
+            $success = $action->demote($user, auth()->user());
 
-            // Уничтожаем сессии уволенного (моментальный логаут из админки)
-            DB::table('sessions')->where('user_id', $user->id)->delete();
-
-            AdminLog::record('user.role_change', $user, auth()->user(), 
-                ['role' => $oldRole], 
-                ['role' => 'user']
-            );
-
-            Log::info("Админ разжаловал пользователя", [
-                'user_id' => $userId, 
-                'admin_id' => auth()->id()
-            ]);
-
-            unset($this->selectedRoles[$userId]);
-            unset($this->staffMembers); // Сбрасываем кэш для обновления таблицы
-
-            $this->dispatch('show-toast', type: 'info', message: "{$user->name} разжалован в обычные юзеры.");
+            if ($success) {
+                unset($this->selectedRoles[$userId]);
+                unset($this->staffMembers);
+                $this->dispatch('show-toast', type: 'info', message: "{$user->name} разжалован в обычные юзеры.");
+            }
         } catch (\Exception $e) {
-            Log::error("Ошибка при понижении пользователя: " . $e->getMessage(), ['user_id' => $userId]);
             $this->dispatch('show-toast', type: 'error', message: 'Ошибка сервера при понижении!');
         }
     }
 
-    /**
-     * Пакетное сохранение измененных ролей.
-     */
-    public function saveAllRoles(): void
+    public function saveAllRoles(ManageUserRolesAction $action): void
     {
-        $updatedCount = 0;
-        $changedUserIds = []; // Массив для сбора ID юзеров с измененными ролями
-
         try {
-            DB::Transaction(function () use (&$updatedCount, &$changedUserIds) {
-                foreach ($this->selectedRoles as $userId => $newRole) {
-                    if (!in_array($newRole, ['admin', 'moderator', 'support'])) continue;
+            $founders = config('app.founders', []);
+            $updatedCount = $action->batchUpdate($this->selectedRoles, auth()->user(), $founders);
 
-                    $user = User::find($userId);
-                    if (!$user || !$user->isStaff()) continue;
-
-                    // Иммунитет для владельцев и себя
-                    if ($this->isFounder($user) || $user->id === auth()->id()) continue;
-
-                    // Пропуск, если роль не изменилась
-                    if ($user->role === $newRole) continue;
-
-                    $oldRole = $user->role;
-                    $user->update(['role' => $newRole]);
-
-                    AdminLog::record('user.role_change', $user, auth()->user(), 
-                        ['role' => $oldRole], 
-                        ['role' => $newRole]
-                    );
-
-                    $changedUserIds[] = $user->id;
-                    $updatedCount++;
-                }
-            });
-
-            // ФИКС БЕЗОПАСНОСТИ: Уничтожаем сессии у тех, чьи роли изменились
-            if (!empty($changedUserIds)) {
-                DB::table('sessions')->whereIn('user_id', $changedUserIds)->delete();
-                Log::info("Массовое обновление ролей", [
-                    'admin_id' => auth()->id(), 
-                    'affected_users' => $changedUserIds
-                ]);
-                
+            if ($updatedCount > 0) {
                 $this->dispatch('show-toast', type: 'success', message: "Успешно сохранено! Ролей изменено: {$updatedCount}");
                 unset($this->staffMembers);
             } else {
                 $this->dispatch('show-toast', type: 'info', message: 'Изменений для сохранения нет.');
             }
         } catch (\Exception $e) {
-            Log::error("Ошибка при массовом сохранении ролей: " . $e->getMessage(), [
-                'admin_id' => auth()->id(),
-                'trace' => $e->getTraceAsString()
-            ]);
             $this->dispatch('show-toast', type: 'error', message: 'Ошибка сервера при сохранении!');
         }
     }
  
-       #[Computed]
+    #[Computed]
     public function staffMembers()
     {
         $founders = config('app.founders', []);
-        
-        // Защита от SQL-инъекций: строго приводим ID к int
         $founderCase = !empty($founders) 
             ? "CASE WHEN id IN (" . implode(',', array_map('intval', $founders)) . ") THEN 0 ELSE 1 END" 
             : "1";
 
-        // ФИКС: Унифицированная загрузка аватарок
         $avatarQuery = fn($q) => $q->select(['id', 'user_id', 'is_primary', 'status', 'path_thumb', 'path_medium', 'path_large', 'path_original'])->orderByDesc('is_primary')->limit(1);
 
-        $staff = User::withTrashed() // ФИКС: Видим даже деактивированных сотрудников
+        $staff = User::withTrashed()
             ->whereNot('role', 'user')
             ->with(['profile', 'photos' => $avatarQuery]) 
-            ->orderByRaw($founderCase) // Владельцы всегда вверху
+            ->orderByRaw($founderCase)
             ->orderBy('id', 'asc')
             ->paginate(20);
 
-        // Инициализация массива для wire:model в селектах.
-        // Computed кэшируется, поэтому мутация здесь безопасна и выполнится 1 раз.
         foreach ($staff as $user) {
             if (!isset($this->selectedRoles[$user->id])) {
                 $this->selectedRoles[$user->id] = $user->role;
@@ -221,10 +130,9 @@ new #[Layout('layouts.admin')] class extends Component
     public function candidatesForPromotion()
     {
         if (empty($this->promoteSearch)) {
-            return collect(); // Возвращаем пустую коллекцию
+            return collect();
         }
 
-        // Кросс-БД поиск (ilike для Postgres, like для MySQL)
         $searchOperator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
 
         return User::excludeStaff()
@@ -237,9 +145,6 @@ new #[Layout('layouts.admin')] class extends Component
             ->get();
     }
 
-    /**
-     * Радиоктивная индикация кнопки "Сохранить".
-     */
     #[Computed]
     public function hasUnsavedChanges(): bool
     {
