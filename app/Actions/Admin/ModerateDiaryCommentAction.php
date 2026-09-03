@@ -9,6 +9,7 @@ use App\Notifications\DiaryCommentModerated;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str; // <--- ДОБАВИЛИ ИМПОРТ
+use Illuminate\Support\Facades\Cache;
 
 class ModerateDiaryCommentAction
 {
@@ -42,6 +43,7 @@ class ModerateDiaryCommentAction
         
         AdminLog::record('diary_comment.approve', $comment, $admin, $before, $after, participants: $participants);
         $this->notifyAuthor($comment, 'approved');
+        Cache::forget('admin_sidebar_stats');
         
         return true;
     }
@@ -73,6 +75,7 @@ class ModerateDiaryCommentAction
         
         AdminLog::record('diary_comment.reject', $comment, $admin, $before, $after, participants: $participants);
         $this->notifyAuthor($comment, 'rejected');
+         Cache::forget('admin_sidebar_stats');
     }
 
     public function markSpam(DiaryComment $comment, User $admin): void
@@ -108,6 +111,7 @@ class ModerateDiaryCommentAction
         
         AdminLog::record('diary_comment.spam', $comment, $admin, $before, $after, participants: $participants);
         $this->notifyAuthor($comment, 'spam');
+         Cache::forget('admin_sidebar_stats');
     }
 
     public function restore(DiaryComment $comment, User $admin): void
@@ -141,6 +145,7 @@ class ModerateDiaryCommentAction
         $participants = array_filter([$comment->user_id, $comment->diary?->user_id]);
         
         AdminLog::record('diary_comment.restore', $comment, $admin, $before, $after, participants: $participants);
+         Cache::forget('admin_sidebar_stats');
     }
 
     private function notifyAuthor(DiaryComment $comment, string $status): void

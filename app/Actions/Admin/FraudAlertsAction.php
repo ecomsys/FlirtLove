@@ -7,6 +7,7 @@ use App\Models\FraudAlert;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use App\Models\Chat;
+use Illuminate\Support\Facades\Cache;
 
 class FraudAlertsAction
 {
@@ -57,6 +58,7 @@ class FraudAlertsAction
 
             AdminLog::record('fraud_alert.resolve', $alert, Auth::user(), $before, $after, participants: $participants);
         });
+        Cache::forget('admin_sidebar_stats');
     }
 
     /**
@@ -108,6 +110,7 @@ class FraudAlertsAction
             
             $chat->update(['last_message_at' => now()]);
         }
+          Cache::forget('admin_sidebar_stats');
     }
 
     /**
@@ -142,5 +145,7 @@ class FraudAlertsAction
         $participants = $alert->user_id ? [$alert->user_id] : [];
 
         AdminLog::record('fraud_alert.false_positive', $alert, Auth::user(), $before, $after, participants: $participants);
+
+          Cache::forget('admin_sidebar_stats');
     }
 }

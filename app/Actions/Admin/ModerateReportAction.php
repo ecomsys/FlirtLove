@@ -8,6 +8,7 @@ use App\Models\Report;
 use App\Models\User;
 use App\Notifications\ReportModerated;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Cache;
 
 class ModerateReportAction
 {
@@ -42,6 +43,8 @@ class ModerateReportAction
         $participants = array_filter([$report->reporter_id, $report->reported_id]);
 
         AdminLog::record('report.resolve', $report, $admin, $before, $after, participants: $participants);
+        Cache::forget('admin_sidebar_stats');
+        
 
         if ($report->reporter) {
             $report->reporter->notify(new ReportModerated($report, 'resolved'));
@@ -79,6 +82,8 @@ class ModerateReportAction
         $participants = array_filter([$report->reporter_id, $report->reported_id]);
 
         AdminLog::record('report.reject', $report, $admin, $before, $after, participants: $participants);
+        Cache::forget('admin_sidebar_stats');
+        
 
         if ($report->reporter) {
             $report->reporter->notify(new ReportModerated($report, 'rejected'));
@@ -120,11 +125,14 @@ class ModerateReportAction
             $participants = array_filter([$report->reporter_id, $report->reported_id]);
 
             AdminLog::record('report.resolve', $report, $admin, $before, $after, participants: $participants);
+            
 
             if ($report->reporter && !in_array($report->reporter->id, $notifiedReporters)) {
                 $report->reporter->notify(new ReportModerated($report, 'resolved'));
                 $notifiedReporters[] = $report->reporter->id;
             }
         }
+        Cache::forget('admin_sidebar_stats');
+        
     }
 }

@@ -4,7 +4,7 @@ namespace App\Actions\Admin;
 
 use App\Models\AdminLog;
 use App\Models\Diary;
-use App\Models\Rubric;
+use App\Models\DiaryRubric;
 use App\Models\User;
 
 class ManageDiaryRubricAction
@@ -12,14 +12,14 @@ class ManageDiaryRubricAction
     /**
      * Создать рубрику
      */
-    public function create(array $data, User $admin): Rubric
+    public function create(array $data, User $admin): DiaryRubric
     {
-        $rubric = Rubric::create($data);
+        $rubric = DiaryRubric::create($data);
         
         $after = [
             'status' => 'created', 
             'context' => [
-                'rubric_id' => $rubric->id,
+                'diary_rubric_id' => $rubric->id,
                 'user_id' => $rubric->user_id,
                 'name' => $rubric->name,
                 'is_system' => is_null($rubric->user_id)
@@ -28,7 +28,8 @@ class ManageDiaryRubricAction
 
         $participants = $rubric->user_id ? [$rubric->user_id] : [];
         
-        AdminLog::record('rubric.create', $rubric, $admin, null, $after, participants: $participants);
+        // ФИКС: diary_rubric.create
+        AdminLog::record('diary_rubric.create', $rubric, $admin, null, $after, participants: $participants);
         
         return $rubric;
     }
@@ -36,7 +37,7 @@ class ManageDiaryRubricAction
     /**
      * Обновить рубрику
      */
-    public function update(Rubric $rubric, array $data, User $admin): void
+    public function update(DiaryRubric $rubric, array $data, User $admin): void
     {
         $before = [
             'name' => $rubric->getOriginal('name'), 
@@ -50,7 +51,7 @@ class ManageDiaryRubricAction
             'name' => $rubric->name,
             'is_active' => $rubric->is_active,
             'context' => [
-                'rubric_id' => $rubric->id,
+                'diary_rubric_id' => $rubric->id,
                 'user_id' => $rubric->user_id,
                 'is_system' => is_null($rubric->user_id)
             ]
@@ -58,13 +59,14 @@ class ManageDiaryRubricAction
 
         $participants = $rubric->user_id ? [$rubric->user_id] : [];
         
-        AdminLog::record('rubric.update', $rubric, $admin, $before, $after, participants: $participants);
+        // ФИКС: diary_rubric.update
+        AdminLog::record('diary_rubric.update', $rubric, $admin, $before, $after, participants: $participants);
     }
 
     /**
      * Удалить рубрику (с переносом постов или обнулением)
      */
-    public function delete(Rubric $rubric, ?int $reassignId, User $admin): void
+    public function delete(DiaryRubric $rubric, ?int $reassignId, User $admin): void
     {
         $userId = $rubric->user_id;
         $rubricId = $rubric->id;
@@ -75,14 +77,14 @@ class ManageDiaryRubricAction
             'reassign_to' => $reassignId
         ];
 
-        // Переносим посты в новую рубрику или обнуляем
-        Diary::where('rubric_id', $rubricId)->update(['rubric_id' => $reassignId]);
+        // ФИКС: Меняем foreign key на diary_rubric_id
+        Diary::where('diary_rubric_id', $rubricId)->update(['diary_rubric_id' => $reassignId]);
 
         $after = [
             'status' => 'deleted', 
             'deleted_by' => $admin->id,
             'context' => [
-                'rubric_id' => $rubricId,
+                'diary_rubric_id' => $rubricId,
                 'user_id' => $userId,
                 'name' => $rubricName,
                 'is_system' => is_null($userId)
@@ -91,8 +93,8 @@ class ManageDiaryRubricAction
 
         $participants = $userId ? [$userId] : [];
 
-        // Пишем лог ДО физического удаления
-        AdminLog::record('rubric.delete', $rubric, $admin, $before, $after, participants: $participants);
+        // ФИКС: diary_rubric.delete
+        AdminLog::record('diary_rubric.delete', $rubric, $admin, $before, $after, participants: $participants);
         
         $rubric->delete();
     }
@@ -100,7 +102,7 @@ class ManageDiaryRubricAction
     /**
      * Скрыть/Показать рубрику
      */
-    public function toggleStatus(Rubric $rubric, User $admin): void
+    public function toggleStatus(DiaryRubric $rubric, User $admin): void
     {
         $before = ['is_active' => $rubric->getOriginal('is_active')];
         
@@ -111,7 +113,7 @@ class ManageDiaryRubricAction
             'is_active' => $rubric->is_active, 
             'toggled_by' => $admin->id,
             'context' => [
-                'rubric_id' => $rubric->id,
+                'diary_rubric_id' => $rubric->id,
                 'user_id' => $rubric->user_id,
                 'name' => $rubric->name,
                 'is_system' => is_null($rubric->user_id)
@@ -120,7 +122,7 @@ class ManageDiaryRubricAction
 
         $participants = $rubric->user_id ? [$rubric->user_id] : [];
         
-        // ФИКС: Выделим в отдельный экшен для красивой иконки в таймлайне
-        AdminLog::record('rubric.toggle_status', $rubric, $admin, $before, $after, participants: $participants);
+        // ФИКС: diary_rubric.toggle_status
+        AdminLog::record('diary_rubric.toggle_status', $rubric, $admin, $before, $after, participants: $participants);
     }
 }

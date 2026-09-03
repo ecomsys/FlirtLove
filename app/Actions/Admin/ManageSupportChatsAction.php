@@ -9,6 +9,7 @@ use App\Models\Message;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Illuminate\Support\Facades\Cache;
 
 class ManageSupportChatsAction
 {
@@ -20,6 +21,8 @@ class ManageSupportChatsAction
         ChatParticipant::where('chat_id', $chat->id)
             ->where('user_id', $admin->id)
             ->update(['unread_count' => 0]);
+        
+        Cache::forget('admin_sidebar_stats');
     }
 
     /**

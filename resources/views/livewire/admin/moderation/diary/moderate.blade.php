@@ -2,7 +2,7 @@
 
 use App\Models\AdminLog;
 use App\Models\Diary;
-use App\Models\Rubric;
+use App\Models\DiaryRubric;
 use App\Actions\Admin\ModerateDiaryAction;
 
 use Illuminate\Support\Facades\Log;
@@ -16,22 +16,22 @@ new #[Layout('layouts.admin')] class extends Component
     
     public string $status;
     public ?string $rejectReason = null;
-    public ?string $rubricId = null;
+    public ?string $diaryRubricId = null; // ФИКС: Переименовали для консистентности
     public bool $isCommentsEnabled;
-     /** @var string URL для кнопки "Назад" */
+
+    /** @var string URL для кнопки "Назад" */
     public string $backUrl = '';
 
     /**
      * Инициализация компонента.
-     * Загружаем дневник, его связи и запоминаем URL "Назад".
      */
     public function mount(Diary $diary): void
     {
         $avatarQuery = fn($q) => $q->select(['id', 'user_id', 'is_primary', 'status', 'path_thumb', 'path_medium', 'path_large', 'path_original'])->orderByDesc('is_primary')->limit(1);
-        // ФИКС: Грузим юзера (и его аватарки) даже если он мягко-удален (withTrashed)
-        $diary->load(['user' => fn($q) => $q->withTrashed()->with(['photos' => $avatarQuery]), 'rubric']);
+        
+        // ФИКС: Загружаем связь diaryRubric (вместо rubric)
+        $diary->load(['user' => fn($q) => $q->withTrashed()->with(['photos' => $avatarQuery]), 'diaryRubric']);
 
-        // ФИКС: Запоминаем URL "Назад" только при первой загрузке страницы
         $previousUrl = url()->previous();
         $this->backUrl = ($previousUrl && $previousUrl !== url()->current()) 
             ? $previousUrl 
@@ -40,13 +40,14 @@ new #[Layout('layouts.admin')] class extends Component
         $this->diary = $diary;
         $this->status = $diary->status;
         $this->rejectReason = $diary->reject_reason ?? 'other';
-        $this->rubricId = $diary->rubric_id ? (string) $diary->rubric_id : '';
+        $this->diaryRubricId = $diary->diary_rubric_id ? (string) $diary->diary_rubric_id : '';
         $this->isCommentsEnabled = $diary->is_comments_enabled;
     }   
+
     #[Computed]
     public function availableRubrics()
     {
-        return Rubric::where(function ($q) {
+        return DiaryRubric::where(function ($q) {
             $q->whereNull('user_id')->orWhere('user_id', $this->diary->user_id);
         })
         ->orderBy('user_id')
@@ -58,31 +59,48 @@ new #[Layout('layouts.admin')] class extends Component
     protected function getMetaData(): array
     {
         $this->validate([
-            'rubricId' => 'nullable|string',
+            'diaryRubricId' => 'nullable|string',
             'isCommentsEnabled' => 'boolean',
         ]);
 
         return [
-            'rubric_id' => $this->rubricId !== '' ? (int) $this->rubricId : null,
+            'diary_rubric_id' => $this->diaryRubricId !== '' ? (int) $this->diaryRubricId : null,
             'is_comments_enabled' => $this->isCommentsEnabled,
         ];
     }
 
     // Хелпер: Перезагрузка связей чтобы UI не слетал
-      protected function reloadRelations(): void
+    protected function reloadRelations(): void
     {
         $avatarQuery = fn($q) => $q->select(['id', 'user_id', 'is_primary', 'status', 'path_thumb', 'path_medium', 'path_large', 'path_original'])->orderByDesc('is_primary')->limit(1);
-        // ФИКС: Грузим юзера (и его аватарки) даже если он мягко-удален (withTrashed)
-        $this->diary->load(['user' => fn($q) => $q->withTrashed()->with(['photos' => $avatarQuery]), 'rubric']);
+        
+        // ФИКС: Загружаем связь diaryRubric
+        $this->diary->load(['user' => fn($q) => $q->withTrashed()->with(['photos' => $avatarQuery]), 'diaryRubric']);
     }
 
     // Сохранение ТОЛЬКО настроек (Рубрика и Комменты)
     public function saveSettings(): void
     {
         try {
-            $before = $this->diary->getOriginal();
+            // ФИКС: Берем только нужные поля для лога, чтобы не писать весь текст дневника в БД
+            $before = [
+                'diary_rubric_id' => $this->diary->getOriginal('diary_rubric_id'), 
+                'is_comments_enabled' => $this->diary->getOriginal('is_comments_enabled')
+            ];
+            
             $this->diary->update($this->getMetaData());
-            AdminLog::record('diary.update', $this->diary, auth()->user(), $before, $this->diary->fresh()->toArray());
+            $this->diary->refresh();
+            
+            $after = [
+                'diary_rubric_id' => $this->diary->diary_rubric_id, 
+                'is_comments_enabled' => $this->diary->is_comments_enabled,
+                'context' => [
+                    'diary_id' => $this->diary->id,
+                    'title' => $this->diary->title
+                ]
+            ];
+
+            AdminLog::record('diary.update', $this->diary, auth()->user(), $before, $after);
             
             $this->reloadRelations();
             $this->dispatch('show-toast', type: 'success', message: 'Настройки (Рубрика/Комментарии) сохранены!');
@@ -92,14 +110,11 @@ new #[Layout('layouts.admin')] class extends Component
         }
     }
 
-   
-      // Войти в режим отклонения
+    // Войти в режим отклонения
     public function initiateReject(): void
     {
         $this->status = 'rejected';
         $this->rejectReason = 'other';
-        
-        // ФИКС: Перезагружаем связи, чтобы аватарка не слетала при десериализации
         $this->reloadRelations();
     }
 
@@ -108,12 +123,10 @@ new #[Layout('layouts.admin')] class extends Component
     {
         $this->status = $this->diary->status;
         $this->rejectReason = $this->diary->reject_reason ?? 'other';
-        
-        // ФИКС: Перезагружаем связи
         $this->reloadRelations();
     }
 
-        public function approve(ModerateDiaryAction $action): void
+    public function approve(ModerateDiaryAction $action): void
     {
         try {
             $action->approve($this->diary, auth()->user(), $this->getMetaData());
@@ -237,29 +250,29 @@ new #[Layout('layouts.admin')] class extends Component
                 <!-- Блок настроек (Рубрика / Комменты) -->
                 <div class="border-t border-border pt-5 space-y-4">
                     <div class="flex flex-col gap-2">
-                        <x-ui.label>Рубрика</x-ui.label>
-                        <x-ui.select wire:model="rubricId">
-                        <x-ui.select-trigger class="w-full" ><x-ui.select-value placeholder="Без рубрики" /></x-ui.select-trigger>
-                        <x-ui.select-content class="little-scroll">
-                            <x-ui.select-item value="">
-                                <span class="flex items-center gap-2 text-muted-foreground">
-                                    <x-lucide-minus-circle class="w-4 h-4" /> Без рубрики
-                                </span>
-                            </x-ui.select-item>
-                            @foreach($this->availableRubrics as $r)
-                                <x-ui.select-item value="{{ $r->id }}">
-                                    <span class="flex items-center gap-2">
-                                        @if($r->user_id) 
-                                            <x-lucide-user class="w-4 h-4 text-muted-foreground" />
-                                        @else 
-                                            <x-lucide-globe class="w-4 h-4 text-blue-500" />
-                                        @endif
-                                        {{ $r->name }}
+                        <x-ui.label>Рубрика дневника</x-ui.label>
+                        <x-ui.select wire:model="diaryRubricId">
+                            <x-ui.select-trigger class="w-full"><x-ui.select-value placeholder="Без рубрики" /></x-ui.select-trigger>
+                            <x-ui.select-content class="little-scroll">
+                                <x-ui.select-item value="">
+                                    <span class="flex items-center gap-2 text-muted-foreground">
+                                        <x-lucide-minus-circle class="w-4 h-4" /> Без рубрики
                                     </span>
                                 </x-ui.select-item>
-                            @endforeach
-                        </x-ui.select-content>
-                    </x-ui.select>
+                                @foreach($this->availableRubrics as $r)
+                                    <x-ui.select-item value="{{ $r->id }}">
+                                        <span class="flex items-center gap-2">
+                                            @if($r->user_id) 
+                                                <x-lucide-user class="w-4 h-4 text-muted-foreground" />
+                                            @else 
+                                                <x-lucide-globe class="w-4 h-4 text-blue-500" />
+                                            @endif
+                                            {{ $r->name }}
+                                        </span>
+                                    </x-ui.select-item>
+                                @endforeach
+                            </x-ui.select-content>
+                        </x-ui.select>
                     </div>
 
                     <div class="flex items-center justify-between p-3 rounded-md border border-border bg-muted/30">

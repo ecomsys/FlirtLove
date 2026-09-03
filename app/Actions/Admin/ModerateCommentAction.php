@@ -9,6 +9,8 @@ use App\Notifications\CommentModerated;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str; // <--- ДОБАВИЛИ ИМПОРТ
+use Illuminate\Support\Facades\Cache;
+
 
 class ModerateCommentAction
 {
@@ -46,8 +48,9 @@ class ModerateCommentAction
         
         $participants = array_filter([$comment->user_id, $comment->photo?->user_id]);
         
-        AdminLog::record('comment.approve', $comment, $admin, $before, $after, participants: $participants);
+        AdminLog::record('photo_comment.approve', $comment, $admin, $before, $after, participants: $participants);
         $this->notifyAuthor($comment, 'approved');
+        Cache::forget('admin_sidebar_stats');
         
         return true;
     }
@@ -83,8 +86,9 @@ class ModerateCommentAction
         
         $participants = array_filter([$comment->user_id, $comment->photo?->user_id]);
         
-        AdminLog::record('comment.reject', $comment, $admin, $before, $after, participants: $participants);
+        AdminLog::record('photo_comment.reject', $comment, $admin, $before, $after, participants: $participants);
         $this->notifyAuthor($comment, 'rejected');
+        Cache::forget('admin_sidebar_stats');
     }
 
     public function markSpam(PhotoComment $comment, User $admin): void
@@ -118,8 +122,9 @@ class ModerateCommentAction
         
         $participants = array_filter([$comment->user_id, $comment->photo?->user_id]);
         
-        AdminLog::record('comment.spam', $comment, $admin, $before, $after, participants: $participants);
+        AdminLog::record('photo_comment.spam', $comment, $admin, $before, $after, participants: $participants);
         $this->notifyAuthor($comment, 'spam');
+        Cache::forget('admin_sidebar_stats');
     }
 
     public function restore(PhotoComment $comment, User $admin): void
@@ -152,8 +157,9 @@ class ModerateCommentAction
         
         $participants = array_filter([$comment->user_id, $comment->photo?->user_id]);
         
-        AdminLog::record('comment.restore', $comment, $admin, $before, $after, participants: $participants);
+        AdminLog::record('photo_comment.restore', $comment, $admin, $before, $after, participants: $participants);
         $this->notifyAuthor($comment, 'restored');
+        Cache::forget('admin_sidebar_stats');
     }
 
     public function bulkApprove($comments, User $admin): int
@@ -193,8 +199,9 @@ class ModerateCommentAction
             ];
             $participants = array_filter([$firstComment->user_id]);
             
-            AdminLog::record('comment.mass_approve', $firstComment, $admin, null, $after, participants: $participants);
+            AdminLog::record('photo_comment.mass_approve', $firstComment, $admin, null, $after, participants: $participants);
         }
+        Cache::forget('admin_sidebar_stats');
 
         return $approvedCount;
     }
@@ -239,8 +246,9 @@ class ModerateCommentAction
             ];
             $participants = array_filter([$firstComment->user_id]);
             
-            AdminLog::record('comment.mass_reject', $firstComment, $admin, null, $after, participants: $participants);
+            AdminLog::record('photo_comment.mass_reject', $firstComment, $admin, null, $after, participants: $participants);
         }
+        Cache::forget('admin_sidebar_stats');
 
         return $count;
     }

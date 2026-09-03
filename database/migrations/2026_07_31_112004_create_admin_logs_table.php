@@ -31,6 +31,8 @@ return new class extends Migration
             // Состояние объекта ПОСЛЕ изменения. Например: {"status": "banned", "ban_reason": "scam"}
             $table->json('after')->nullable();
 
+            $table->json('participants')->nullable();
+
             // === ТЕХНИЧЕСКИЕ ДАННЫЕ ===
             // С какого IP админ совершил действие (для расследований взломов аккаунтов админов)
             $table->ipAddress('ip_address')->nullable();

@@ -2,7 +2,7 @@
 
 namespace Database\Seeders;
 
-use App\Models\{AdminLog, BlogCategory, BlogPost, Broadcast, Chat, ChatParticipant, FraudAlert, Gift, Media, Message, Photo, PhotoComment, Album, Report, StopWord, SubscriptionPlan, Swipe, Transaction, User, UserGift, UserMatch, UserPreference, UserProfile, UserSubscription, Setting, Diary, DiaryComment, DiarySubscription, Rubric, SupportTemplate, GeoIPLocation};
+use App\Models\{AdminLog, BlogCategory, BlogPost, Broadcast, Chat, ChatParticipant, FraudAlert, Gift, Media, Message, Photo, PhotoComment, Album, Report, StopWord, SubscriptionPlan, Swipe, Transaction, User, UserGift, UserMatch, UserPreference, UserProfile, UserSubscription, Setting, Diary, DiaryComment, DiarySubscription, DiaryRubric, SupportTemplate, GeoIPLocation};
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -63,7 +63,7 @@ class DatabaseSeeder extends Seeder
             GiftSeeder::class,
             StopWordSeeder::class,
             PageSeeder::class,  
-            RubricSeeder::class,
+            DiaryRubricSeeder::class,
             BlogSeeder::class,
         ]);
 
@@ -136,7 +136,7 @@ class DatabaseSeeder extends Seeder
         $this->command->info('   │ 💬 Комментариев (фото)    │ ' . str_pad(PhotoComment::count(), 8, ' ', STR_PAD_LEFT) . ' │');
         $this->command->info('   │ 📔 Дневников              │ ' . str_pad(Diary::count(), 8, ' ', STR_PAD_LEFT) . ' │');
         $this->command->info('   │ 💬 Комментариев (дневник) │ ' . str_pad(DiaryComment::count(), 8, ' ', STR_PAD_LEFT) . ' │');
-        $this->command->info('   │ 📁 Рубрик                 │ ' . str_pad(Rubric::count(), 8, ' ', STR_PAD_LEFT) . ' │');
+        $this->command->info('   │ 📁 Рубрик                 │ ' . str_pad(DiaryRubric::count(), 8, ' ', STR_PAD_LEFT) . ' │');
         $this->command->info('   │ 📰 Рубрик (блог)         │ ' . str_pad(BlogCategory::count(), 8, ' ', STR_PAD_LEFT) . ' │');
         $this->command->info('   │ 📝 Статей (блог)         │ ' . str_pad(BlogPost::count(), 8, ' ', STR_PAD_LEFT) . ' │');
         $this->command->info('   │ 👉 Свайпов                │ ' . str_pad(Swipe::count(), 8, ' ', STR_PAD_LEFT) . ' │');
@@ -201,8 +201,8 @@ class DatabaseSeeder extends Seeder
                 users,
                 diary_comments,
                 diary_subscriptions,
-                diaries,
-                rubrics
+                diaries,              
+                diary_rubrics
                 RESTART IDENTITY CASCADE'
             );
         } else {
@@ -239,7 +239,7 @@ class DatabaseSeeder extends Seeder
             DiaryComment::query()->delete();
             DiarySubscription::query()->delete();
             Diary::query()->delete();
-            Rubric::query()->delete();
+            DiaryRubric::query()->delete();
             
             $tables = [
                 'users', 'user_profiles', 'user_preferences', 'albums', 'photos', 
@@ -249,7 +249,7 @@ class DatabaseSeeder extends Seeder
                 'admin_logs', 'broadcasts', 'settings', 'media', 'geoip_locations',
                 'blog_categories', 
                 'blog_posts',      
-                'diary_comments', 'diary_subscriptions', 'diaries', 'rubrics'               
+                'diary_comments', 'diary_subscriptions', 'diaries', 'diary_rubrics'               
             ];
             
             foreach ($tables as $table) {

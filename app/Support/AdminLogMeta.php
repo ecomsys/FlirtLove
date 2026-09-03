@@ -42,9 +42,9 @@ class AdminLogMeta
             'blog_category.delete' => ['title' => 'Удалена рубрика блога', 'badge' => ['variant' => 'destructive', 'label' => 'Блог'], 'icon' => 'folder-minus', 'iconColor' => 'text-destructive bg-destructive/10'],
 
             // Шаблоны поддержки
-            'template.create' => ['title' => 'Создан шаблон поддержки', 'badge' => ['variant' => 'success', 'label' => 'Шаблоны'], 'icon' => 'plus-circle', 'iconColor' => 'text-green-500 bg-green-500/10'],
-            'template.update' => ['title' => 'Изменен шаблон поддержки', 'badge' => ['variant' => 'info', 'label' => 'Шаблоны'], 'icon' => 'edit', 'iconColor' => 'text-blue-500 bg-blue-500/10'],
-            'template.delete' => ['title' => 'Удален шаблон поддержки', 'badge' => ['variant' => 'destructive', 'label' => 'Шаблоны'], 'icon' => 'trash-2', 'iconColor' => 'text-destructive bg-destructive/10'],
+            'support_template.create' => ['title' => 'Создан шаблон поддержки', 'badge' => ['variant' => 'success', 'label' => 'Шаблоны'], 'icon' => 'plus-circle', 'iconColor' => 'text-green-500 bg-green-500/10'],
+            'support_template.update' => ['title' => 'Изменен шаблон поддержки', 'badge' => ['variant' => 'info', 'label' => 'Шаблоны'], 'icon' => 'edit', 'iconColor' => 'text-blue-500 bg-blue-500/10'],
+            'support_template.delete' => ['title' => 'Удален шаблон поддержки', 'badge' => ['variant' => 'destructive', 'label' => 'Шаблоны'], 'icon' => 'trash-2', 'iconColor' => 'text-destructive bg-destructive/10'],
 
             // Тарифы и подписки
             'plan.create' => ['title' => 'Создан тариф', 'badge' => ['variant' => 'success', 'label' => 'Тариф'], 'icon' => 'plus-circle', 'iconColor' => 'text-green-500 bg-green-500/10'],
@@ -56,12 +56,12 @@ class AdminLogMeta
             'report.reject' => ['title' => 'Жалоба отклонена', 'badge' => ['variant' => 'secondary', 'label' => 'Жалоба'], 'icon' => 'shield-x', 'iconColor' => 'text-muted-foreground bg-muted'],
 
             // Комментарии
-            'comment.approve' => ['title' => 'Комментарий одобрен', 'badge' => ['variant' => 'success', 'label' => 'Модерация'], 'icon' => 'check-circle', 'iconColor' => 'text-green-500 bg-green-500/10'],
-            'comment.reject' => ['title' => 'Комментарий отклонен', 'badge' => ['variant' => 'destructive', 'label' => 'Модерация'], 'icon' => 'x-circle', 'iconColor' => 'text-destructive bg-destructive/10'],
-            'comment.spam' => ['title' => 'Комментарий помечен как спам', 'badge' => ['variant' => 'destructive', 'label' => 'Спам'], 'icon' => 'alert-octagon', 'iconColor' => 'text-red-500 bg-red-500/10'],
-            'comment.restore' => ['title' => 'Комментарий восстановлен', 'badge' => ['variant' => 'info', 'label' => 'Восстановление'], 'icon' => 'rotate-ccw', 'iconColor' => 'text-blue-500 bg-blue-500/10'],
-            'comment.mass_approve' => ['title' => 'Массовое одобрение комментариев', 'badge' => ['variant' => 'success', 'label' => 'Массовое'], 'icon' => 'check', 'iconColor' => 'text-green-500 bg-green-500/10'],
-            'comment.mass_reject' => ['title' => 'Массовое отклонение комментариев', 'badge' => ['variant' => 'destructive', 'label' => 'Массовое'], 'icon' => 'x', 'iconColor' => 'text-destructive bg-destructive/10'],
+            'photo_comment.approve' => ['title' => 'Комментарий одобрен', 'badge' => ['variant' => 'success', 'label' => 'Модерация'], 'icon' => 'check-circle', 'iconColor' => 'text-green-500 bg-green-500/10'],
+            'photo_comment.reject' => ['title' => 'Комментарий отклонен', 'badge' => ['variant' => 'destructive', 'label' => 'Модерация'], 'icon' => 'x-circle', 'iconColor' => 'text-destructive bg-destructive/10'],
+            'photo_comment.spam' => ['title' => 'Комментарий помечен как спам', 'badge' => ['variant' => 'destructive', 'label' => 'Спам'], 'icon' => 'alert-octagon', 'iconColor' => 'text-red-500 bg-red-500/10'],
+            'photo_comment.restore' => ['title' => 'Комментарий восстановлен', 'badge' => ['variant' => 'info', 'label' => 'Восстановление'], 'icon' => 'rotate-ccw', 'iconColor' => 'text-blue-500 bg-blue-500/10'],
+            'photo_comment.mass_approve' => ['title' => 'Массовое одобрение комментариев', 'badge' => ['variant' => 'success', 'label' => 'Массовое'], 'icon' => 'check', 'iconColor' => 'text-green-500 bg-green-500/10'],
+            'photo_comment.mass_reject' => ['title' => 'Массовое отклонение комментариев', 'badge' => ['variant' => 'destructive', 'label' => 'Массовое'], 'icon' => 'x', 'iconColor' => 'text-destructive bg-destructive/10'],
 
             // Антифрод
             'fraud_alert.resolve' => ['title' => 'Антифрод: Бан подтвержден', 'badge' => ['variant' => 'destructive', 'label' => 'Антифрод'], 'icon' => 'shield-alert', 'iconColor' => 'text-destructive bg-destructive/10'],
@@ -80,6 +80,16 @@ class AdminLogMeta
             'support.unarchive' => ['title' => 'Возврат тикета из архива', 'badge' => ['variant' => 'info', 'label' => 'Поддержка'], 'icon' => 'archive-restore', 'iconColor' => 'text-blue-500 bg-blue-500/10'],
             'support.message_sent' => ['title' => 'Ответ службы поддержки', 'badge' => ['variant' => 'success', 'label' => 'Поддержка'], 'icon' => 'message-circle', 'iconColor' => 'text-green-500 bg-green-500/10'],
 
+            // Медиа
+            'media.upload' => ['title' => 'Загрузка медиафайлов', 'badge' => ['variant' => 'success', 'label' => 'Медиа'], 'icon' => 'upload', 'iconColor' => 'text-green-500 bg-green-500/10'],
+            'media.delete' => ['title' => 'Удаление медиафайла', 'badge' => ['variant' => 'destructive', 'label' => 'Медиа'], 'icon' => 'image-off', 'iconColor' => 'text-destructive bg-destructive/10'],
+
+            // Стоп-слова
+            'stop_words.create' => ['title' => 'Создание стоп-слов', 'badge' => ['variant' => 'success', 'label' => 'Стоп-слова'], 'icon' => 'shield-ban', 'iconColor' => 'text-green-500 bg-green-500/10'],
+            'stop_words.toggle' => ['title' => 'Смена статуса стоп-слова', 'badge' => ['variant' => 'warning', 'label' => 'Стоп-слова'], 'icon' => 'shield-ban', 'iconColor' => 'text-yellow-500 bg-yellow-500/10'],
+            'stop_words.delete' => ['title' => 'Удаление стоп-слова', 'badge' => ['variant' => 'destructive', 'label' => 'Стоп-слова'], 'icon' => 'shield-ban', 'iconColor' => 'text-destructive bg-destructive/10'],
+            'stop_words.bulk_action' => ['title' => 'Массовое действие со стоп-словами', 'badge' => ['variant' => 'info', 'label' => 'Стоп-слова'], 'icon' => 'shield-ban', 'iconColor' => 'text-blue-500 bg-blue-500/10'],
+
             // Подарки (Каталог)
             'gift.create' => ['title' => 'Создан подарок', 'badge' => ['variant' => 'success', 'label' => 'Каталог'], 'icon' => 'plus-circle', 'iconColor' => 'text-green-500 bg-green-500/10'],
             'gift.update' => ['title' => 'Изменен подарок', 'badge' => ['variant' => 'info', 'label' => 'Каталог'], 'icon' => 'edit', 'iconColor' => 'text-blue-500 bg-blue-500/10'],
@@ -97,11 +107,11 @@ class AdminLogMeta
             // Профиль
             'profile.clear_field' => ['title' => 'Очистка текста', 'badge' => ['variant' => 'info', 'label' => 'Модерация'], 'icon' => 'eraser', 'iconColor' => 'text-blue-500 bg-blue-500/10'],
 
-            // Рубрики дневников
-            'rubric.create' => ['title' => 'Создана рубрика', 'badge' => ['variant' => 'success', 'label' => 'Рубрика'], 'icon' => 'folder-plus', 'iconColor' => 'text-green-500 bg-green-500/10'],
-            'rubric.update' => ['title' => 'Обновлена рубрика', 'badge' => ['variant' => 'info', 'label' => 'Рубрика'], 'icon' => 'edit', 'iconColor' => 'text-blue-500 bg-blue-500/10'],
-            'rubric.delete' => ['title' => 'Удалена рубрика', 'badge' => ['variant' => 'destructive', 'label' => 'Рубрика'], 'icon' => 'trash-2', 'iconColor' => 'text-destructive bg-destructive/10'],
-            'rubric.toggle_status' => ['title' => 'Смена статуса рубрики', 'badge' => ['variant' => 'warning', 'label' => 'Рубрика'], 'icon' => 'eye-off', 'iconColor' => 'text-yellow-500 bg-yellow-500/10'],
+            // Рубрики дневников (Обновили ключи)
+            'diary_rubric.create' => ['title' => 'Создана рубрика дневника', 'badge' => ['variant' => 'success', 'label' => 'Рубрика'], 'icon' => 'folder-plus', 'iconColor' => 'text-green-500 bg-green-500/10'],
+            'diary_rubric.update' => ['title' => 'Обновлена рубрика дневника', 'badge' => ['variant' => 'info', 'label' => 'Рубрика'], 'icon' => 'edit', 'iconColor' => 'text-blue-500 bg-blue-500/10'],
+            'diary_rubric.delete' => ['title' => 'Удалена рубрика дневника', 'badge' => ['variant' => 'destructive', 'label' => 'Рубрика'], 'icon' => 'trash-2', 'iconColor' => 'text-destructive bg-destructive/10'],
+            'diary_rubric.toggle_status' => ['title' => 'Смена статуса рубрики дневника', 'badge' => ['variant' => 'warning', 'label' => 'Рубрика'], 'icon' => 'eye-off', 'iconColor' => 'text-yellow-500 bg-yellow-500/10'],
 
             // Дневники
             'diary.approve' => ['title' => 'Дневник одобрен', 'badge' => ['variant' => 'success', 'label' => 'Модерация'], 'icon' => 'check-circle', 'iconColor' => 'text-green-500 bg-green-500/10'],

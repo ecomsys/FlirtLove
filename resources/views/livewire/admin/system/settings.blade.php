@@ -84,7 +84,7 @@ new #[Layout('layouts.admin')] class extends Component
             });
 
             // Кэш сбросится автоматически благодаря boot-методу в модели Setting!
-            AdminLog::record('setting.update', Setting::first(), auth()->user(), [], ['group' => $this->group]);
+            AdminLog::record('settings.update', Setting::first(), auth()->user(), [], ['group' => $this->group]);
             
             $this->dispatch('show-toast', type: 'success', message: 'Настройки сохранены!');
             $this->loadSettings();

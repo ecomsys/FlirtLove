@@ -15,7 +15,7 @@ return new class extends Migration
             $table->foreignId('user_id')->constrained('users')->cascadeOnDelete();
             
             // Рубрика (если админ удалит рубрику, пост не удалится, рубрика станет NULL)
-            $table->foreignId('rubric_id')->nullable()->constrained('rubrics')->nullOnDelete();
+            $table->foreignId('diary_rubric_id')->nullable()->constrained('diary_rubrics')->nullOnDelete();
             
             // Контент
             $table->string('title');
@@ -44,7 +44,7 @@ return new class extends Migration
             $table->index(['user_id', 'status', 'published_at']);
             
             // 2. Вывод постов по рубрике
-            $table->index(['rubric_id', 'status', 'published_at']);
+            $table->index(['diary_rubric_id', 'status', 'published_at']);
         });
     }
 

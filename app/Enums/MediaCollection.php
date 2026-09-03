@@ -27,11 +27,11 @@ enum MediaCollection: string
     {
         return match ($this) {
             self::Default => 'bg-secondary text-secondary-foreground',
-            self::Gifts => 'bg-yellow-500/10 text-yellow-500',
-            self::Post => 'bg-blue-500/10 text-blue-500',
-            self::Notifications => 'bg-red-500/10 text-red-500',
-            self::BannerDesktop => 'bg-purple-500/10 text-purple-500',
-            self::BannerMobile => 'bg-pink-500/10 text-pink-500',            
+            self::Gifts => 'bg-secondary text-secondary-foreground',
+            self::Post => 'bg-secondary text-secondary-foreground',
+            self::Notifications => 'bg-secondary text-secondary-foreground',
+            self::BannerDesktop => 'bg-secondary text-secondary-foreground',
+            self::BannerMobile => 'bg-secondary text-secondary-foreground',            
         };
     }
 

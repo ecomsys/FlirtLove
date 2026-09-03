@@ -16,8 +16,6 @@ new #[Layout('layouts.admin')] class extends Component
     #[Url(as: 'tab', except: 'profile', history: true)]
     public string $activeTab = 'profile';
 
-    private array $allowedTabs = ['sessions', 'admin-logs', 'profile', 'bans', 'reports','blocks', 'photos', 'photo-comments', 'finance', 'chats', 'diaries', 'diary-comments', 'dating', 'finances', 'gifts', 'broadcasts'];
-
     public function mount(int $user): void
     {
         $this->userId = $user;
@@ -25,6 +23,32 @@ new #[Layout('layouts.admin')] class extends Component
         if (!in_array($this->activeTab, $this->allowedTabs)) {
             $this->activeTab = 'profile';
         }
+    }
+
+    #[Computed]
+    public function allowedTabs(): array
+    {
+        $currentAdmin = auth()->user();
+
+        // 1. Саппорт видит ТОЛЬКО анкету (чтобы идентифицировать юзера при обращении)
+        $tabs = ['profile'];
+
+        // 2. Модераторы (и Админы) видят всё, связанное с безопасностью и контентом
+        if (in_array($currentAdmin->role, ['moderator', 'admin'])) {
+            array_push($tabs, 'reports', 'blocks', 'bans', 'photos', 'photo-comments', 'diaries', 'diary-comments', 'dating', 'chats');
+        }
+
+        // 3. Админы видят системные вкладки, деньги и логи
+        if ($currentAdmin->role === 'admin') {
+            array_push($tabs, 'sessions', 'admin-logs', 'finances', 'gifts', 'broadcasts');
+        }
+
+        return $tabs;
+    }
+
+    public function canSeeTab(string $tab): bool
+    {
+        return in_array($tab, $this->allowedTabs);
     }
 
     #[Computed]
@@ -50,7 +74,7 @@ new #[Layout('layouts.admin')] class extends Component
 
     public function setTab(string $tab): void
     {
-        if (!in_array($tab, $this->allowedTabs)) return;
+        if (!$this->canSeeTab($tab)) return;
         $this->activeTab = $tab;
     }
 
@@ -81,7 +105,6 @@ new #[Layout('layouts.admin')] class extends Component
         $this->refreshUser();
     }
 
-    // ФИКС: Делегируем логику в DeleteUserAction
     public function restoreUser(DeleteUserAction $action): void
     {
         $user = $this->user;
@@ -94,7 +117,6 @@ new #[Layout('layouts.admin')] class extends Component
     }
 }; 
 ?>
-
 <div class="space-y-3">
     {{-- ШАПКА ПРОФИЛЯ --}}
     <div class="flex items-center justify-between flex-wrap gap-4" wire:key="user-header-{{ $this->user->id }}-{{ $this->user->status }}-{{ $this->user->deleted_at }}">
@@ -127,6 +149,7 @@ new #[Layout('layouts.admin')] class extends Component
                 <x-lucide-mail class="w-4 h-4" /> Email
             </x-ui.button>
 
+             @if(in_array(auth()->user()->role, ['admin', 'moderator']))
             <x-ui.dropdown-menu>
                 <x-ui.dropdown-menu-trigger>
                     <x-ui.button variant="outline" size="icon">
@@ -170,6 +193,7 @@ new #[Layout('layouts.admin')] class extends Component
                     @endif
                 </x-ui.dropdown-menu-content>
             </x-ui.dropdown-menu>
+            @endif
         </div>
     </div>
 
@@ -177,14 +201,11 @@ new #[Layout('layouts.admin')] class extends Component
     <div class="relative">
         
         @if($this->user->deleted_at)
-            {{-- ОВЕРЛЕЙ ДЛЯ ДЕАКТИВИРОВАННОГО ЮЗЕРА --}}
-            {{-- ФИКС: Добавили x-data для управления видимостью на клиенте, исправили позиционирование на absolute inset-0 --}}
             <div x-data="{ showOverlay: true }" x-show="showOverlay" x-transition.opacity
                  class="fixed left-[16rem] top-[4rem] right-0 bottom-0 z-20 flex flex-col items-center justify-center pointer-events-none bg-blue-500/5 backdrop-blur-[1px] rounded-lg pb-12">
                 
                 <div class="relative flex flex-col items-center gap-2 p-6 pointer-events-auto bg-card/95 border border-dashed border-border rounded-xl shadow-2xl text-center max-w-sm">
                     
-                    {{-- КНОПКА ЗАКРЫТИЯ ОВЕРЛЕЯ --}}
                     <button @click="showOverlay = false" class="absolute top-3 right-3 p-1 rounded-md text-muted-foreground hover:bg-accent hover:text-foreground transition-colors" title="Закрыть и просмотреть данные">
                         <x-lucide-x class="w-4 h-4" />
                     </button>
@@ -209,58 +230,108 @@ new #[Layout('layouts.admin')] class extends Component
         {{-- МЕНЮ ТАБОВ --}}
         <div class="border-b border-border">
             <nav class="flex gap-x-4 flex-wrap">
-                <button wire:click="setTab('profile')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {{ $activeTab === 'profile' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
-                    <x-lucide-user class="w-4 h-4 inline mr-1" /> Анкета
-                </button>
-                <button wire:click="setTab('bans')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {{ $activeTab === 'bans' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
-                    <x-lucide-shield class="w-4 h-4 inline mr-1" /> Статус и Баны
-                </button>
-                <button wire:click="setTab('sessions')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {{ $activeTab === 'sessions' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
-                    <x-lucide-shield-check class="w-4 h-4 inline mr-1" /> Сессии
-                </button>
-                <button wire:click="setTab('reports')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {{ $activeTab === 'reports' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
-                    <x-lucide-flag class="w-4 h-4 inline mr-1" /> Жалобы
-                </button>
-                <button wire:click="setTab('blocks')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {{ $activeTab === 'blocks' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
-                    <x-lucide-ban class="w-4 h-4 inline mr-1" /> Блокировки
-                </button>
-                <button wire:click="setTab('photos')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {{ $activeTab === 'photos' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
-                    <x-lucide-image class="w-4 h-4 inline mr-1" /> Фото
-                </button>       
-                <button wire:click="setTab('photo-comments')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {{ $activeTab === 'photo-comments' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
-                    <x-lucide-message-square class="w-4 h-4 inline mr-1" /> Комм. фото
-                </button>    
-                <button wire:click="setTab('diaries')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {{ $activeTab === 'diaries' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
-                    <x-lucide-book-open class="w-4 h-4 inline mr-1" /> Дневники
-                </button>
-                 <button wire:click="setTab('diary-comments')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {{ $activeTab === 'diary-comments' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
-                    <x-lucide-message-square class="w-4 h-4 inline mr-1" /> Комм. дневников
-                </button>
-                <button wire:click="setTab('dating')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {{ $activeTab === 'dating' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
-                    <x-lucide-heart class="w-4 h-4 inline mr-1" /> Знакомства
-                </button>
-                <button wire:click="setTab('finances')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {{ $activeTab === 'finances' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
-                    <x-lucide-wallet class="w-4 h-4 inline mr-1" /> Финансы
-                </button>     
-                                
-                {{-- НОВЫЕ ВКЛАДКИ --}}
-                <button wire:click="setTab('chats')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {{ $activeTab === 'chats' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
-                    <x-lucide-message-circle class="w-4 h-4 inline mr-1" /> Чаты
-                </button>
-                <button wire:click="setTab('gifts')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {{ $activeTab === 'gifts' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
-                    <x-lucide-gift class="w-4 h-4 inline mr-1" /> Подарки
-                </button>
-                <button wire:click="setTab('broadcasts')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {{ $activeTab === 'broadcasts' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
-                    <x-lucide-bell class="w-4 h-4 inline mr-1" /> Уведомления
-                </button>
-                <button wire:click="setTab('admin-logs')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {{ $activeTab === 'admin-logs' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
-                    <x-lucide-history class="w-4 h-4 inline mr-1" /> Логи админов
-                </button>
+                @if($this->canSeeTab('profile'))
+                    <button wire:click="setTab('profile')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {{ $activeTab === 'profile' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
+                        <x-lucide-user class="w-4 h-4 inline mr-1" /> Анкета
+                    </button>
+                @endif
+
+                @if($this->canSeeTab('bans'))
+                    <button wire:click="setTab('bans')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {{ $activeTab === 'bans' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
+                        <x-lucide-shield class="w-4 h-4 inline mr-1" /> Статус и Баны
+                    </button>
+                @endif
+
+                @if($this->canSeeTab('sessions'))
+                    <button wire:click="setTab('sessions')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {{ $activeTab === 'sessions' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
+                        <x-lucide-shield-check class="w-4 h-4 inline mr-1" /> Сессии
+                    </button>
+                @endif
+
+                @if($this->canSeeTab('reports'))
+                    <button wire:click="setTab('reports')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {{ $activeTab === 'reports' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
+                        <x-lucide-flag class="w-4 h-4 inline mr-1" /> Жалобы
+                    </button>
+                @endif
+
+                @if($this->canSeeTab('blocks'))
+                    <button wire:click="setTab('blocks')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {{ $activeTab === 'blocks' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
+                        <x-lucide-ban class="w-4 h-4 inline mr-1" /> Блокировки
+                    </button>
+                @endif
+
+                @if($this->canSeeTab('photos'))
+                    <button wire:click="setTab('photos')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {{ $activeTab === 'photos' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
+                        <x-lucide-image class="w-4 h-4 inline mr-1" /> Фото
+                    </button>
+                @endif       
+
+                @if($this->canSeeTab('photo-comments'))
+                    <button wire:click="setTab('photo-comments')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {{ $activeTab === 'photo-comments' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
+                        <x-lucide-message-square class="w-4 h-4 inline mr-1" /> Комм. фото
+                    </button>
+                @endif    
+
+                @if($this->canSeeTab('diaries'))
+                    <button wire:click="setTab('diaries')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {{ $activeTab === 'diaries' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
+                        <x-lucide-book-open class="w-4 h-4 inline mr-1" /> Дневники
+                    </button>
+                @endif
+
+                @if($this->canSeeTab('diary-comments'))
+                    <button wire:click="setTab('diary-comments')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {{ $activeTab === 'diary-comments' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
+                        <x-lucide-message-square class="w-4 h-4 inline mr-1" /> Комм. дневников
+                    </button>
+                @endif
+
+                @if($this->canSeeTab('dating'))
+                    <button wire:click="setTab('dating')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {{ $activeTab === 'dating' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
+                        <x-lucide-heart class="w-4 h-4 inline mr-1" /> Знакомства
+                    </button>
+                @endif
+
+                @if($this->canSeeTab('finances'))
+                    <button wire:click="setTab('finances')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {{ $activeTab === 'finances' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
+                        <x-lucide-wallet class="w-4 h-4 inline mr-1" /> Финансы
+                    </button>
+                @endif     
+
+                @if($this->canSeeTab('chats'))
+                    <button wire:click="setTab('chats')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {{ $activeTab === 'chats' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
+                        <x-lucide-message-circle class="w-4 h-4 inline mr-1" /> Чаты
+                    </button>
+                @endif
+
+                @if($this->canSeeTab('gifts'))
+                    <button wire:click="setTab('gifts')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {{ $activeTab === 'gifts' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
+                        <x-lucide-gift class="w-4 h-4 inline mr-1" /> Подарки
+                    </button>
+                @endif
+
+                @if($this->canSeeTab('broadcasts'))
+                    <button wire:click="setTab('broadcasts')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {{ $activeTab === 'broadcasts' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
+                        <x-lucide-bell class="w-4 h-4 inline mr-1" /> Уведомления
+                    </button>
+                @endif
+
+                @if($this->canSeeTab('admin-logs'))
+                    <button wire:click="setTab('admin-logs')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {{ $activeTab === 'admin-logs' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
+                        <x-lucide-history class="w-4 h-4 inline mr-1" /> Логи админов
+                    </button>
+                @endif
             </nav>
         </div>
 
-        {{-- КОНТЕНТ ТАБОВ --}}
-        <div class="bg-card border border-border rounded-lg p-6 mt-4">
+          {{-- КОНТЕНТ ТАБОВ --}}
+        <div class="relative bg-card border border-border rounded-lg p-6 mt-4 min-h-[400px]">
+            
+            {{-- Спиннер при переключении табов (ПУЛЕНЕПРОБИВАЕМЫЙ ВАРИАНТ) --}}
+            <div wire:loading.delay class="absolute inset-0 z-10 bg-card/70 backdrop-blur-sm rounded-lg">
+                <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
+                    <x-lucide-loader-circle class="w-8 h-8 animate-spin text-primary" />
+                </div>
+            </div>
+
             @if($activeTab === 'profile')
                 <livewire:admin.users.tabs.profile :userId="$this->userId" :key="'profile-'.$this->userId" />
             @elseif($activeTab === 'bans')
@@ -292,6 +363,6 @@ new #[Layout('layouts.admin')] class extends Component
             @elseif($activeTab === 'admin-logs')
                 <livewire:admin.users.tabs.admin-logs :userId="$this->userId" :key="'admin-logs-'.$this->userId" />
             @endif
-        </div> 
+        </div>
     </div>
 </div>
