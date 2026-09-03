@@ -42,14 +42,13 @@ Route::middleware(['auth', 'verified'])->prefix('admin')->name('admin.')->group(
 
         // Саппорт-чат
         Volt::route('/communication/support', 'admin.communication.support')->name('communication.support');
+        Volt::route('/communication/templates', 'admin.communication.templates')->name('communication.templates');
     });
 
     // ============================================
     // ЗОНА 2: Доступно Модераторам и Админам (Управление контентом и безопасностью)
     // ============================================
-    Route::middleware('role:admin,moderator')->group(function () {
-        // Модерация
-        Volt::route('/media', 'admin.media.index')->name('media.index');
+    Route::middleware('role:admin,moderator')->group(function () {      
         
         Volt::route('/moderation/dating', 'admin.moderation.dating')->name('moderation.dating');
         Volt::route('/moderation/reports', 'admin.moderation.reports')->name('moderation.reports');
@@ -62,8 +61,7 @@ Route::middleware(['auth', 'verified'])->prefix('admin')->name('admin.')->group(
 
         // Коммуникация (Модеры проверяют дневники и чаты на спам)
         Volt::route('/communication/chats', 'admin.communication.chats')->name('communication.chats');        
-        Volt::route('/communication/stop-words', 'admin.communication.stop-words.index')->name('communication.stop-words.index');
-        Volt::route('/communication/templates', 'admin.communication.templates')->name('communication.templates');
+        Volt::route('/communication/stop-words', 'admin.communication.stop-words.index')->name('communication.stop-words.index');     
 
         // Безопасность
         Volt::route('/security/block-signals', 'admin.security.block-signals.index')->name('security.block-signals.index');
@@ -75,6 +73,9 @@ Route::middleware(['auth', 'verified'])->prefix('admin')->name('admin.')->group(
     // ЗОНА 3: Доступно ТОЛЬКО Админам (Бог-режим)
     // ============================================
     Route::middleware('role:admin')->group(function () {
+        // Медиа
+        Volt::route('/media', 'admin.media.index')->name('media.index');
+
         // Финансы
         Volt::route('/finances/transactions', 'admin.finances.transactions')->name('finances.transactions');
         Volt::route('/finances/subscriptions', 'admin.finances.subscriptions')->name('finances.subscriptions');
@@ -92,12 +93,10 @@ Route::middleware(['auth', 'verified'])->prefix('admin')->name('admin.')->group(
         Volt::route('/system/broadcasts', 'admin.system.broadcasts.index')->name('system.broadcasts.index');
         Volt::route('/system/broadcasts/create', 'admin.system.broadcasts.form')->name('system.broadcasts.create');
         Volt::route('/system/broadcasts/{broadcast}/edit', 'admin.system.broadcasts.form')->name('system.broadcasts.edit');
-       
-        Volt::route('/system/journal-logs', 'admin.system.journal-logs')->name('system.journal-logs');
-
-        Volt::route('/system/geo-ip-locations', 'admin.system.geo-ip-locations.index')->name('system.geo-ip-locations.index');
-
+                    
+        Volt::route('/system/admin-logs', 'admin.system.admin-logs')->name('system.admin-logs');
         Volt::route('/system/laravel-logs', 'admin.system.laravel-logs')->name('system.laravel-logs');
+        Volt::route('/system/geo-ip-locations', 'admin.system.geo-ip-locations.index')->name('system.geo-ip-locations.index');
         
         // Управление персоналом
         Volt::route('/system/roles', 'admin.system.roles')->name('system.roles');

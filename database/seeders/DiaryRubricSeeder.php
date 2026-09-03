@@ -2,10 +2,10 @@
 
 namespace Database\Seeders;
 
-use App\Models\Rubric;
+use App\Models\DiaryRubric;
 use Illuminate\Database\Seeder;
 
-class RubricSeeder extends Seeder
+class DiaryRubricSeeder extends Seeder
 {
     public function run(): void
     {
@@ -28,7 +28,7 @@ class RubricSeeder extends Seeder
         foreach ($rubrics as $rubricData) {
             $rubricData['is_active'] = true; // Все по умолчанию активны
 
-            $model = Rubric::updateOrCreate(
+            $model = DiaryRubric::updateOrCreate(
                 ['slug' => $rubricData['slug']],
                 $rubricData
             );

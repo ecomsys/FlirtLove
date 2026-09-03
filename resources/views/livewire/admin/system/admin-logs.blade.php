@@ -15,15 +15,11 @@ new #[Layout('layouts.admin')] class extends Component
 {
     use WithPagination;
 
-    // ФИКС: Переводим фильтры на #[Url], выкидываем session()
     #[Url(as: 'q', except: '')]
     public string $search = '';
     
     #[Url(as: 'cat', except: 'all')]
     public string $categoryFilter = 'all';
-    
-    #[Url(as: 'act', except: 'all')]
-    public string $actionFilter = 'all';
     
     #[Url(as: 'adm', except: '')]
     public string $adminFilter = '';
@@ -33,25 +29,36 @@ new #[Layout('layouts.admin')] class extends Component
 
     public int $perPage = 15;
 
+    /** @var string URL для кнопки "Назад" */
+    public string $backUrl = '';
+
     public function mount(): void
     {
         abort_unless(auth()->user()?->role === 'admin', 403);
+
+        // ФИКС: Запоминаем URL "Назад"
+        $previousUrl = url()->previous();
+        $this->backUrl = ($previousUrl && $previousUrl !== url()->current()) 
+            ? $previousUrl 
+            : route('admin.dashboard');
     }
 
     public function updatedSearch(): void { $this->resetPage(); }
-    public function updatedDateFilter(): void { $this->resetPage(); }
-    public function updatedAdminFilter(): void { $this->resetPage(); }
+
+    public function updatedDateFilter(): void { 
+        $this->search = ''; 
+        $this->resetPage(); 
+    }
+
+    public function updatedAdminFilter(): void { 
+        $this->search = ''; 
+        $this->resetPage(); 
+    }
 
     public function setCategoryFilter(string $category): void
     {
         $this->categoryFilter = $category;
-        $this->actionFilter = 'all'; // Сбрасываем действие при смене категории
-        $this->resetPage();
-    }
-
-    public function setActionFilter(string $action): void
-    {
-        $this->actionFilter = $action;
+        $this->search = ''; 
         $this->resetPage();
     }
 
@@ -61,19 +68,30 @@ new #[Layout('layouts.admin')] class extends Component
         $this->resetPage();
     }
 
-       public function getObjectUrl(AdminLog $log): ?string
+    // ФИКС: Метод, который жестко сбрасывает кэш, чтобы новые записи сразу попали в фильтры
+    public function refreshData(): void
     {
-        // 1. Если объекта нет в БД (удален) — сразу возвращаем null (ссылки не будет)
-        if (!$log->loggable) {
-            return null;
-        }
+        Cache::forget('admin_audit_category_stats');
+        Cache::forget('admin_audit_admins_list');
+        Cache::forget('admin_audit_total_entries');
+        
+        unset($this->logs);
+        unset($this->categoryStats);
+        unset($this->admins);
+        unset($this->totalEntries);
+        
+        $this->dispatch('show-toast', type: 'success', message: 'Данные журнала синхронизированы!');
+    }
 
+    public function getObjectUrl(AdminLog $log): ?string
+    {
         $modelClass = $log->loggable_type;
         $id = $log->loggable_id;
 
-        // ФИКС: Особая логика для Чатов, так как у них разные страницы просмотра в зависимости от типа
+        if (!$modelClass || !$id) return null;
+
         if ($modelClass === \App\Models\Chat::class) {
-            $chatType = $log->loggable->type ?? 'private';
+            $chatType = $log->loggable?->type ?? 'private';
             $routeName = $chatType === 'support' 
                 ? 'admin.communication.support' 
                 : 'admin.communication.chats';
@@ -81,16 +99,14 @@ new #[Layout('layouts.admin')] class extends Component
             return Route::has($routeName) ? route($routeName, ['q' => $id]) : null;
         }
 
-        // 2. Карта роутов для остальных моделей
         $routeMap = [
-            // --- Прямые ссылки на редактирование/просмотр (Route Model Binding) ---
             \App\Models\User::class           => ['admin.users.show', null],
             \App\Models\Page::class           => ['admin.system.pages.edit', null],
             \App\Models\Broadcast::class      => ['admin.system.broadcasts.edit', null],
             \App\Models\Diary::class          => ['admin.moderation.diary.moderate', null],
             \App\Models\BlogPost::class       => ['admin.system.blog.index', 'q'],
+            \App\Models\Media::class          => ['admin.media.index', 'q'],
 
-            // --- Ссылки на списки с автопоиском по ID (?q=ID) ---
             \App\Models\Photo::class          => ['admin.moderation.photos', 'q'],
             \App\Models\PhotoComment::class   => ['admin.moderation.photo-comments', 'q'],
             \App\Models\DiaryComment::class   => ['admin.moderation.diary.comments', 'q'],
@@ -102,9 +118,8 @@ new #[Layout('layouts.admin')] class extends Component
             \App\Models\Transaction::class    => ['admin.finances.transactions', 'q'],
             \App\Models\UserSubscription::class => ['admin.finances.subscriptions', 'q'],
             
-            // --- Специфичные GET-параметры ---
-            \App\Models\UserGift::class       => ['admin.finances.gifts', 'history_search'], // История дарений
-            \App\Models\Gift::class           => ['admin.finances.gifts', 'catalog_search'], // Каталог подарков
+            \App\Models\UserGift::class       => ['admin.finances.gifts', 'history_search'],
+            \App\Models\Gift::class           => ['admin.finances.gifts', 'catalog_search'],
         ];
 
         if (!isset($routeMap[$modelClass])) {
@@ -133,15 +148,11 @@ new #[Layout('layouts.admin')] class extends Component
 
         $query = AdminLog::with([
             'admin' => fn($q) => $q->with(['photos' => $avatarQuery]),
-            'loggable'
+            'loggable' => fn($q) => $q->withTrashed() 
         ])->latest();
 
         if ($this->categoryFilter !== 'all') {
             $query->where('action', 'like', $this->categoryFilter . '.%');
-        }
-
-        if ($this->actionFilter !== 'all') {
-            $query->where('action', $this->actionFilter);
         }
 
         if (!empty($this->adminFilter)) {
@@ -160,39 +171,13 @@ new #[Layout('layouts.admin')] class extends Component
                   ->orWhere('loggable_type', 'like', "%{$search}%");
                   
                 if (is_numeric($search)) {
+                    $q->orWhere('id', $search);
                     $q->orWhere('loggable_id', $search);
                 }
             });
         }
 
-        $logs = $query->paginate($this->perPage)->withQueryString();
-
-        $logs->loadMorph('loggable', [
-            \App\Models\User::class => ['photos' => $avatarQuery], 
-            \App\Models\Photo::class => [
-                'album', 
-                'user' => fn($q) => $q->with(['photos' => $avatarQuery])
-            ], 
-            \App\Models\PhotoComment::class => [
-                'user' => fn($q) => $q->with(['photos' => $avatarQuery])
-            ],
-            \App\Models\Report::class => [
-                'reporter' => fn($q) => $q->with(['photos' => $avatarQuery]),
-                'reported' => fn($q) => $q->with(['photos' => $avatarQuery]),
-            ],
-            \App\Models\Swipe::class => [
-                'user' => fn($q) => $q->with(['photos' => $avatarQuery]),
-                'targetUser' => fn($q) => $q->with(['photos' => $avatarQuery]),
-            ],
-            \App\Models\UserMatch::class => [
-                'user1' => fn($q) => $q->with(['photos' => $avatarQuery]),
-                'user2' => fn($q) => $q->with(['photos' => $avatarQuery]),
-            ],
-            \App\Models\Page::class => [],
-            \App\Models\Broadcast::class => [],
-        ]);
-
-        return $logs;
+        return $query->paginate($this->perPage)->withQueryString();
     }
 
     #[Computed]
@@ -206,6 +191,7 @@ new #[Layout('layouts.admin')] class extends Component
 
             $stats = AdminLog::selectRaw("{$expression} as category, COUNT(*) as count")
                 ->groupBy('category')
+                ->orderBy('category')
                 ->pluck('count', 'category')
                 ->toArray();
 
@@ -213,20 +199,6 @@ new #[Layout('layouts.admin')] class extends Component
             
             return $stats;
         });
-    }
-
-    #[Computed]
-    public function actions(): \Illuminate\Support\Collection
-    {
-        $query = AdminLog::selectRaw('action, COUNT(*) as count')
-            ->groupBy('action')
-            ->orderBy('action');
-
-        if ($this->categoryFilter !== 'all') {
-            $query->where('action', 'like', $this->categoryFilter . '.%');
-        }
-
-        return $query->pluck('count', 'action');
     }
 
     #[Computed]
@@ -252,24 +224,30 @@ new #[Layout('layouts.admin')] class extends Component
 ?>
 
 <div class="space-y-6 pb-6">
-    <!-- Header -->
+        <!-- Header -->
     <div class="flex items-center justify-between flex-wrap gap-4">
-        <div>
-            <h1 class="text-2xl font-semibold flex items-center gap-2">
-                <x-lucide-shield-check class="w-6 h-6" />
-                Журнал админов
-            </h1>
-            <p class="text-sm text-muted-foreground">
-                Всего записей: {{ $this->totalEntries }}
-            </p>
+        <div class="flex items-center gap-4">
+            <a href="{{ $backUrl }}" wire:navigate class="p-2 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors">
+                <x-lucide-arrow-left class="w-5 h-5" />
+            </a>
+            <div>
+                <h1 class="text-2xl font-semibold flex items-center gap-2">
+                    <x-lucide-shield-check class="w-6 h-6" />
+                    Журнал админов
+                </h1>
+                <p class="text-sm text-muted-foreground">
+                    Всего записей: {{ $this->totalEntries }}
+                </p>
+            </div>
         </div>
 
         <div class="flex items-center gap-2">
-            <x-ui.button wire:click="$refresh" variant="outline" size="sm">
-                <span wire:loading.remove.delay wire:target="$refresh">
+            <!-- ФИКС: Кнопка обновления сбрасывает кэш -->
+            <x-ui.button wire:click="refreshData" variant="outline" size="sm">
+                <span wire:loading.remove.delay wire:target="refreshData">
                     <x-lucide-refresh-ccw class="w-4 h-4" />
                 </span>
-                <span wire:loading wire:target="$refresh">
+                <span wire:loading wire:target="refreshData">
                     <x-lucide-loader-2 class="w-4 h-4 animate-spin" />
                 </span>
             </x-ui.button>
@@ -279,72 +257,54 @@ new #[Layout('layouts.admin')] class extends Component
     <!-- Filters Panel -->
     <div class="bg-card border border-border rounded-lg p-4 space-y-4">
         
-        <!-- УРОВЕНЬ 1: Категории (Модули) -->
-        <div class="flex flex-wrap items-center gap-2 border-b border-border pb-4">
-            <x-ui.button wire:click="setCategoryFilter('all')" variant="{{ $categoryFilter === 'all' ? 'default' : 'outline' }}" size="sm" class="flex items-center gap-1.5">
-                <x-lucide-layers class="w-4 h-4" /> Все модули <x-ui.badge size="xs">{{ $this->categoryStats['all'] ?? 0 }}</x-ui.badge>
+        <!-- УРОВЕНЬ 1: Категории (Модули) - Динамический вывод -->
+        <div class="flex flex-wrap items-center gap-2 pb-4 border-b border-border">
+            <x-ui.button wire:key="cat-filter-all" wire:click="setCategoryFilter('all')" variant="{{ $categoryFilter === 'all' ? 'default' : 'outline' }}" size="sm" class="flex items-center gap-1.5">
+                <x-lucide-layers class="w-4 h-4" /> Все <x-ui.badge size="xs">{{ $this->categoryStats['all'] ?? 0 }}</x-ui.badge>
             </x-ui.button>
             
-            <x-ui.button wire:click="setCategoryFilter('user')" variant="{{ $categoryFilter === 'user' ? 'default' : 'outline' }}" size="sm" class="flex items-center gap-1.5">
-                <x-lucide-users class="w-4 h-4" /> Пользователи <x-ui.badge variant="outline" size="xs">{{ $this->categoryStats['user'] ?? 0 }}</x-ui.badge>
-            </x-ui.button>
-
-             <x-ui.button wire:click="setCategoryFilter('page')" variant="{{ $categoryFilter === 'page' ? 'default' : 'outline' }}" size="sm" class="flex items-center gap-1.5">
-                <x-lucide-file-text class="w-4 h-4" /> Страницы <x-ui.badge variant="outline" size="xs">{{ $this->categoryStats['page'] ?? 0 }}</x-ui.badge>
-            </x-ui.button>
-
-            <x-ui.button wire:click="setCategoryFilter('photo')" variant="{{ $categoryFilter === 'photo' ? 'default' : 'outline' }}" size="sm" class="flex items-center gap-1.5">
-                <x-lucide-image class="w-4 h-4" /> Фотографии <x-ui.badge variant="outline" size="xs">{{ $this->categoryStats['photo'] ?? 0 }}</x-ui.badge>
-            </x-ui.button>
-
-            <x-ui.button wire:click="setCategoryFilter('comment')" variant="{{ $categoryFilter === 'comment' ? 'default' : 'outline' }}" size="sm" class="flex items-center gap-1.5">
-                <x-lucide-message-square class="w-4 h-4" /> Комментарии <x-ui.badge variant="outline" size="xs">{{ $this->categoryStats['comment'] ?? 0 }}</x-ui.badge>
-            </x-ui.button>
-
-            <x-ui.button wire:click="setCategoryFilter('dating')" variant="{{ $categoryFilter === 'dating' ? 'default' : 'outline' }}" size="sm" class="flex items-center gap-1.5">
-                <x-lucide-heart class="w-4 h-4" /> Анкеты <x-ui.badge variant="outline" size="xs">{{ $this->categoryStats['dating'] ?? 0 }}</x-ui.badge>
-            </x-ui.button>
-
-            <x-ui.button wire:click="setCategoryFilter('report')" variant="{{ $categoryFilter === 'report' ? 'default' : 'outline' }}" size="sm" class="flex items-center gap-1.5">
-                <x-lucide-flag class="w-4 h-4" /> Жалобы <x-ui.badge variant="outline" size="xs">{{ $this->categoryStats['report'] ?? 0 }}</x-ui.badge>
-            </x-ui.button>
-           
-            <x-ui.button wire:click="setCategoryFilter('transaction')" variant="{{ $categoryFilter === 'transaction' ? 'default' : 'outline' }}" size="sm" class="flex items-center gap-1.5">
-                <x-lucide-wallet class="w-4 h-4" /> Финансы <x-ui.badge variant="outline" size="xs">{{ $this->categoryStats['transaction'] ?? 0 }}</x-ui.badge>
-            </x-ui.button>
-
-            <x-ui.button wire:click="setCategoryFilter('setting')" variant="{{ $categoryFilter === 'setting' ? 'default' : 'outline' }}" size="sm" class="flex items-center gap-1.5">
-                <x-lucide-settings class="w-4 h-4" /> Система <x-ui.badge variant="outline" size="xs">{{ $this->categoryStats['setting'] ?? 0 }}</x-ui.badge>
-            </x-ui.button>
-        </div>
-
-        <!-- УРОВЕНЬ 2: Действия -->
-        @if($this->actions->isNotEmpty())
-            <div class="flex flex-wrap items-center gap-2">
-                <x-ui.button wire:click="setActionFilter('all')" variant="{{ $actionFilter === 'all' ? 'default' : 'secondary' }}" size="sm" class="flex items-center gap-1.5">
-                    Все действия
-                </x-ui.button>
-                
-                @foreach($this->actions as $action => $count)
+            @foreach($this->categoryStats as $cat => $count)
+                @if($cat !== 'all')
                     @php
-                        $actionColor = match(true) {
-                            str_contains($action, 'ban') || str_contains($action, 'delete') || str_contains($action, 'reject') => 'text-red-500',
-                            str_contains($action, 'approve') || str_contains($action, 'unban') || str_contains($action, 'activate') => 'text-green-500',
-                            str_contains($action, 'update') || str_contains($action, 'edit') => 'text-blue-500',
-                            str_contains($action, 'refund') || str_contains($action, 'warning') => 'text-yellow-500',
-                            default => 'text-muted-foreground',
+                        $icon = match($cat) {
+                            'user' => 'users',
+                            'profile' => 'id-card',
+                            'page' => 'file-text',
+                            'blog' => 'newspaper',
+                            'blog_category' => 'folder-tree',
+                            'photo' => 'image',
+                            'comment' => 'message-square',
+                            'diary' => 'book-open',
+                            'diary_comment' => 'message-square-dashed',
+                            'diary_rubric' => 'folder',
+                            'swipe' => 'mouse-pointer-click',
+                            'match' => 'heart-handshake',
+                            'report' => 'flag',
+                            'transaction' => 'wallet',
+                            'user_gift' => 'gift',
+                            'gift' => 'gift',
+                            'plan' => 'credit-card',
+                            'chat' => 'message-circle',
+                            'support' => 'life-buoy',
+                            'support_template' => 'clipboard-list',
+                            'stop_words' => 'shield-ban',
+                            'fraud_alert' => 'shield-alert',
+                            'broadcast' => 'radio',
+                            'user_block' => 'ban',
+                            'geo' => 'globe',
+                            'settings' => 'settings',
+                            default => 'circle'
                         };
                     @endphp
-                    <x-ui.button wire:click="setActionFilter('{{ $action }}')" variant="{{ $actionFilter === $action ? 'default' : 'secondary' }}" size="sm" class="flex items-center gap-1.5">
-                        <span class="{{ $actionColor }}"><x-lucide-git-branch class="w-3.5 h-3.5" /></span>
-                        {{ $action }} <x-ui.badge variant="outline" size="xs">{{ $count }}</x-ui.badge>
+                    <x-ui.button wire:key="cat-filter-{{ $cat }}" wire:click="setCategoryFilter('{{ $cat }}')" variant="{{ $categoryFilter === $cat ? 'default' : 'outline' }}" size="sm" class="flex items-center gap-1.5">
+                        <x-dynamic-component component="lucide-{{ $icon }}" class="w-4 h-4" /> {{ ucfirst($cat) }} <x-ui.badge variant="outline" size="xs">{{ $count }}</x-ui.badge>
                     </x-ui.button>
-                @endforeach
-            </div>
-        @endif
+                @endif
+            @endforeach
+        </div>
 
-        <!-- УРОВЕНЬ 3: Точечные фильтры и поиск -->
-        <div class="flex flex-wrap items-center gap-2 pt-4 border-t border-border">
+        <!-- УРОВЕНЬ 2: Точечные фильтры и поиск -->
+        <div class="flex flex-wrap items-center gap-2">
             <x-ui.select wire:model.live="adminFilter">
                 <x-ui.select-trigger class="w-[160px] h-9">
                     <x-ui.select-value placeholder="Все админы" />
@@ -363,7 +323,7 @@ new #[Layout('layouts.admin')] class extends Component
 
             <div class="flex items-center gap-2 w-full sm:w-auto sm:ml-auto">
                 <div class="relative w-full sm:w-64">
-                    <x-ui.input wire:model.live.debounce.300ms="search" type="search" placeholder="Поиск (IP, action, ID)..." class="pl-9 pr-8" />
+                    <x-ui.input wire:model.live.debounce.300ms="search" type="search" placeholder="Поиск (ID, IP, action)..." class="pl-9 pr-8" />
                     <x-lucide-search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                     @if(!empty($search))
                         <button wire:click="$set('search', '')" class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
@@ -372,7 +332,6 @@ new #[Layout('layouts.admin')] class extends Component
                     @endif
                 </div>
                 
-                <!-- Кнопка сброса ТОЛЬКО для поиска и даты -->
                 @if(!empty($search) || !empty($dateFilter))
                     <x-ui.button wire:click="clearSearchFilters" variant="destructive" size="sm" class="shrink-0">
                         <x-lucide-filter-x class="w-4 h-4" /> Сбросить
@@ -382,10 +341,11 @@ new #[Layout('layouts.admin')] class extends Component
         </div>
     </div>
 
-    <!-- Table -->
+       <!-- Table -->
     <x-ui.table>
         <x-ui.table-header>
             <x-ui.table-row>
+                <x-ui.table-head class="w-16">ID</x-ui.table-head>
                 <x-ui.table-head class="w-32">Время и дата</x-ui.table-head>
                 <x-ui.table-head class="w-56">Админ</x-ui.table-head>
                 <x-ui.table-head class="w-48">Действие</x-ui.table-head>
@@ -397,7 +357,18 @@ new #[Layout('layouts.admin')] class extends Component
 
         <x-ui.table-body>
             @forelse ($this->logs as $log)
-                <x-ui.table-row wire:key="log-{{ $log->id }}">
+                @php $isHighlighted = is_numeric($this->search) && $log->id === (int)$this->search; @endphp
+                <x-ui.table-row 
+                    wire:key="log-{{ $log->id }}" 
+                    class="{{ $isHighlighted ? 'bg-blue-500/10 ring-2 ring-blue-500/50' : '' }}"
+                    x-data="{ isHi: {{ $isHighlighted ? 'true' : 'false' }} }"
+                    x-init="isHi && setTimeout(() => { $el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 200)"
+                >
+                    <!-- ID -->
+                    <x-ui.table-cell class="text-xs font-mono text-muted-foreground whitespace-nowrap align-top {{ $isHighlighted ? 'text-blue-500 font-bold' : '' }}">
+                        <span class="pt-1 block">#{{ $log->id }}</span>
+                    </x-ui.table-cell>
+
                     <!-- Время -->
                     <x-ui.table-cell class="text-xs text-muted-foreground whitespace-nowrap align-top">
                         <div class="flex flex-col pt-1">
@@ -437,18 +408,15 @@ new #[Layout('layouts.admin')] class extends Component
                         <span class="px-2 py-0.5 rounded text-xs font-medium {{ $badgeColor }}">{{ $log->action }}</span>
                     </x-ui.table-cell>
 
-                  <!-- Объект (Умный вывод) -->
+                    <!-- Объект (Умный вывод) -->
                     <x-ui.table-cell class="text-sm align-top">
                         @php
                             $type = $log->loggable_type ? class_basename($log->loggable_type) : 'Система';
                             $id = $log->loggable_id;
-                            $url = $this->getObjectUrl($log);
                             
-                            // Проверяем, является ли это системным действием (без привязки к конкретному ID)
                             $isSystemAction = in_array($log->loggable_type, ['settings', null]) || !$id;
-                            
-                            // Объект считается удаленным, только если он должен был быть, но его нет
-                            $isDeleted = !$log->loggable && $log->loggable_type && !$isSystemAction;
+                            $isDeleted = !$isSystemAction && is_null($log->loggable);
+                            $url = $isDeleted ? null : $this->getObjectUrl($log);
                         @endphp
 
                         <div class="flex flex-col gap-0.5 pt-1">
@@ -456,6 +424,11 @@ new #[Layout('layouts.admin')] class extends Component
                                 <span class="text-sm font-medium text-muted-foreground">
                                     Системные настройки
                                 </span>
+                            @elseif ($isDeleted)
+                                <span class="text-sm font-medium text-muted-foreground line-through">
+                                    {{ $type }} #{{ $id }}
+                                </span>
+                                <span class="text-[10px] text-destructive/80">объект удален</span>
                             @elseif ($url)
                                 <a href="{{ $url }}" wire:navigate class="text-sm font-medium text-primary hover:underline transition-colors">
                                     {{ $type }} #{{ $id }}
@@ -464,10 +437,6 @@ new #[Layout('layouts.admin')] class extends Component
                                 <span class="text-sm font-medium text-muted-foreground">
                                     {{ $type }} #{{ $id }}
                                 </span>
-                            @endif
-                            
-                            @if ($isDeleted)
-                                <span class="text-[10px] text-destructive/80">объект удален</span>
                             @endif
                         </div>
                     </x-ui.table-cell>
@@ -516,7 +485,7 @@ new #[Layout('layouts.admin')] class extends Component
                 </x-ui.table-row>
             @empty
                 <x-ui.table-row>
-                    <x-ui.table-cell colspan="6" class="py-12 text-center text-muted-foreground">
+                    <x-ui.table-cell colspan="7" class="py-12 text-center text-muted-foreground">
                         <div class="flex flex-col items-center gap-2">
                             <x-lucide-shield-question class="w-12 h-12 opacity-30" />
                             <p>Логи не найдены</p>
@@ -539,9 +508,6 @@ new #[Layout('layouts.admin')] class extends Component
             Показано {{ $this->logs->count() }} из {{ $this->logs->total() }} записей
             @if(!empty($search))
                 <span class="ml-2">(фильтр: "{{ $search }}")</span>
-            @endif
-            @if($actionFilter !== 'all')
-                <span class="ml-2">(действие: {{ $actionFilter }})</span>
             @endif
         </div>
     </div>

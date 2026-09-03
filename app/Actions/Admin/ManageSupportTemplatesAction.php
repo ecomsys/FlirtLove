@@ -25,7 +25,7 @@ class ManageSupportTemplatesAction
             ]
         ];
 
-        AdminLog::record('template.create', $template, $admin, null, $after);
+        AdminLog::record('support_template.create', $template, $admin, null, $after);
         
         return $template;
     }
@@ -57,7 +57,7 @@ class ManageSupportTemplatesAction
             ]
         ];
 
-        AdminLog::record('template.update', $template, $admin, $before, $after);
+        AdminLog::record('support_template.update', $template, $admin, $before, $after);
 
         return $template;
     }
@@ -81,7 +81,7 @@ class ManageSupportTemplatesAction
             ]
         ];
 
-        AdminLog::record('template.delete', $template, $admin, null, $after);
+        AdminLog::record('support_template.delete', $template, $admin, null, $after);
         $template->delete();
     }
 }

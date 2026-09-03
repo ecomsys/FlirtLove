@@ -7,6 +7,7 @@ use App\Models\Diary;
 use App\Models\User;
 use App\Notifications\DiaryModerated;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Cache;
 
 class ModerateDiaryAction
 {
@@ -38,6 +39,7 @@ class ModerateDiaryAction
         ];
 
         AdminLog::record('diary.approve', $diary, $admin, $before, $after, participants: [$diary->user_id]);
+        Cache::forget('admin_sidebar_stats');
 
         if ($oldStatus !== 'published' && $diary->user) {
             $diary->user->notify(new DiaryModerated($diary, 'approved'));
@@ -72,6 +74,7 @@ class ModerateDiaryAction
         ];
 
         AdminLog::record('diary.reject', $diary, $admin, $before, $after, participants: [$diary->user_id]);
+        Cache::forget('admin_sidebar_stats');
 
         if ($oldStatus !== 'rejected' && $diary->user) {
             $diary->user->notify(new DiaryModerated($diary, 'rejected', $reason));
@@ -101,6 +104,7 @@ class ModerateDiaryAction
         ];
 
         AdminLog::record('diary.unpublish', $diary, $admin, $before, $after, participants: [$diary->user_id]);
+        Cache::forget('admin_sidebar_stats');
 
         if ($oldStatus === 'published' && $diary->user) {
             $diary->user->notify(new DiaryModerated($diary, 'unpublished'));
@@ -157,6 +161,7 @@ class ModerateDiaryAction
         ];
         
         AdminLog::record('diary.restore', $diary, $admin, $before, $after, participants: [$diary->user_id]);
+        Cache::forget('admin_sidebar_stats');
     }
 
     public function forceDelete(Diary $diary, User $admin): void

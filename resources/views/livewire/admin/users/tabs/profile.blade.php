@@ -34,6 +34,12 @@ new class extends Component
      */
     public function clearProfileField(string $field, ManageUserProfileAction $action): void
     {
+        // ЗАЩИТА: Только модератор и админ могут очищать тексты
+        if (!in_array(auth()->user()->role, ['admin', 'moderator'])) {
+            $this->dispatch('show-toast', type: 'error', message: 'У вас нет прав для этого действия.');
+            return;
+        }
+
         // Делегируем всю логику в Action
         $success = $action->clearField($this->user, $field, auth()->user());
 
@@ -112,7 +118,7 @@ new class extends Component
     {{-- ЛЕВАЯ КОЛОНКА --}}
     <div class="space-y-4">
 
-           {{-- Тексты анкеты (С кнопками очистки) --}}
+            {{-- Тексты анкеты (С кнопками очистки) --}}
             <div class="p-4 bg-muted/20 rounded-lg border border-border space-y-1">
                 <p class="text-xs text-muted-foreground uppercase font-semibold flex items-center gap-1.5">
                     <x-lucide-message-square class="w-3.5 h-3.5" /> Тексты анкеты
@@ -123,7 +129,8 @@ new class extends Component
                 <div class="py-3">
                     <div class="flex justify-between items-center mb-1">
                         <span class="text-xs font-medium text-muted-foreground uppercase">Заголовок</span>
-                        @if($this->user->profile?->headline)
+                        {{-- ДОБАВЛЕНА ПРОВЕРКА РОЛИ: in_array(auth()->user()->role, ['admin', 'moderator']) --}}
+                        @if($this->user->profile?->headline && in_array(auth()->user()->role, ['admin', 'moderator']))
                             <x-ui.button wire:click="clearProfileField('headline')" wire:confirm="Очистить заголовок? Юзеру уйдет уведомление." variant="ghost" size="xs" class="text-red-500 hover:text-red-400 gap-1 h-6 px-2">
                                 <x-lucide-trash-2 class="w-3 h-3" /> Удалить
                             </x-ui.button>
@@ -138,7 +145,8 @@ new class extends Component
                 <div class="py-3">
                     <div class="flex justify-between items-center mb-1">
                         <span class="text-xs font-medium text-muted-foreground uppercase">О себе</span>
-                        @if($this->user->profile?->bio)
+                        {{-- ДОБАВЛЕНА ПРОВЕРКА РОЛИ --}}
+                        @if($this->user->profile?->bio && in_array(auth()->user()->role, ['admin', 'moderator']))
                             <x-ui.button wire:click="clearProfileField('bio')" wire:confirm="Очистить поле 'О себе'? Юзеру уйдет уведомление." variant="ghost" size="xs" class="text-red-500 hover:text-red-400 gap-1 h-6 px-2">
                                 <x-lucide-trash-2 class="w-3 h-3" /> Удалить
                             </x-ui.button>
@@ -153,7 +161,8 @@ new class extends Component
                 <div class="py-3">
                     <div class="flex justify-between items-center mb-1">
                         <span class="text-xs font-medium text-muted-foreground uppercase">Кого я ищу</span>
-                        @if($this->user->profile?->looking_for)
+                        {{-- ДОБАВЛЕНА ПРОВЕРКА РОЛИ --}}
+                        @if($this->user->profile?->looking_for && in_array(auth()->user()->role, ['admin', 'moderator']))
                             <x-ui.button wire:click="clearProfileField('looking_for')" wire:confirm="Очистить поле 'Кого я ищу'? Юзеру уйдет уведомление." variant="ghost" size="xs" class="text-red-500 hover:text-red-400 gap-1 h-6 px-2">
                                 <x-lucide-trash-2 class="w-3 h-3" /> Удалить
                             </x-ui.button>

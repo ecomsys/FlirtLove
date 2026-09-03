@@ -3,7 +3,7 @@
 namespace Database\Seeders;
 
 use App\Models\Diary;
-use App\Models\Rubric;
+use App\Models\DiaryRubric;
 use App\Models\User;
 use Illuminate\Database\Seeder;
 
@@ -14,7 +14,7 @@ class DiarySeeder extends Seeder
         $this->command->info('📖 Генерируем посты для дневников...');
 
         $users = User::where('role', 'user')->get();
-        $rubrics = Rubric::where('is_active', true)->get();
+        $rubrics = DiaryRubric::where('is_active', true)->get();
 
         if ($users->isEmpty() || $rubrics->isEmpty()) {
             $this->command->warn('⚠️ Нет пользователей или рубрик для создания постов!');
@@ -49,7 +49,7 @@ class DiarySeeder extends Seeder
 
             Diary::create([
                 'user_id' => $user->id,
-                'rubric_id' => $rubric->id,
+                'diary_rubric_id' => $rubric->id,
                 'title' => $titleTemplates[array_rand($titleTemplates)],
                 'body' => fake()->realTextBetween(300, 1500), // Генерим длинный текст
                 'status' => $isPublished ? 'published' : 'draft',

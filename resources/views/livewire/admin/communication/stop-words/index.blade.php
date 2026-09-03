@@ -93,7 +93,7 @@ new #[Layout('layouts.admin')] class extends Component
         if (empty($this->selected) || empty($this->bulkAction)) return;
 
         try {
-            $action->applyBulk($this->selected, $this->bulkAction);
+            $action->applyBulk($this->selected, $this->bulkAction, auth()->user());
             $this->dispatch('show-toast', type: 'success', message: 'Массовое действие применено');
         } catch (\Exception $e) {
             $this->dispatch('show-toast', type: 'error', message: 'Ошибка сервера!');
@@ -137,13 +137,13 @@ new #[Layout('layouts.admin')] class extends Component
 
     public function toggleActive(int $id, StopWordsAction $action): void
     {
-        $action->toggleActive($id);
+        $action->toggleActive($id, auth()->user());
         $this->dispatch('show-toast', type: 'success', message: 'Статус изменен');
     }
 
     public function deleteWord(int $id, StopWordsAction $action): void
     {
-        $action->deleteWord($id);
+        $action->deleteWord($id, auth()->user());
         $this->dispatch('show-toast', type: 'success', message: 'Слово удалено');
     }
 
@@ -165,7 +165,8 @@ new #[Layout('layouts.admin')] class extends Component
         $createdCount = $action->createBulk(
             $this->bulkWords, 
             StopWordCategory::from($this->modalCategory), 
-            StopWordAction::from($this->modalAction)
+            StopWordAction::from($this->modalAction),
+            auth()->user()
         );
         
         $this->showAddModal = false;

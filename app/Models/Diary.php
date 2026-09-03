@@ -12,7 +12,7 @@ class Diary extends Model
 
     protected $fillable = [
         'user_id',
-        'rubric_id',
+        'diary_rubric_id',
         'title',
         'body',
         'status',
@@ -39,9 +39,9 @@ class Diary extends Model
         return $this->belongsTo(User::class);
     }
 
-    public function rubric()
+    public function diaryRubric()
     {
-        return $this->belongsTo(Rubric::class);
+        return $this->belongsTo(DiaryRubric::class);
     }
 
         // Все комментарии поста

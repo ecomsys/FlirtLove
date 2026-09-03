@@ -124,7 +124,7 @@ class AdminLogSeeder extends Seeder
         // ============================================
         $logs[] = [
             'admin_id' => $admin->id,
-            'action' => 'setting.update',
+            'action' => 'settings.update',
             'loggable_type' => null, // Настройки не полиморфны к конкретной записи, либо можно сделать morph к Setting
             'loggable_id' => null,
             'before' => ['key' => 'likes_per_day_free', 'value' => 20],

@@ -2,14 +2,14 @@
 
 namespace Database\Seeders;
 
-use App\Models\Rubric;
+use App\Models\DiaryRubric;
 use App\Models\User;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Str;
 
-// php artisan db:seed --class=Database\Seeders\RubricsUsersSeeder
+// php artisan db:seed --class=Database\Seeders\DiaryRubricsUsersSeeder
 
-class RubricsUsersSeeder extends Seeder
+class DiaryRubricsUsersSeeder extends Seeder
 {
     /**
      * Заполнение базы личными рубриками юзеров.
@@ -45,7 +45,7 @@ class RubricsUsersSeeder extends Seeder
                 // Добавляем ID юзера и случайную строку к слагу для 100% уникальности
                 $slug = Str::slug($name) . '-' . $user->id . '-' . Str::random(4);
 
-                Rubric::create([
+                DiaryRubric::create([
                     'user_id' => $user->id,
                     'name' => $name,
                     'slug' => $slug,

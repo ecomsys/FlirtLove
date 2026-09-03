@@ -51,6 +51,8 @@ class ModeratePhotoAction
         ];
         
         AdminLog::record('photo.approve', $photo, $admin, $before, $after, participants: [$photo->user_id]);
+        Cache::forget('admin_sidebar_stats');
+        
 
         return $photo;
     }
@@ -98,6 +100,8 @@ class ModeratePhotoAction
         ];
         
         AdminLog::record('photo.reject', $photo, $admin, $before, $after, participants: [$photo->user_id]);
+        Cache::forget('admin_sidebar_stats');
+        
     }
 
     /**
@@ -192,6 +196,8 @@ class ModeratePhotoAction
         ];
 
         AdminLog::record('photo.restore', $photo, $admin, $before, $after, participants: [$photo->user_id]);
+        Cache::forget('admin_sidebar_stats');
+        
     }
    
     /**
@@ -267,6 +273,8 @@ class ModeratePhotoAction
         ];
         
         AdminLog::record('photo.mass_approve', $user, $admin, $before, $after, participants: [$user->id]);
+        Cache::forget('admin_sidebar_stats');
+        
 
         return $count;
     }
@@ -302,6 +310,8 @@ class ModeratePhotoAction
         ];
         
         AdminLog::record('photo.mass_reject', $user, $admin, $before, $after, participants: [$user->id]);
+        Cache::forget('admin_sidebar_stats');
+        
 
         return $count;
     }

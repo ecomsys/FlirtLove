@@ -8,7 +8,7 @@ return new class extends Migration
 {
     public function up(): void
     {
-        Schema::create('rubrics', function (Blueprint $table) {
+        Schema::create('diary_rubrics', function (Blueprint $table) {
             $table->id();
 
             //  Кто создал рубрику. Если null — рубрика системная (от админа)
@@ -38,6 +38,6 @@ return new class extends Migration
 
     public function down(): void
     {
-        Schema::dropIfExists('rubrics');
+        Schema::dropIfExists('diary_rubrics');
     }
 };
