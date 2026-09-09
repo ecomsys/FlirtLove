@@ -4,6 +4,8 @@ use App\Actions\Admin\FraudAlertsAction;
 use App\Enums\FraudAlertSeverity;
 use App\Enums\FraudAlertStatus;
 use App\Models\FraudAlert;
+use App\Models\User;
+use Illuminate\Support\Facades\Cache;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Session;
@@ -15,34 +17,31 @@ new #[Layout('layouts.admin')] class extends Component
 {
     use WithPagination;
 
-       /** @var string Поиск по имени, email или ID алерта */
     #[Url(as: 'q', except: '')]
     public string $search = '';
 
-    /** @var string Фильтр статуса */
     #[Url(as: 'status', except: 'open')]
     public string $statusFilter = 'open';
 
-    /** @var string Фильтр опасности */
     #[Url(as: 'severity', except: 'all')]
     public string $severityFilter = 'all';
 
     public int $perPage = 20;
     public int $filterVersion = 0;
 
-    /** @var string URL для кнопки "Назад" */
     public string $backUrl = '';
 
     public function mount(): void
     {
-        // ФИКС: Запоминаем URL "Назад" только при первой загрузке
+        abort_unless(in_array(auth()->user()?->role, [User::ROLE_ADMIN, User::ROLE_MODERATOR]), 403);
+
         $previousUrl = url()->previous();
         $this->backUrl = ($previousUrl && $previousUrl !== url()->current()) 
             ? $previousUrl 
             : route('admin.dashboard');
 
-        // Умный поиск: если ищут по ID алерта, автоматически переключаем фильтр на его реальный статус
-        if (!empty($this->search) && is_numeric($this->search)) {
+        // ФИКС: ctype_digit для строгой проверки целого числа
+        if (!empty($this->search) && ctype_digit($this->search)) {
             $alert = FraudAlert::find((int) $this->search);
             if ($alert) {
                 $this->statusFilter = $alert->status->value;
@@ -53,9 +52,10 @@ new #[Layout('layouts.admin')] class extends Component
     public function updatedSearch(): void 
     { 
         $this->resetPage(); 
+        $this->clearComputedCache();
 
-        // ФИКС: Умная подсветка вкладки при ручном вводе ID
-        if (is_numeric($this->search) && !empty($this->search)) {
+        // ФИКС: ctype_digit
+        if (ctype_digit($this->search) && !empty($this->search)) {
             $alert = FraudAlert::find((int) $this->search);
             if ($alert) {
                 $this->statusFilter = $alert->status->value;
@@ -63,22 +63,24 @@ new #[Layout('layouts.admin')] class extends Component
         }
     }
 
-    /**
-     * Очистка строки поиска.
-     */
     public function clearSearch(): void
     {
         $this->search = '';
         $this->resetPage();
+        $this->clearComputedCache();
     }
 
-    public function updatedSeverityFilter(): void { $this->resetPage(); }
+    public function updatedSeverityFilter(): void { 
+        $this->resetPage(); 
+        $this->clearComputedCache(); 
+    }
 
     public function setStatusFilter(string $status): void 
     { 
         $this->statusFilter = $status; 
-        $this->search = ''; // Очищаем поиск при переключении вкладок
+        $this->search = ''; 
         $this->resetPage(); 
+        $this->clearComputedCache();
     }
 
     public function clearFilters(): void
@@ -87,7 +89,14 @@ new #[Layout('layouts.admin')] class extends Component
         $this->statusFilter = 'all';
         $this->severityFilter = 'all';
         $this->resetPage();
+        $this->clearComputedCache();
         $this->filterVersion++;
+    }
+
+    private function clearComputedCache(): void
+    {
+        unset($this->alerts);
+        unset($this->counts);
     }
 
     public function resolveWithWarning(int $id, FraudAlertsAction $action): void
@@ -95,33 +104,39 @@ new #[Layout('layouts.admin')] class extends Component
         try {
             $action->resolveWithWarning($id);
             $this->dispatch('show-toast', type: 'success', message: 'Предупреждение отправлено в чат поддержки!');
+            $this->clearComputedCache();
         } catch (\Exception $e) {
             $this->dispatch('show-toast', type: 'error', message: 'Ошибка сервера!');
         }
     }
 
-       #[Computed]
+    #[Computed]
     public function alerts()
     {
         $searchOperator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
 
         return FraudAlert::query()
-            // ФИКС: Исключаем алерты без юзера (полностью удаленные из БД) и исключаем админский состав
             ->whereNotNull('user_id')
             ->whereHas('user', fn($q) => $q->withTrashed()->excludeStaff())
-            // Грузим юзера (и его аватарки) даже если он мягко-удален
             ->with([
                 'user' => fn($q) => $q->withTrashed()->with(['photos' => fn($sq) => $sq->select(['id', 'user_id', 'is_primary', 'status', 'path_thumb', 'path_medium', 'path_large', 'path_original'])->orderByDesc('is_primary')->limit(1)]), 
                 'admin:id,name'
             ])
             ->when($this->search, function ($q) use ($searchOperator) {
-                $q->where(function ($query) use ($searchOperator) {
-                    $query->whereHas('user', function ($uq) use ($searchOperator) {
+                // ФИКС: Строгая проверка ctype_digit
+                $isId = ctype_digit($this->search);
+                $search = $this->search;
+                
+                $q->where(function ($query) use ($searchOperator, $search, $isId) {
+                    $query->whereHas('user', function ($uq) use ($searchOperator, $search) {
                         $uq->withTrashed()
-                           ->where('name', $searchOperator, "%{$this->search}%")
-                           ->orWhere('email', $searchOperator, "%{$this->search}%");
-                    })
-                    ->orWhereRaw("CAST(id AS TEXT) {$searchOperator} ?", ["%{$this->search}%"]);
+                           ->where('name', $searchOperator, "%{$search}%")
+                           ->orWhere('email', $searchOperator, "%{$search}%");
+                    });
+                    
+                    if ($isId) {
+                        $query->orWhere('id', (int) $search);
+                    }
                 });
             })
             ->when($this->statusFilter !== 'all', fn($q) => $q->where('status', $this->statusFilter))
@@ -134,24 +149,26 @@ new #[Layout('layouts.admin')] class extends Component
     #[Computed]
     public function counts(): array
     {
-        $stats = FraudAlert::query()
-            // ФИКС: Применяем те же фильтры (без призраков и без админов) для корректных счетчиков
-            ->whereNotNull('user_id')
-            ->whereHas('user', fn($q) => $q->withTrashed()->excludeStaff())
-            ->selectRaw("COUNT(*) as total")
-            ->selectRaw("SUM(CASE WHEN status = 'open' THEN 1 ELSE 0 END) as open")
-            ->selectRaw("SUM(CASE WHEN status = 'resolved' THEN 1 ELSE 0 END) as resolved")
-            ->selectRaw("SUM(CASE WHEN status = 'false_positive' THEN 1 ELSE 0 END) as false_positive")
-            ->selectRaw("SUM(CASE WHEN severity = 'high' AND status = 'open' THEN 1 ELSE 0 END) as high_priority")
-            ->first();
+        // ФИКС: Кэшируем счетчики на 1 минуту
+        return Cache::remember('admin_fraud_counts', 60, function () {
+            $stats = FraudAlert::query()
+                ->whereNotNull('user_id')
+                ->whereHas('user', fn($q) => $q->withTrashed()->excludeStaff())
+                ->selectRaw("COUNT(*) as total")
+                ->selectRaw("SUM(CASE WHEN status = 'open' THEN 1 ELSE 0 END) as open")
+                ->selectRaw("SUM(CASE WHEN status = 'resolved' THEN 1 ELSE 0 END) as resolved")
+                ->selectRaw("SUM(CASE WHEN status = 'false_positive' THEN 1 ELSE 0 END) as false_positive")
+                ->selectRaw("SUM(CASE WHEN severity = 'high' AND status = 'open' THEN 1 ELSE 0 END) as high_priority")
+                ->first();
 
-        return [
-            'total' => $stats->total ?? 0,
-            'open' => $stats->open ?? 0,
-            'resolved' => $stats->resolved ?? 0,
-            'false_positive' => $stats->false_positive ?? 0,
-            'high_priority' => $stats->high_priority ?? 0,
-        ];
+            return [
+                'total' => (int) ($stats?->total ?? 0),
+                'open' => (int) ($stats?->open ?? 0),
+                'resolved' => (int) ($stats?->resolved ?? 0),
+                'false_positive' => (int) ($stats?->false_positive ?? 0),
+                'high_priority' => (int) ($stats?->high_priority ?? 0),
+            ];
+        });
     }
     
     public function resolveAndBan(int $id, string $type = 'permanent', FraudAlertsAction $action): void
@@ -159,6 +176,7 @@ new #[Layout('layouts.admin')] class extends Component
         try {
             $action->resolveAndBan($id, $type);
             $this->dispatch('show-toast', type: 'success', message: 'Действие применено, алерт закрыт!');
+            $this->clearComputedCache();
         } catch (\Exception $e) {
             $this->dispatch('show-toast', type: 'error', message: 'Ошибка сервера!');
         }
@@ -169,6 +187,7 @@ new #[Layout('layouts.admin')] class extends Component
         try {
             $action->markAsFalsePositive($id);
             $this->dispatch('show-toast', type: 'success', message: 'Отмечено как ложняк.');
+            $this->clearComputedCache();
         } catch (\Exception $e) {
             $this->dispatch('show-toast', type: 'error', message: 'Ошибка сервера!');
         }
@@ -259,7 +278,7 @@ new #[Layout('layouts.admin')] class extends Component
         <x-ui.table-body>
             @forelse ($this->alerts as $alert)
                 @php 
-                    $isHighlighted = is_numeric($this->search) && $alert->id === (int)$this->search;
+                    $isHighlighted = ctype_digit($this->search) && $alert->id === (int)$this->search;                    
                     $isOpen = $alert->status === \App\Enums\FraudAlertStatus::Open || $alert->status === 'open';
                     $isHighSeverity = $alert->severity === \App\Enums\FraudAlertSeverity::High || $alert->severity === 'high';
                 @endphp
@@ -414,6 +433,8 @@ new #[Layout('layouts.admin')] class extends Component
             @endforelse
         </x-ui.table-body>
     </x-ui.table>
+
+    <x-loading-overlay fixed="true" wire:loading.delay wire:key="overlay-loading-page"/>
 
     <!-- Пагинация -->
     <div class="flex items-center justify-end flex-wrap gap-2">

@@ -1,4 +1,5 @@
 <?php
+
 namespace App\Models;
 
 use Illuminate\Contracts\Auth\MustVerifyEmail;
@@ -9,20 +10,32 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
+use Illuminate\Support\Facades\DB;
+use Laravel\Sanctum\HasApiTokens;
 
 class User extends Authenticatable implements MustVerifyEmail
 {
-    use HasFactory, Notifiable, SoftDeletes;
+    use HasApiTokens, HasFactory, Notifiable, SoftDeletes;
+
+       // === КОНСТАНТЫ РОЛЕЙ ===
+    public const ROLE_USER = 'user';
+    public const ROLE_ADMIN = 'admin';
+    public const ROLE_MODERATOR = 'moderator';
+    public const ROLE_SUPPORT = 'support';
+
+    // === КОНСТАНТЫ СТАТУСОВ ===
+    public const STATUS_ACTIVE = 'active';
+    public const STATUS_BANNED = 'banned';
+    public const STATUS_SHADOWBANNED = 'shadowbanned';
+    public const STATUS_DEACTIVATED = 'deactivated';
+
 
     protected $fillable = [
         'name', 'email', 'password', 'phone',
         'role', 'status', 'ban_reason', 'banned_until',
-        
-        'is_premium', 'premium_expires_at',
-        'is_vip', 'vip_expires_at',
-
+        'premium_expires_at', 'vip_expires_at', 
         'is_verified', 'has_completed_onboarding',
-        'last_seen', 'last_login_at', 'last_login_ip', 'device_id', 'device_os'
+        'last_seen', 'last_login_at', 'last_login_ip' 
     ];
 
     protected $hidden = [
@@ -38,10 +51,8 @@ class User extends Authenticatable implements MustVerifyEmail
             'last_login_at' => 'datetime',
             'last_seen' => 'datetime',            
             'banned_until' => 'datetime',
-            'is_premium' => 'boolean',
-            'premium_expires_at' => 'datetime',
-            'is_vip' => 'boolean',
-            'vip_expires_at' => 'datetime',
+            'premium_expires_at' => 'datetime', // Убрали boolean is_premium
+            'vip_expires_at' => 'datetime',      // Убрали boolean is_vip
             'is_verified' => 'boolean',
             'has_completed_onboarding' => 'boolean',            
         ];
@@ -50,51 +61,26 @@ class User extends Authenticatable implements MustVerifyEmail
     // ============================================
     // СВЯЗИ (ОТНОШЕНИЯ)
     // ============================================
-        // Связи
     public function subscriptions(): HasMany { return $this->hasMany(UserSubscription::class); }
     public function boosts(): HasMany { return $this->hasMany(UserBoost::class); }
 
+    public function diaryLikes(): HasMany { return $this->hasMany(DiaryLike::class); }
 
-    public function adminLogs(): HasMany
-    {
-        return $this->hasMany(AdminLog::class, 'admin_id');
-    }
+    public function favorites(): HasMany { return $this->hasMany(UserFavorite::class, 'user_id'); }
+    public function favoritedBy(): HasMany { return $this->hasMany(UserFavorite::class, 'favorite_user_id'); }
 
-    public function profile(): HasOne
-    {
-        return $this->hasOne(UserProfile::class);
-    }
+    public function diaryCommentLikes(): HasMany { return $this->hasMany(DiaryCommentLike::class); }
+    public function adminLogs(): HasMany { return $this->hasMany(AdminLog::class, 'admin_id'); }
 
-    public function preferences(): HasOne
-    {
-        return $this->hasOne(UserPreference::class);
-    }
+    public function profile(): HasOne { return $this->hasOne(UserProfile::class); }
+    public function preferences(): HasOne { return $this->hasOne(UserPreference::class); }
+    public function balance(): HasOne { return $this->hasOne(UserBalance::class); }
 
-    // НОВАЯ СВЯЗЬ: Кошелек и лимиты
-    public function balance(): HasOne
-    {
-        return $this->hasOne(UserBalance::class);
-    }
+    public function albums(): HasMany { return $this->hasMany(Album::class); }
+    public function defaultAlbum(): HasOne { return $this->hasOne(Album::class)->where('is_default', true); }
 
-    public function albums(): HasMany
-    {
-        return $this->hasMany(Album::class);
-    }
-
-    public function defaultAlbum(): HasOne
-    {
-        return $this->hasOne(Album::class)->where('is_default', true);
-    }
-
-    public function photos(): HasMany
-    {
-        return $this->hasMany(Photo::class);
-    }
-
-    public function comments(): HasMany
-    {
-        return $this->hasMany(PhotoComment::class);
-    }
+    public function photos(): HasMany { return $this->hasMany(Photo::class); }
+    public function comments(): HasMany { return $this->hasMany(PhotoComment::class); }
 
     public function chats(): BelongsToMany
     {
@@ -103,82 +89,31 @@ class User extends Authenticatable implements MustVerifyEmail
             ->withTimestamps();
     }
 
-    public function messages(): HasMany
+    public function messages(): HasMany { return $this->hasMany(Message::class, 'sender_id'); }
+    public function giftsSent(): HasMany { return $this->hasMany(UserGift::class, 'sender_id'); }
+    public function giftsReceived(): HasMany { return $this->hasMany(UserGift::class, 'receiver_id'); }
+    public function transactions(): HasMany { return $this->hasMany(Transaction::class); }  
+    public function reportsMade(): HasMany { return $this->hasMany(Report::class, 'reporter_id'); }
+    public function reportsAgainst(): HasMany { return $this->hasMany(Report::class, 'reported_id'); }
+    public function swipesGiven(): HasMany { return $this->hasMany(Swipe::class, 'user_id'); }
+    public function swipesReceived(): HasMany { return $this->hasMany(Swipe::class, 'target_user_id'); }
+
+    public function matchesAsUser1(): HasMany { return $this->hasMany(UserMatch::class, 'user1_id'); }
+    public function matchesAsUser2(): HasMany { return $this->hasMany(UserMatch::class, 'user2_id'); }    
+
+    public function profileViewers(): HasMany { return $this->hasMany(ProfileView::class, 'viewed_id'); } 
+    public function blockedUsers(): HasMany { return $this->hasMany(UserBlock::class, 'blocker_id'); } 
+    public function blockers(): HasMany { return $this->hasMany(UserBlock::class, 'blocked_id'); } 
+    public function verifications(): HasMany { return $this->hasMany(Verification::class); }
+
+    public function subscribedAuthors(): BelongsToMany
     {
-        return $this->hasMany(Message::class, 'sender_id');
+        return $this->belongsToMany(User::class, 'diary_subscriptions', 'subscriber_id', 'author_id');
     }
 
-    public function giftsSent(): HasMany
+    public function diarySubscribers(): BelongsToMany
     {
-        return $this->hasMany(UserGift::class, 'sender_id');
-    }
-
-    public function giftsReceived(): HasMany
-    {
-        return $this->hasMany(UserGift::class, 'receiver_id');
-    }
-
-    public function transactions(): HasMany  
-    {
-        return $this->hasMany(Transaction::class);
-    }  
-
-    public function reportsMade(): HasMany
-    {
-        return $this->hasMany(Report::class, 'reporter_id');
-    }
-
-    public function reportsAgainst(): HasMany
-    {
-        return $this->hasMany(Report::class, 'reported_id');
-    }
-
-    public function swipesGiven(): HasMany
-    {
-        return $this->hasMany(Swipe::class, 'user_id');
-    }
-
-    public function swipesReceived(): HasMany
-    {
-        return $this->hasMany(Swipe::class, 'target_user_id');
-    }
-
-    public function matchesAsUser1(): HasMany
-    {
-        return $this->hasMany(UserMatch::class, 'user1_id');
-    }
-
-    public function matchesAsUser2(): HasMany
-    {
-        return $this->hasMany(UserMatch::class, 'user2_id');
-    }    
-
-    public function profileViewers(): HasMany 
-    { 
-        return $this->hasMany(ProfileView::class, 'viewed_id'); 
-    }
-
-    public function blockedUsers(): HasMany 
-    { 
-        return $this->hasMany(UserBlock::class, 'blocker_id'); 
-    } 
-
-    public function blockers(): HasMany 
-    { 
-        return $this->hasMany(UserBlock::class, 'blocked_id'); 
-    } 
-
-    public function verifications(): HasMany 
-    { 
-        return $this->hasMany(Verification::class); 
-    }
-
-    // Аксессоры для чистой проверки в коде (O(1) скорость)
-    public function getHasActivePremiumAttribute(): bool {
-        return $this->is_premium && $this->premium_expires_at?->isFuture();
-    }
-    public function getHasActiveVipAttribute(): bool {
-        return $this->is_vip && $this->vip_expires_at?->isFuture();
+        return $this->belongsToMany(User::class, 'diary_subscriptions', 'author_id', 'subscriber_id');
     }
 
     // ============================================
@@ -217,6 +152,15 @@ class User extends Authenticatable implements MustVerifyEmail
         return $this->last_seen && $this->last_seen->gt(now()->subMinutes(5));
     }
 
+    // НОВЫЕ АКСЕССОРЫ БЕЗ БУЛЕВЫХ ФЛАГОВ
+    public function getHasActivePremiumAttribute(): bool {
+        return $this->premium_expires_at && $this->premium_expires_at->isFuture();
+    }
+
+    public function getHasActiveVipAttribute(): bool {
+        return $this->vip_expires_at && $this->vip_expires_at->isFuture();
+    }
+
     public function getAvatarUrlAttribute(): string
     {
         if ($this->relationLoaded('photos')) {
@@ -235,30 +179,43 @@ class User extends Authenticatable implements MustVerifyEmail
         return '';
     }
 
-    // Прокси-аксессоры для настроек (остаются тут)
+    // Прокси-аксессоры для настроек (с защитой от N+1)
     public function getLocaleAttribute(): string
     {
+        // Если связь не загружена, возвращаем дефолт, чтобы не триггерить запрос в БД
+        if (!$this->relationLoaded('preferences')) {
+            return config('app.locale');
+        }
         return $this->preferences?->locale ?? config('app.locale');
     }
 
     public function getThemeAttribute(): string
     {
+        if (!$this->relationLoaded('preferences')) {
+            return 'light';
+        }
         return $this->preferences?->theme ?? 'light';
     }
 
     public function getPushEnabledAttribute(): bool
     {
+        if (!$this->relationLoaded('preferences')) {
+            return true;
+        }
         return $this->preferences?->push_enabled ?? true;
     }
 
     public function getEmailEnabledAttribute(): bool
     {
+        if (!$this->relationLoaded('preferences')) {
+            return true;
+        }
         return $this->preferences?->email_enabled ?? true;
     }
 
     public function getEmailSettingsAttribute(): array
     {
-        if (!$this->preferences) {
+        if (!$this->relationLoaded('preferences') || !$this->preferences) {
             return [
                 'on_message' => true, 'on_like' => true, 'on_view' => false,
                 'on_photo_moderated' => true, 'on_report' => true,
@@ -268,32 +225,31 @@ class User extends Authenticatable implements MustVerifyEmail
         return $this->preferences->email_settings;
     }
 
-    // Юзеры, на которых я подписан (их дневники я читаю)
-    public function subscribedAuthors(): BelongsToMany
+    public function resetCounters(): void
     {
-        return $this->belongsToMany(User::class, 'diary_subscriptions', 'subscriber_id', 'author_id');
-    }
+        // Используем Eloquent вместо DB фасада, так красивее
+        ChatParticipant::where('user_id', $this->id)
+            ->where('unread_count', '>', 0)
+            ->update([
+                'unread_count' => 0,
+                'last_read_at' => now()
+            ]);
 
-    // Мои подписчики (кто читает мои дневники)
-    public function diarySubscribers(): BelongsToMany
-    {
-        return $this->belongsToMany(User::class, 'diary_subscriptions', 'author_id', 'subscriber_id');
+        $this->unreadNotifications()->update(['read_at' => now()]);
     }
 
     // ============================================
     // СОБЫТИЯ МОДЕЛИ (Booted)
     // ============================================
-
     protected static function booted()
     {
         static::created(function (User $user) {
-            $user->profile()->create();
-            $user->preferences()->create();
-            
-            // Создаем кошелек с дефолтными значениями (наследуется из миграции)
-            $user->balance()->create();
-            
-            Album::createDefaultForUser($user);
+            DB::transaction(function () use ($user) {
+                $user->profile()->create();
+                $user->preferences()->create();
+                $user->balance()->create();
+                Album::createDefaultForUser($user);
+            });
         });
     }
 }

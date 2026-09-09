@@ -4,7 +4,6 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Illuminate\Support\Facades\DB;
 
 class UserBalance extends Model
 {
@@ -32,27 +31,28 @@ class UserBalance extends Model
     {
         if ($amount <= 0) return false;
 
-        $affected = DB::table('user_balances')
+        // Используем newQuery() вместо DB::table, чтобы оставаться в Eloquent
+        $affected = $this->newQuery()
             ->where('id', $this->id)
             ->increment('credits', $amount);
 
         if ($affected) $this->credits += $amount;
 
-        return (bool) $affected;
+        return (bool)$affected;
     }
 
     public function spendCredits(int $amount): bool
     {
         if ($amount <= 0 || $this->credits < $amount) return false;
 
-        $affected = DB::table('user_balances')
+        $affected = $this->newQuery()
             ->where('id', $this->id)
             ->where('credits', '>=', $amount)
             ->decrement('credits', $amount);
 
         if ($affected) $this->credits -= $amount;
 
-        return (bool) $affected;
+        return (bool)$affected;
     }
 
     // ============================================
@@ -63,21 +63,24 @@ class UserBalance extends Model
     {
         if ($this->superlikes_remaining <= 0) return false;
 
-        $affected = DB::table('user_balances')
+        $affected = $this->newQuery()
             ->where('id', $this->id)
             ->where('superlikes_remaining', '>', 0)
             ->decrement('superlikes_remaining');
 
         if ($affected) $this->superlikes_remaining -= 1;
 
-        return (bool) $affected;
+        return (bool)$affected;
     }
 
-    public function resetSuperlikes(): void
+        public function resetSuperlikes(): void
     {
-        $limit = 1; 
+        $limit = 1; // Дефолтный лимит для обычных юзеров
 
-        if ($this->user && $this->user->hasActivePremium) {
+        // ФИКС: Проверяем, загружена ли связь, чтобы не триггерить N+1 в кроне.
+        // Если крон вызовет этот метод без with('user'), мы просто используем базовый лимит (1).
+        // Если вызовет из логики юзера (где юзер загружен), мы проверим премиум.
+        if ($this->relationLoaded('user') && $this->user && $this->user->has_active_premium) {
             $limit = 5; 
         }
 

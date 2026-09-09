@@ -16,8 +16,9 @@ class PurgeOldReports extends Command
         $days = (int) $this->option('days');
         $date = now()->subDays($days);
 
-        // ФИКС: Обязательно withTrashed(), иначе мягко удаленные модератором жалобы никогда не очистятся!
+        // ОПТИМИЗИРОВАНО: select('id') - тянем только ID, чтобы не жрать память (не грузим тексты жалоб)
         $query = Report::withTrashed()
+            ->select('id')
             ->whereIn('status', ['resolved', 'rejected'])
             ->where('created_at', '<', $date);
 
@@ -32,11 +33,12 @@ class PurgeOldReports extends Command
 
         $totalDeleted = 0;
 
-        // Удаляем чанками по 1000 (пакетное удаление)
+        // Удаляем чанками по 1000
         $query->chunkById(1000, function ($reports) use (&$totalDeleted, $count) { 
+            // Достаем только ID из коллекции легких моделей
             $ids = $reports->pluck('id');
             
-            // Жесткое удаление из БД. withTrashed() здесь тоже нужен для подстраховки.
+            // Жесткое удаление из БД.
             Report::withTrashed()->whereIn('id', $ids)->forceDelete();
             
             $totalDeleted += $ids->count();

@@ -9,7 +9,7 @@ use App\Models\User;
 class ManageMediaAction
 {
     /**
-     * Безопасное удаление файла (с чисткой вариантов).
+     * Одиночное удаление файла (с чисткой вариантов).
      */
     public function delete(Media $media, User $admin): void
     {
@@ -28,34 +28,65 @@ class ManageMediaAction
             ]
         ];
 
-        // ФИКС: Передаем саму модель $media, чтобы лог привязался к ID
         AdminLog::record('media.delete', $media, $admin, $before, $after);
 
-        // Вызываем метод модели, который чистит файлы с диска
         $media->safeDelete();
     }
 
     /**
-     * Логирование массовой загрузки медиа.
+     * МАССОВОЕ УДАЛЕНИЕ ФАЙЛОВ (1 запрос в лог, вместо 100)
+     */
+    public function bulkDelete(array $mediaIds, User $admin): int
+    {
+        if (empty($mediaIds)) return 0;
+
+        $medias = Media::whereIn('id', $mediaIds)->get();
+        $deletedCount = 0;
+
+        foreach ($medias as $media) {
+            $media->safeDelete();
+            $deletedCount++;
+        }
+
+        AdminLog::record('media.delete_bulk', null, $admin, null, [
+            'status' => 'destroyed',
+            'count' => $deletedCount,
+            'deleted_by' => $admin->id,
+            'context' => [
+                'media_ids' => array_slice($mediaIds, 0, 100) // Пишем только первые 100 ID
+            ]
+        ]);
+
+        return $deletedCount;
+    }
+
+    /**
+     * Логирование загрузки медиа (умное разделение одиночной и массовой).
      */
     public function logUpload(array $mediaIds, string $collection, User $admin): void
     {
         if (empty($mediaIds)) return;
 
-        // ФИКС: Берем первую модель из загруженных, чтобы привязать лог к конкретному ID
-        $firstMedia = Media::find($mediaIds[0]);
+        $count = count($mediaIds);
+        
+        // ФИКС: Различаем одиночную и массовую загрузку!
+        $actionName = $count === 1 ? 'media.upload' : 'media.upload_bulk';
+
+        // ФИКС: Берем первую модель из загруженных только если загрузка одиночная, 
+        // чтобы привязать лог к конкретному ID. При массовой передаем null.
+        $loggableMedia = $count === 1 ? Media::find($mediaIds[0]) : null;
 
         $after = [
             'status' => 'created', 
-            'count' => count($mediaIds),
+            'count' => $count,
             'uploaded_by' => $admin->id,
             'context' => [
                 'collection' => $collection,
-                'media_ids' => $mediaIds                
+                // ФИКС: Ограничиваем массив ID до 100, чтобы не положить БД логов при загрузке 10к файлов
+                'media_ids' => array_slice($mediaIds, 0, 100)                
             ]
         ];
 
-        // Передаем $firstMedia (может быть null, если файлы еще в обработке, но обычно он уже есть в БД)
-        AdminLog::record('media.upload', $firstMedia, $admin, null, $after);
+        AdminLog::record($actionName, $loggableMedia, $admin, null, $after);
     }
 }

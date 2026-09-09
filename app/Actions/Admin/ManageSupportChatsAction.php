@@ -13,21 +13,21 @@ use Illuminate\Support\Facades\Cache;
 
 class ManageSupportChatsAction
 {
-    /**
-     * Отметить тикет как прочитанный.
-     */
     public function markAsRead(Chat $chat, User $admin): void
     {
+        // ФИКС: Обновляем только если есть непрочитанные (защита от спама базы пустыми UPDATE)
         ChatParticipant::where('chat_id', $chat->id)
             ->where('user_id', $admin->id)
-            ->update(['unread_count' => 0]);
+            ->where('unread_count', '>', 0)
+            ->update([
+                'unread_count' => 0,
+                'last_read_at' => now(), // ФИКС: Важно для WebSockets
+            ]);
         
         Cache::forget('admin_sidebar_stats');
+        Cache::forget('admin_support_stats_' . $admin->id); // ФИКС: Сброс кэша счетчиков
     }
 
-    /**
-     * Архивировать тикет.
-     */
     public function archiveChat(Chat $chat, User $admin): void
     {
         $partnerId = $chat->participants()->where('user_id', '!=', $admin->id)->value('user_id');
@@ -47,11 +47,9 @@ class ManageSupportChatsAction
         ];
 
         AdminLog::record('support.archive', $chat, $admin, $before, $after, participants: array_filter([$admin->id, $partnerId]));
+        Cache::forget('admin_support_stats_' . $admin->id); // ФИКС: Сброс кэша
     }
 
-    /**
-     * Вернуть тикет из архива.
-     */
     public function unarchiveChat(Chat $chat, User $admin): void
     {
         $partnerId = $chat->participants()->where('user_id', '!=', $admin->id)->value('user_id');
@@ -71,11 +69,9 @@ class ManageSupportChatsAction
         ];
 
         AdminLog::record('support.unarchive', $chat, $admin, $before, $after, participants: array_filter([$admin->id, $partnerId]));
+        Cache::forget('admin_support_stats_' . $admin->id); // ФИКС: Сброс кэша
     }
 
-    /**
-     * Отправить сообщение от лица поддержки.
-     */
     public function sendMessage(Chat $chat, User $admin, string $messageBody): void
     {
         $partnerId = $chat->participants()->where('user_id', '!=', $admin->id)->value('user_id');
@@ -90,13 +86,18 @@ class ManageSupportChatsAction
             
             $chat->update(['last_message_at' => now()]);
             
+            // Инкрементим счетчик непрочитанных у юзера
             ChatParticipant::where('chat_id', $chat->id)
-                ->whereHas('user', fn($q) => $q->where('role', 'user'))
+                ->where('user_id', '!=', $admin->id)
                 ->increment('unread_count');
             
+            // ФИКС: Сбрасываем свой счетчик и ставим время прочтения
             ChatParticipant::where('chat_id', $chat->id)
                 ->where('user_id', $admin->id)
-                ->update(['unread_count' => 0]);
+                ->update([
+                    'unread_count' => 0,
+                    'last_read_at' => now(),
+                ]);
         });
 
         $after = [
@@ -110,5 +111,18 @@ class ManageSupportChatsAction
         ];
 
         AdminLog::record('support.message_sent', $chat, $admin, null, $after, participants: array_filter([$admin->id, $partnerId]));
+        
+        Cache::forget('admin_sidebar_stats');
+        Cache::forget('admin_support_stats_' . $admin->id); // ФИКС: Сброс кэша
+
+        /* 
+         * ВАЖНО: Если у вас настроено уведомление юзеров об ответе саппорта (через ShouldQueue),
+         * здесь можно добавить отправку уведомления юзеру:
+         * 
+         * if ($partnerId) {
+         *     $user = User::find($partnerId);
+         *     if ($user) $user->notify(new SupportReplied($chat, $messageBody));
+         * }
+         */
     }
 }

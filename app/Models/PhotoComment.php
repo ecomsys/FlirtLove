@@ -10,22 +10,28 @@ use Illuminate\Database\Eloquent\SoftDeletes;
 
 class PhotoComment extends Model
 {
-    use SoftDeletes; // Обязательно для сохранения удаленных матов/оскорблений
+    use SoftDeletes; 
+
+    // КОНСТАНТЫ СТАТУСОВ
+    public const STATUS_PENDING = 'pending';
+    public const STATUS_APPROVED = 'approved';
+    public const STATUS_REJECTED = 'rejected';
+    public const STATUS_SPAM = 'spam';
 
     protected $fillable = [
         'photo_id',
         'user_id',
         'content',
         'status',
-        'reject_reason',     // Единый паттерн с Photo
-        'moderated_by',      // ID админа
-        'moderated_at',      // Время проверки
+        'reject_reason',
+        'moderated_by',
+        'moderated_at',
         'parent_id',
         'likes_count',
         'reports_count',
-        'replies_count',     // Новое: кэш количества ответов
+        'replies_count',
         'is_pinned',
-        'edited_at',         // Убрали is_edited, так как edited_at != null само по себе флаг
+        'edited_at',
     ];
 
     protected $casts = [
@@ -51,7 +57,6 @@ class PhotoComment extends Model
         return $this->belongsTo(User::class);
     }
 
-    // Модератор, проверивший комментарий
     public function moderator(): BelongsTo
     {
         return $this->belongsTo(User::class, 'moderated_by');
@@ -63,6 +68,12 @@ class PhotoComment extends Model
     }
 
     public function replies(): HasMany
+    {
+        // Ответы по умолчанию тянем только одобренные
+        return $this->hasMany(PhotoComment::class, 'parent_id')->where('status', self::STATUS_APPROVED);
+    }
+
+    public function allReplies(): HasMany
     {
         return $this->hasMany(PhotoComment::class, 'parent_id');
     }
@@ -78,22 +89,22 @@ class PhotoComment extends Model
 
     public function scopePending(Builder $query): Builder
     {
-        return $query->where('status', 'pending');
+        return $query->where('status', self::STATUS_PENDING);
     }
 
     public function scopeApproved(Builder $query): Builder
     {
-        return $query->where('status', 'approved');
+        return $query->where('status', self::STATUS_APPROVED);
     }
 
     public function scopeRejected(Builder $query): Builder
     {
-        return $query->where('status', 'rejected');
+        return $query->where('status', self::STATUS_REJECTED);
     }
 
     public function scopeSpam(Builder $query): Builder
     {
-        return $query->where('status', 'spam');
+        return $query->where('status', self::STATUS_SPAM);
     }
 
     // ============================================
@@ -107,41 +118,34 @@ class PhotoComment extends Model
 
     public function isApproved(): bool
     {
-        return $this->status === 'approved';
+        return $this->status === self::STATUS_APPROVED;
     }
 
-    // Твой крутой аксессор для UI (оставляем без изменений)
     public function getStatusBadgeAttribute(): array
     {
         return match ($this->status) {
-            'pending'  => ['variant' => 'warning', 'label' => 'Ожидает'],
-            'approved' => ['variant' => 'success', 'label' => 'Одобрен'],
-            'rejected' => ['variant' => 'destructive', 'label' => 'Отклонен'],
-            'spam'     => ['variant' => 'destructive', 'label' => 'Спам'],
-            default    => ['variant' => 'secondary', 'label' => 'Неизвестно'],
+            self::STATUS_PENDING  => ['variant' => 'warning', 'label' => 'Ожидает'],
+            self::STATUS_APPROVED => ['variant' => 'success', 'label' => 'Одобрен'],
+            self::STATUS_REJECTED => ['variant' => 'destructive', 'label' => 'Отклонен'],
+            self::STATUS_SPAM     => ['variant' => 'destructive', 'label' => 'Спам'],
+            default               => ['variant' => 'secondary', 'label' => 'Неизвестно'],
         };
     }
 
-    /**
-     * Одобрить комментарий (Обновлено под паттерн)
-     */
     public function approve(int $adminId): void
     {
         $this->update([
-            'status' => 'approved',
+            'status' => self::STATUS_APPROVED,
             'moderated_by' => $adminId,
             'moderated_at' => now(),
             'reject_reason' => null,
         ]);
     }
 
-    /**
-     * Отклонить комментарий (Обновлено под паттерн)
-     */
     public function reject(int $adminId, string $reason): void
     {
         $this->update([
-            'status' => 'rejected',
+            'status' => self::STATUS_REJECTED,
             'moderated_by' => $adminId,
             'moderated_at' => now(),
             'reject_reason' => $reason,
@@ -149,18 +153,15 @@ class PhotoComment extends Model
     }
 
     /**
-     * Пометить как спам (Обновлено под паттерн)
+     * Пометить как спам (Исправлено: ставим правильный статус!)
      */
     public function markAsSpam(int $adminId): void
     {
-        // Просто вызываем reject с причиной 'spam'
-        $this->reject($adminId, 'spam');
-
-    //      $this->update([
-    //     'status' => 'spam',          // <--- ПРАВИЛЬНЫЙ СТАТУС
-    //     'moderated_by' => $adminId,
-    //     'moderated_at' => now(),
-    //     'reject_reason' => 'spam',   // Дублируем для удобства фильтров
-    // ]);
+        $this->update([
+            'status' => self::STATUS_SPAM,          
+            'moderated_by' => $adminId,
+            'moderated_at' => now(),
+            'reject_reason' => 'spam', // Дублируем для удобства фильтров
+        ]);
     }
 }

@@ -41,8 +41,16 @@ new class extends Component
     #[Computed]
     public function broadcasts()
     {
-        // Ищем рассылки, где в JSON target_audience есть ключ user_id равный ID нашего юзера
-        return Broadcast::where('target_audience->user_id', $this->userId)
+        return Broadcast::where(function ($query) {
+                // 1. Персональные рассылки (где в JSON есть ID этого юзера)
+                $query->where('target_audience->user_id', $this->userId)
+                      // 2. Массовые рассылки для ВСЕХ (где фильтры не заданы)
+                      ->orWhere(function ($q) {
+                          $q->whereNull('target_audience')
+                            ->orWhere('target_audience', '[]')
+                            ->orWhere('target_audience', '{}');
+                      });
+            })
             ->when($this->broadcastFilter !== 'all', fn($q) => $q->where('type', $this->broadcastFilter))
             ->latest()
             ->paginate(15, ['*'], 'broadcastPage');

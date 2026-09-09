@@ -29,30 +29,36 @@ new #[Layout('layouts.admin')] class extends Component
 
     public int $perPage = 15;
 
-    /** @var string URL для кнопки "Назад" */
     public string $backUrl = '';
 
     public function mount(): void
     {
-        abort_unless(auth()->user()?->role === 'admin', 403);
+        abort_unless(auth()->user()?->role === User::ROLE_ADMIN, 403);
 
-        // ФИКС: Запоминаем URL "Назад"
         $previousUrl = url()->previous();
         $this->backUrl = ($previousUrl && $previousUrl !== url()->current()) 
             ? $previousUrl 
             : route('admin.dashboard');
     }
 
-    public function updatedSearch(): void { $this->resetPage(); }
+    public function updatedSearch(): void { $this->resetPage(); unset($this->logs); }
 
     public function updatedDateFilter(): void { 
         $this->search = ''; 
         $this->resetPage(); 
+        unset($this->logs); 
     }
 
     public function updatedAdminFilter(): void { 
         $this->search = ''; 
         $this->resetPage(); 
+        unset($this->logs); 
+    }
+
+    // ФИКС: КРИТИЧЕСКИ ВАЖНО. Сбрасываем кэш logs при переключении страницы пагинации!
+    public function updatedPage(): void 
+    { 
+        unset($this->logs); 
     }
 
     public function setCategoryFilter(string $category): void
@@ -60,15 +66,16 @@ new #[Layout('layouts.admin')] class extends Component
         $this->categoryFilter = $category;
         $this->search = ''; 
         $this->resetPage();
+        unset($this->logs);
     }
 
     public function clearSearchFilters(): void
     {
         $this->reset(['search', 'dateFilter']);
         $this->resetPage();
+        unset($this->logs);
     }
 
-    // ФИКС: Метод, который жестко сбрасывает кэш, чтобы новые записи сразу попали в фильтры
     public function refreshData(): void
     {
         Cache::forget('admin_audit_category_stats');
@@ -101,8 +108,9 @@ new #[Layout('layouts.admin')] class extends Component
 
         $routeMap = [
             \App\Models\User::class           => ['admin.users.show', null],
-            \App\Models\Page::class           => ['admin.system.pages.edit', null],
-            \App\Models\Broadcast::class      => ['admin.system.broadcasts.edit', null],
+            \App\Models\Page::class           => ['admin.system.pages.index', 'q'],
+            \App\Models\Broadcast::class      => ['admin.system.broadcasts.index', 'q'],
+            \App\Models\Setting::class       => ['admin.system.settings', null],
             \App\Models\Diary::class          => ['admin.moderation.diary.moderate', null],
             \App\Models\BlogPost::class       => ['admin.system.blog.index', 'q'],
             \App\Models\Media::class          => ['admin.media.index', 'q'],
@@ -111,12 +119,19 @@ new #[Layout('layouts.admin')] class extends Component
             \App\Models\PhotoComment::class   => ['admin.moderation.photo-comments', 'q'],
             \App\Models\DiaryComment::class   => ['admin.moderation.diary.comments', 'q'],
             \App\Models\Report::class         => ['admin.moderation.reports', 'q'],
-            \App\Models\Swipe::class          => ['admin.moderation.dating', 'q'],
+            \App\Models\Swipe::class          => ['admin.moderation.dating', 'q'],            
             \App\Models\UserMatch::class      => ['admin.moderation.dating', 'q'],
-            \App\Models\SupportTemplate::class=> ['admin.communication.templates', 'q'],
+
+            \App\Models\StopWord::class          => ['admin.communication.stop-words.index', 'q'],
+            \App\Models\SupportTemplate::class=> ['admin.communication.templates', 'tpl_id'],
+            \App\Models\SupportTemplateCategory::class=> ['admin.communication.templates', 'cat_id'],
+            
             \App\Models\FraudAlert::class     => ['admin.security.fraud-alerts.index', 'q'],
             \App\Models\Transaction::class    => ['admin.finances.transactions', 'q'],
             \App\Models\UserSubscription::class => ['admin.finances.subscriptions', 'q'],
+            \App\Models\SubscriptionPlan::class => ['admin.finances.subscriptions', 'q'],
+
+            \App\Models\GeoIPLocation::class    => ['admin.system.geo-ip-locations.index', 'q'],
             
             \App\Models\UserGift::class       => ['admin.finances.gifts', 'history_search'],
             \App\Models\Gift::class           => ['admin.finances.gifts', 'catalog_search'],
@@ -160,19 +175,24 @@ new #[Layout('layouts.admin')] class extends Component
         }
 
         if ($this->dateFilter) {
-            $query->whereDate('created_at', $this->dateFilter);
+            $query->where('created_at', '>=', \Carbon\Carbon::parse($this->dateFilter)->startOfDay())
+                  ->where('created_at', '<=', \Carbon\Carbon::parse($this->dateFilter)->endOfDay());
         }
 
         if (!empty($this->search)) {
-            $search = strtolower($this->search);
-            $query->where(function ($q) use ($search) {
-                $q->where('action', 'like', "%{$search}%")
-                  ->orWhere('ip_address', 'like', "%{$search}%")
-                  ->orWhere('loggable_type', 'like', "%{$search}%");
+            $operator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
+            $search = '%' . $this->search . '%';
+            // ФИКС: ctype_digit для строгой проверки целого числа
+            $isId = ctype_digit($this->search);
+            
+            $query->where(function ($q) use ($search, $operator, $isId) {
+                $q->where('action', $operator, $search)
+                  ->orWhere('ip_address', $operator, $search)
+                  ->orWhere('loggable_type', $operator, $search);
                   
-                if (is_numeric($search)) {
-                    $q->orWhere('id', $search);
-                    $q->orWhere('loggable_id', $search);
+                if ($isId) {
+                    $q->orWhere('id', (int) $this->search)
+                      ->orWhere('loggable_id', (int) $this->search);
                 }
             });
         }
@@ -357,7 +377,7 @@ new #[Layout('layouts.admin')] class extends Component
 
         <x-ui.table-body>
             @forelse ($this->logs as $log)
-                @php $isHighlighted = is_numeric($this->search) && $log->id === (int)$this->search; @endphp
+                @php $isHighlighted = ctype_digit($this->search) && $log->id === (int)$this->search; @endphp
                 <x-ui.table-row 
                     wire:key="log-{{ $log->id }}" 
                     class="{{ $isHighlighted ? 'bg-blue-500/10 ring-2 ring-blue-500/50' : '' }}"
@@ -422,7 +442,7 @@ new #[Layout('layouts.admin')] class extends Component
                         <div class="flex flex-col gap-0.5 pt-1">
                             @if ($isSystemAction)
                                 <span class="text-sm font-medium text-muted-foreground">
-                                    Системные настройки
+                                    ID не передан
                                 </span>
                             @elseif ($isDeleted)
                                 <span class="text-sm font-medium text-muted-foreground line-through">
@@ -496,6 +516,8 @@ new #[Layout('layouts.admin')] class extends Component
             @endforelse
         </x-ui.table-body>
     </x-ui.table>
+
+    <x-loading-overlay fixed="true" wire:loading.delay wire:key="overlay-loading-page"/>
 
     <!-- Pagination -->
     <div class="mt-6">

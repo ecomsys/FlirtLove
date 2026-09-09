@@ -17,7 +17,10 @@ return new class extends Migration
 
             // === ЛИМИТЫ (Суперлайки) ===
             $table->unsignedInteger('superlikes_remaining')->default(5);
-            $table->timestamp('superlikes_reset_at')->nullable();
+            
+            // КРИТИЧЕСКИ ВАЖНО: Индекс для крона.
+            // Крон будет искать записи где superlikes_reset_at <= now() и обновлять их.
+            $table->timestamp('superlikes_reset_at')->nullable()->index();
    
             $table->timestamps();
         });

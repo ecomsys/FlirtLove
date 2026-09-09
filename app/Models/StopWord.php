@@ -4,7 +4,9 @@ namespace App\Models;
 
 use App\Enums\StopWordAction;
 use App\Enums\StopWordCategory;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\Cache;
 
 class StopWord extends Model
 {
@@ -16,7 +18,6 @@ class StopWord extends Model
         'is_active',
     ];
 
-    // ВАЖНО: Добавляем касты для Enum
     protected $casts = [
         'is_active' => 'boolean',
         'category' => StopWordCategory::class,
@@ -27,19 +28,42 @@ class StopWord extends Model
     // СКОПЫ
     // ============================================
 
-    public function scopeActive($query)
+    public function scopeActive(Builder $query): Builder
     {
         return $query->where('is_active', true);
     }
 
-    public function scopeOfCategory($query, StopWordCategory $category)
+    public function scopeOfCategory(Builder $query, StopWordCategory $category): Builder
     {
         return $query->where('category', $category);
     }
 
-    public function scopeOfAction($query, StopWordAction $action)
+    public function scopeOfAction(Builder $query, StopWordAction $action): Builder
     {
         return $query->where('action', $action);
+    }
+
+    // ============================================
+    // КЭШИРОВАНИЕ (HIGH-LOAD)
+    // ============================================
+
+    /**
+     * Получить все активные слова из кэша.
+     * Кэш сбрасывается при любом CUD-действии (создание/обновление/удаление).
+     */
+    public static function getCachedActiveWords(): \Illuminate\Support\Collection
+    {
+        return Cache::rememberForever('stop_words_active', function () {
+            return self::active()->get();
+        });
+    }
+
+    /**
+     * Сброс кэша (вызывать в Action-классах админки)
+     */
+    public static function clearCache(): void
+    {
+        Cache::forget('stop_words_active');
     }
 
     // ============================================
@@ -71,11 +95,10 @@ class StopWord extends Model
             StopWordAction::Mask   => ['variant' => 'secondary', 'label' => StopWordAction::Mask->label()],
             StopWordAction::Reject => ['variant' => 'destructive', 'label' => StopWordAction::Reject->label()],
             StopWordAction::Alert  => ['variant' => 'warning', 'label' => StopWordAction::Alert->label()],
+            default                => ['variant' => 'secondary', 'label' => 'Неизвестно'],
         };
     }
 }
-
-
 
 // Модель StopWord (Стоп-слова) — это базовый, но критически важный фильтр. 80% спамеров и мошенников используют стандартные фразы, 
 // номера телефонов и ссылки на мессенджеры.

@@ -8,7 +8,7 @@ use App\Models\User;
 use App\Notifications\DiaryCommentModerated;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Str; // <--- ДОБАВИЛИ ИМПОРТ
+use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Cache;
 
 class ModerateDiaryCommentAction
@@ -25,7 +25,6 @@ class ModerateDiaryCommentAction
         ];
         
         $comment->approve($admin->id);
-        $comment->refresh();
         
         $after = [
             'status' => 'approved', 
@@ -35,7 +34,7 @@ class ModerateDiaryCommentAction
                 'comment_id' => $comment->id,
                 'diary_id' => $comment->diary_id,
                 'author_id' => $comment->user_id,
-                'snippet' => Str::limit($comment->content, 50) // Сохраняем кусок текста
+                'snippet' => Str::limit($comment->content, 50)
             ]
         ];
         
@@ -43,7 +42,7 @@ class ModerateDiaryCommentAction
         
         AdminLog::record('diary_comment.approve', $comment, $admin, $before, $after, participants: $participants);
         $this->notifyAuthor($comment, 'approved');
-        Cache::forget('admin_sidebar_stats');
+        $this->clearCaches();
         
         return true;
     }
@@ -56,7 +55,6 @@ class ModerateDiaryCommentAction
         ];
         
         $comment->reject($admin->id, $reason);
-        $comment->refresh();
         
         $after = [
             'status' => 'rejected', 
@@ -75,7 +73,7 @@ class ModerateDiaryCommentAction
         
         AdminLog::record('diary_comment.reject', $comment, $admin, $before, $after, participants: $participants);
         $this->notifyAuthor($comment, 'rejected');
-         Cache::forget('admin_sidebar_stats');
+        $this->clearCaches();
     }
 
     public function markSpam(DiaryComment $comment, User $admin): void
@@ -91,8 +89,6 @@ class ModerateDiaryCommentAction
             'reject_reason' => 'spam',
             'moderated_by' => $admin->id
         ]);
-        
-        $comment->refresh();
         
         $after = [
             'status' => 'spam', 
@@ -111,7 +107,7 @@ class ModerateDiaryCommentAction
         
         AdminLog::record('diary_comment.spam', $comment, $admin, $before, $after, participants: $participants);
         $this->notifyAuthor($comment, 'spam');
-         Cache::forget('admin_sidebar_stats');
+        $this->clearCaches();
     }
 
     public function restore(DiaryComment $comment, User $admin): void
@@ -128,8 +124,6 @@ class ModerateDiaryCommentAction
             'moderated_by' => null
         ]);
         
-        $comment->refresh();
-        
         $after = [
             'status' => 'pending', 
             'restored_by' => $admin->id, 
@@ -145,17 +139,29 @@ class ModerateDiaryCommentAction
         $participants = array_filter([$comment->user_id, $comment->diary?->user_id]);
         
         AdminLog::record('diary_comment.restore', $comment, $admin, $before, $after, participants: $participants);
-         Cache::forget('admin_sidebar_stats');
+        $this->clearCaches();
     }
 
     private function notifyAuthor(DiaryComment $comment, string $status): void
     {
         try {
             if ($comment->user) {
-                 $comment->user->notify(new DiaryCommentModerated($comment, $status));
+                  $comment->user->notify(new DiaryCommentModerated(
+                    $comment->id, 
+                    $comment->diary_id, 
+                    $comment->content, 
+                    $status
+                ));
             }
         } catch (\Exception $e) {
             Log::error('Ошибка уведомления о модерации комментария дневника: ' . $e->getMessage());
         }
+    }
+
+       private function clearCaches(): void
+    {
+        Cache::forget('admin_sidebar_stats');
+        Cache::forget('admin_diary_counts'); // Это для самих постов
+        Cache::forget('admin_diary_comment_counts'); // <--- ЭТА СТРОКА ОБЯЗАТЕЛЬНА ДЛЯ КОММЕНТОВ!
     }
 }

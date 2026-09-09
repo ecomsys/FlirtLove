@@ -1,17 +1,27 @@
 <?php
+
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 
 class Setting extends Model
 {
+    // КОНСТАНТЫ ТИПОВ
+    public const TYPE_TEXT = 'text';
+    public const TYPE_TEXTAREA = 'textarea';
+    public const TYPE_BOOLEAN = 'boolean';
+    public const TYPE_INTEGER = 'integer';
+    public const TYPE_SELECT = 'select';
+    public const TYPE_JSON = 'json';
+
     protected $fillable = [
         'key', 
         'value', 
         'group', 
         'label', 
-        'description', // Новое поле для админки
+        'description', 
         'type', 
         'options', 
         'is_public'
@@ -26,33 +36,31 @@ class Setting extends Model
     // КЭШИРОВАНИЕ
     // ============================================
 
-    /**
-     * Получить все настройки из кэша (в виде коллекции моделей).
-     * Кэшируем навсегда, пока не сбросим вручную.
-     */
-    public static function getAllCached(): \Illuminate\Support\Collection
+    public static function getAllCached(): Collection
     {
         return Cache::rememberForever('settings_all', function () {
-            // keyBy('key') позволяет обращаться к настройке по ключу: $settings->get('site_name')
             return static::all()->keyBy('key');
         });
     }
 
-    /**
-     * Сбросить кэш настроек (вызывается автоматически при save/delete)
-     */
     public static function flushCache(): void
     {
         Cache::forget('settings_all');
+    }
+
+        // ============================================
+    // ПОЛУЧЕНИЕ ЗНАЧЕНИЙ ПО УМОЛЧАНИЮ ИЗ КОНФИГА
+    // ============================================
+
+    public static function getDefault(string $key): mixed
+    {
+        return config("settings.{$key}.default");
     }
 
     // ============================================
     // МАГИЧЕСКИЕ МЕТОДЫ ПОЛУЧЕНИЯ ЗНАЧЕНИЙ
     // ============================================
 
-    /**
-     * Получить значение настройки с автокастингом (БЕЗ ЗАПРОСОВ В БД).
-     */
     public static function get(string $key, mixed $default = null): mixed
     {
         $setting = static::getAllCached()->get($key);
@@ -61,13 +69,7 @@ class Setting extends Model
             return $default;
         }
 
-        // Автокаст: приводим значение к нужному типу прямо из кэша!
-        return match ($setting->type) {
-            'boolean' => filter_var($setting->value, FILTER_VALIDATE_BOOLEAN),
-            'integer' => (int) $setting->value,
-            'json'    => json_decode($setting->value, true),
-            default   => $setting->value,
-        };
+        return self::castValue($setting);
     }
 
     /**
@@ -75,6 +77,12 @@ class Setting extends Model
      */
     public static function set(string $key, mixed $value, array $attributes = []): self
     {
+        // ФИКС: Если тип json, кодируем массив в строку перед сохранением
+        $type = $attributes['type'] ?? self::TYPE_TEXT;
+        if ($type === self::TYPE_JSON && is_array($value)) {
+            $value = json_encode($value);
+        }
+
         $setting = static::updateOrCreate(
             ['key' => $key],
             array_merge(['value' => $value], $attributes)
@@ -84,32 +92,38 @@ class Setting extends Model
         return $setting;
     }
 
-    /**
-     * Получить все настройки группы (например, для вкладки "Финансы")
-     */
-    public static function getGroup(string $group): \Illuminate\Support\Collection
+    public static function getGroup(string $group): Collection
     {
         return static::getAllCached()->filter(fn($item) => $item->group === $group);
     }
 
-    /**
-     * Получить публичные настройки для API (фронтенда)
-     */
     public static function getPublic(): array
     {
         return static::getAllCached()
             ->filter(fn($item) => $item->is_public)
-            ->mapWithKeys(fn($item) => [$item->key => self::get($item->key)])
+            ->mapWithKeys(fn($item) => [$item->key => self::castValue($item)])
             ->toArray();
     }
 
+    /**
+     * Внутренний хелпер для приведения типа (чтобы не дублировать код)
+     */
+    private static function castValue(self $setting): mixed
+    {
+        return match ($setting->type) {
+            self::TYPE_BOOLEAN => filter_var($setting->value, FILTER_VALIDATE_BOOLEAN),
+            self::TYPE_INTEGER => (int) $setting->value,
+            self::TYPE_JSON    => json_decode($setting->value, true),
+            default           => $setting->value,
+        };
+    }
+
     // ============================================
-    // СОБЫТИЯ МОДЕЛИ (Автоматический сброс кэша)
+    // СОБЫТИЯ МОДЕЛИ
     // ============================================
 
     protected static function booted()
     {
-        // Если админ изменил настройку в БД -> сбрасываем кэш
         static::saved(function () {
             static::flushCache();
         });

@@ -3,6 +3,7 @@
 use App\Models\AdminLog;
 use App\Models\Diary;
 use App\Models\DiaryRubric;
+use App\Models\User;
 use App\Actions\Admin\ModerateDiaryAction;
 
 use Illuminate\Support\Facades\Log;
@@ -16,20 +17,18 @@ new #[Layout('layouts.admin')] class extends Component
     
     public string $status;
     public ?string $rejectReason = null;
-    public ?string $diaryRubricId = null; // ФИКС: Переименовали для консистентности
+    public ?string $diaryRubricId = null; 
     public bool $isCommentsEnabled;
 
-    /** @var string URL для кнопки "Назад" */
     public string $backUrl = '';
 
-    /**
-     * Инициализация компонента.
-     */
     public function mount(Diary $diary): void
     {
+        // ФИКС: Защита страницы
+        abort_unless(in_array(auth()->user()?->role, [User::ROLE_ADMIN, User::ROLE_MODERATOR]), 403);
+
         $avatarQuery = fn($q) => $q->select(['id', 'user_id', 'is_primary', 'status', 'path_thumb', 'path_medium', 'path_large', 'path_original'])->orderByDesc('is_primary')->limit(1);
         
-        // ФИКС: Загружаем связь diaryRubric (вместо rubric)
         $diary->load(['user' => fn($q) => $q->withTrashed()->with(['photos' => $avatarQuery]), 'diaryRubric']);
 
         $previousUrl = url()->previous();
@@ -55,7 +54,6 @@ new #[Layout('layouts.admin')] class extends Component
         ->get();
     }
 
-    // Хелпер: Валидация и подготовка настроек (Рубрика + Комменты)
     protected function getMetaData(): array
     {
         $this->validate([
@@ -69,27 +67,22 @@ new #[Layout('layouts.admin')] class extends Component
         ];
     }
 
-    // Хелпер: Перезагрузка связей чтобы UI не слетал
     protected function reloadRelations(): void
     {
         $avatarQuery = fn($q) => $q->select(['id', 'user_id', 'is_primary', 'status', 'path_thumb', 'path_medium', 'path_large', 'path_original'])->orderByDesc('is_primary')->limit(1);
-        
-        // ФИКС: Загружаем связь diaryRubric
         $this->diary->load(['user' => fn($q) => $q->withTrashed()->with(['photos' => $avatarQuery]), 'diaryRubric']);
     }
 
-    // Сохранение ТОЛЬКО настроек (Рубрика и Комменты)
     public function saveSettings(): void
     {
         try {
-            // ФИКС: Берем только нужные поля для лога, чтобы не писать весь текст дневника в БД
             $before = [
                 'diary_rubric_id' => $this->diary->getOriginal('diary_rubric_id'), 
                 'is_comments_enabled' => $this->diary->getOriginal('is_comments_enabled')
             ];
             
+            // ФИКС: Убрали refresh(), update() уже обновляет атрибуты в памяти
             $this->diary->update($this->getMetaData());
-            $this->diary->refresh();
             
             $after = [
                 'diary_rubric_id' => $this->diary->diary_rubric_id, 
@@ -110,7 +103,6 @@ new #[Layout('layouts.admin')] class extends Component
         }
     }
 
-    // Войти в режим отклонения
     public function initiateReject(): void
     {
         $this->status = 'rejected';
@@ -118,7 +110,6 @@ new #[Layout('layouts.admin')] class extends Component
         $this->reloadRelations();
     }
 
-    // Отменить отклонение
     public function cancelAction(): void
     {
         $this->status = $this->diary->status;
@@ -165,6 +156,7 @@ new #[Layout('layouts.admin')] class extends Component
     }
 }; 
 ?>
+
 
 <div class="space-y-6 pb-6">
     <!-- Заголовок -->

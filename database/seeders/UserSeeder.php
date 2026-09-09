@@ -5,7 +5,7 @@ namespace Database\Seeders;
 use App\Models\User;
 use App\Models\UserProfile;
 use App\Models\UserPreference;
-use App\Models\UserBalance; // <--- ДОБАВИЛИ
+use App\Models\UserBalance;
 use App\Models\Album;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Hash;
@@ -19,7 +19,6 @@ class UserSeeder extends Seeder
 
         $genders = ['male', 'female'];
         $goals = ['friends', 'romantic', 'family', 'casual', 'travel'];
-        $cities = ['Москва', 'Санкт-Петербург', 'Казань', 'Новосибирск', 'Екатеринбург', 'Сочи', 'Краснодар', 'Владивосток'];
         
         $bios = [
             "Люблю путешествия и активный отдых. Ищу единомышленников.",
@@ -62,168 +61,182 @@ class UserSeeder extends Seeder
             return array_slice($keys, 0, $count);
         };
 
+        $russia = DB::table('countries')->where('iso2', 'RU')->first();
+        $cityIds = DB::table('cities')->where('country_id', $russia->id ?? 0)->pluck('id')->toArray();
+
         for ($i = 1; $i <= 30; $i++) {
             $year = rand(1984, 2006);
             $month = rand(1, 12);
             $day = rand(1, 28);
             $birthDate = "{$year}-{$month}-{$day}";
+            
+            // Убрали вычисление возраста, Postgres/PHP сделает это сам
 
             $isPremium = rand(1, 10) <= 3;
             $premiumExpires = $isPremium ? now()->addDays(rand(10, 365)) : null;
 
             $gender = $genders[array_rand($genders)];
 
-            // Имитация ботоварни
             if (in_array($i, [8, 9, 10])) {
                 $ip = '185.23.44.12'; 
-                $status = 'shadowbanned';
+                $status = User::STATUS_SHADOWBANNED;
             } else {
                 $ip = rand(100, 220) . '.' . rand(10, 250) . '.' . rand(1, 255) . '.' . rand(1, 255);
-                $status = 'active';
+                $status = User::STATUS_ACTIVE;
             }
 
-            // 1. Создаем Юзера
-            $user = User::updateOrCreate(
-                ['email' => 'user' . $i . '@test.com'],
-                [
-                    'name' => 'Пользователь ' . $i,
-                    'password' => Hash::make('password'),
-                    'email_verified_at' => now(),
-                    'role' => 'user',
-                    'status' => $status,
-                    'is_premium' => $isPremium,
-                    'premium_expires_at' => $premiumExpires,
-                    'is_verified' => (bool) rand(0, 1),
-                    'has_completed_onboarding' => true,
-                    'last_login_at' => now()->subDays(rand(0, 30)),
-                    'last_login_ip' => $ip, 
-                    'last_seen' => now()->subMinutes(rand(1, 4320)),
-                ]
-            );
+            // 1. Создаем Юзера (отключив события, чтобы избежать авто-создания пустых связей)
+            $user = User::withoutEvents(function () use ($i, $status, $ip, $isPremium, $premiumExpires) {
+                return User::updateOrCreate(
+                    ['email' => 'user' . $i . '@test.com'],
+                    [
+                        'name' => 'Пользователь ' . $i,
+                        'password' => Hash::make('password'),
+                        'email_verified_at' => now(),
+                        'role' => User::ROLE_USER,
+                        'status' => $status,
+                        // Убрали is_premium
+                        'premium_expires_at' => $premiumExpires,
+                        'is_verified' => (bool) rand(0, 1),
+                        'has_completed_onboarding' => true,
+                        'last_login_at' => now()->subDays(rand(0, 30)),
+                        'last_login_ip' => $ip, 
+                        'last_seen' => now()->subMinutes(rand(1, 4320)),
+                    ]
+                );
+            });
 
             $lat = 55.5 + (rand(0, 100) / 100); 
             $lng = 37.3 + (rand(0, 100) / 100); 
 
-            // 2. Обновляем Профиль
-            UserProfile::updateOrCreate(
-                ['user_id' => $user->id],
-                [
-                    'gender' => $gender,
-                    'birth_date' => $birthDate,
-                    'dating_goal' => $goals[array_rand($goals)],
-                    'city' => $cities[array_rand($cities)],
-                    'country' => 'Россия',
-                    'headline' => $bios[array_rand($bios)],
-                    'bio' => $bios[array_rand($bios)],
-                    'looking_for' => $lookingFors[array_rand($lookingFors)],
-                    'interests' => ['музыка', 'кино', 'спорт', 'путешествия', 'книги'],
-                    'self_portrait' => null,
-                    'body_type' => array_rand($options['body_type']),
-                    'eye_color' => array_rand($options['eye_color']),
-                    'hair_color' => array_rand($options['hair_color']),
-                    'height' => rand(155, 200),
-                    'weight' => rand(45, 110),
-                    'relationship_status' => array_rand($options['relationship_status']),
-                    'children_status' => array_rand($options['children_status']),
-                    'pets' => array_rand($options['pets']),
-                    'housing' => array_rand($options['housing']),
-                    'has_car' => array_rand($options['has_car']),
-                    'smoking' => array_rand($options['smoking']),
-                    'alcohol' => array_rand($options['alcohol']),
-                    'zodiac_sign' => $this->getZodiacSign($month, $day),
-                    'body_decorations' => $getRandomIds($options['body_decorations'], 0, 2),
-                    'languages' => $getRandomIds($options['languages'], 1, 3),
-                    'sports' => $getRandomIds($options['sports'], 0, 4),
-                    'education' => array_rand($options['education_level']),                    
-                    'institution' => $institutions[array_rand($institutions)],
-                    'institution_year' => rand(2005, (int) date('Y') - 1),
-                    'activity' => $activities[array_rand($activities)],
-                    'position' => $positions[array_rand($positions)],
-                    'location' => DB::raw("ST_SetSRID(ST_MakePoint({$lng}, {$lat}), 4326)::geography"),
-                ]
-            );
+            // 2. Создаем связи в транзакции
+            DB::transaction(function () use ($user, $gender, $genders, $birthDate, $month, $day, $goals, $cityIds, $russia, $bios, $lookingFors, $options, $getRandomIds, $institutions, $activities, $positions, $lng, $lat, $isPremium) {
+                
+                UserProfile::updateOrCreate(
+                    ['user_id' => $user->id],
+                    [
+                        'gender' => $gender,
+                        // Убрали 'age' => $age
+                        'birth_date' => $birthDate,
+                        'dating_goal' => $goals[array_rand($goals)],
+                        'city_id' => !empty($cityIds) ? $cityIds[array_rand($cityIds)] : null,
+                        'country_id' => $russia->id ?? null,
+                        'headline' => $bios[array_rand($bios)],
+                        'bio' => $bios[array_rand($bios)],
+                        'looking_for' => $lookingFors[array_rand($lookingFors)],
+                        'interests' => ['музыка', 'кино', 'спорт', 'путешествия', 'книги'],
+                        'self_portrait' => null,
+                        'body_type' => array_rand($options['body_type']),
+                        'eye_color' => array_rand($options['eye_color']),
+                        'hair_color' => array_rand($options['hair_color']),
+                        'height' => rand(155, 200),
+                        'weight' => rand(45, 110),
+                        'relationship_status' => array_rand($options['relationship_status']),
+                        'children_status' => array_rand($options['children_status']),
+                        'pets' => array_rand($options['pets']),
+                        'housing' => array_rand($options['housing']),
+                        'has_car' => array_rand($options['has_car']),
+                        'smoking' => array_rand($options['smoking']),
+                        'alcohol' => array_rand($options['alcohol']),
+                        'zodiac_sign' => $this->getZodiacSign($month, $day),
+                        'body_decorations' => $getRandomIds($options['body_decorations'], 0, 2),
+                        'languages' => $getRandomIds($options['languages'], 1, 3),
+                        'sports' => $getRandomIds($options['sports'], 0, 4),
+                        'education' => array_rand($options['education_level']),                    
+                        'institution' => $institutions[array_rand($institutions)],
+                        'institution_year' => rand(2005, (int) date('Y') - 1),
+                        'activity' => $activities[array_rand($activities)],
+                        'position' => $positions[array_rand($positions)],
+                        'location' => DB::raw("ST_SetSRID(ST_MakePoint({$lng}, {$lat}), 4326)::geography"),
+                    ]
+                );
 
-            // 3. Обновляем Настройки (БЕЗ КРЕДИТОВ И ЛАЙКОВ)
-            $emailSettings = [
-                'on_message' => (bool) rand(0, 1),
-                'on_like' => (bool) rand(0, 1),
-                'on_view' => (bool) rand(0, 1),
-                'on_gift' => (bool) rand(0, 1),
-                'on_event' => (bool) rand(0, 1),
-                'on_broadcast' => (bool) rand(0, 1),
-                'sub_new_faces' => (bool) rand(0, 1),
-                'sub_popular' => (bool) rand(0, 1),
-            ];
+                $emailSettings = [
+                    'on_message' => (bool) rand(0, 1),
+                    'on_like' => (bool) rand(0, 1),
+                    'on_view' => (bool) rand(0, 1),
+                    'on_gift' => (bool) rand(0, 1),
+                    'on_event' => (bool) rand(0, 1),
+                    'on_broadcast' => (bool) rand(0, 1),
+                    'sub_new_faces' => (bool) rand(0, 1),
+                    'sub_popular' => (bool) rand(0, 1),
+                ];
 
-            UserPreference::updateOrCreate(
-                ['user_id' => $user->id],
-                [
-                    'locale' => 'ru',
-                    'theme' => 'light',
-                    'preferred_age_min' => rand(18, 25),
-                    'preferred_age_max' => rand(30, 45),
-                    'preferred_gender' => $genders[array_rand($genders)],
-                    'preferred_distance_km' => rand(10, 100),
-                    'search_filters' => null,
-                    'chat_filter_enabled' => $isPremium ? (bool) rand(0, 1) : false,
-                    'chat_filter_settings' => null,
-                    'is_invisible' => $isPremium ? (bool) rand(0, 1) : false,
-                    'hide_intimate' => (bool) rand(0, 1),
-                    'disable_photo_comments' => (bool) rand(0, 1),
-                    'hide_from_search' => false,
-                    'push_enabled' => (bool) rand(0, 1),
-                    'email_enabled' => true,
-                    'email_settings' => $emailSettings,
-                ]
-            );
+                                UserPreference::updateOrCreate(
+                    ['user_id' => $user->id],
+                    [
+                        'locale' => 'ru',
+                        'theme' => 'light',
+                        'preferred_age_min' => rand(18, 25),
+                        'preferred_age_max' => rand(30, 45),
+                        'preferred_gender' => $genders[array_rand($genders)],
+                        'preferred_distance_km' => rand(10, 100),
+                        'search_filters' => null, // null оставляем как есть
+                        'chat_filter_enabled' => $isPremium ? (bool) rand(0, 1) : false,
+                        'chat_filter_settings' => null, // null оставляем
+                        'is_invisible' => $isPremium ? (bool) rand(0, 1) : false,
+                        'hide_intimate' => (bool) rand(0, 1),
+                        'disable_photo_comments' => (bool) rand(0, 1),
+                        'hide_from_search' => false,
+                        'show_quick_replies' => true,
+                        'push_enabled' => (bool) rand(0, 1),
+                        'email_enabled' => true,
+                        'visibility_gender' => 'any',
+                        'visibility_age_min' => 18,
+                        'visibility_age_max' => 99,
+                        'push_auto_recommendations' => (bool) rand(0, 1),
+                        'email_auto_recommendations' => (bool) rand(0, 1),
+                        'allow_auto_messages' => (bool) rand(0, 1),
+                        'chat_widget_enabled' => true,
+                        'chat_sound_enabled' => true,
+                        // ФИКС: Оборачиваем массивы в json_encode для PostgreSQL
+                        'email_settings' => json_encode($emailSettings), 
+                    ]
+                );
 
-            // 4. Обновляем БАЛАНС (НОВОЕ)
-            UserBalance::updateOrCreate(
-                ['user_id' => $user->id],
-                [
-                    'credits' => rand(0, 500),
-                    'superlikes_remaining' => rand(0, 5),
-                    'superlikes_reset_at' => now()->addHours(rand(1, 24)),
-                ]
-            );
+                UserBalance::updateOrCreate(
+                    ['user_id' => $user->id],
+                    [
+                        'credits' => rand(0, 500),
+                        'superlikes_remaining' => rand(0, 5),
+                        'superlikes_reset_at' => now()->addHours(rand(1, 24)),
+                    ]
+                );
 
-            // 5. Обновляем Альбом
-            Album::updateOrCreate(
-                ['user_id' => $user->id, 'is_default' => true],
-                [
-                    'name' => 'Общие',
-                    'description' => 'Основные фотографии',
-                    'is_private' => false,
-                    'photos_count' => 0,
-                ]
-            );
+                Album::updateOrCreate(
+                    ['user_id' => $user->id, 'is_default' => true],
+                    [
+                        'name' => 'Общие',
+                        'description' => 'Основные фотографии',
+                        'is_private' => false,
+                        'photos_count' => 0,
+                    ]
+                );
+            });
 
             if ($i % 5 === 0) {
                 $this->command->info("   ⏳ Создано {$i} пользователей...");
             }
         }
 
-        $this->command->info('   ✅ Создано пользователей: ' . User::where('role', 'user')->count());
+        $this->command->info('   ✅ Создано пользователей: ' . User::where('role', User::ROLE_USER)->count());
     }
 
-    /**
-     * Возвращаем номер знака зодиака (1-12) вместо строки
-     */
     private function getZodiacSign(int $month, int $day): int
     {
         $zodiacs = [
-            1 => ['start' => '03-21', 'end' => '04-19'], // Овен
-            2 => ['start' => '04-20', 'end' => '05-20'], // Телец
-            3 => ['start' => '05-21', 'end' => '06-20'], // Близнецы
-            4 => ['start' => '06-21', 'end' => '07-22'], // Рак
-            5 => ['start' => '07-23', 'end' => '08-22'], // Лев
-            6 => ['start' => '08-23', 'end' => '09-22'], // Дева
-            7 => ['start' => '09-23', 'end' => '10-22'], // Весы
-            8 => ['start' => '10-23', 'end' => '11-21'], // Скорпион
-            9 => ['start' => '11-22', 'end' => '12-21'], // Стрелец
-            10 => ['start' => '12-22', 'end' => '01-19'], // Козерог
-            11 => ['start' => '01-20', 'end' => '02-18'], // Водолей
-            12 => ['start' => '02-19', 'end' => '03-20'], // Рыбы
+            1 => ['start' => '03-21', 'end' => '04-19'], 
+            2 => ['start' => '04-20', 'end' => '05-20'], 
+            3 => ['start' => '05-21', 'end' => '06-20'], 
+            4 => ['start' => '06-21', 'end' => '07-22'], 
+            5 => ['start' => '07-23', 'end' => '08-22'], 
+            6 => ['start' => '08-23', 'end' => '09-22'], 
+            7 => ['start' => '09-23', 'end' => '10-22'], 
+            8 => ['start' => '10-23', 'end' => '11-21'], 
+            9 => ['start' => '11-22', 'end' => '12-21'], 
+            10 => ['start' => '12-22', 'end' => '01-19'], 
+            11 => ['start' => '01-20', 'end' => '02-18'], 
+            12 => ['start' => '02-19', 'end' => '03-20'], 
         ];
 
         $date = sprintf('%02d-%02d', $month, $day);
@@ -240,6 +253,6 @@ class UserSeeder extends Seeder
             }
         }
 
-        return 1; // По умолчанию Овен
+        return 1; 
     }
 }

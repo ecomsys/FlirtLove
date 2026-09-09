@@ -34,21 +34,21 @@ new class extends Component
         return $sessions->map(function ($session) {
             $ua = $session->user_agent;
             
-            $device = 'Устройство';
-            if (preg_match('/(iPad|iPhone|Android|Windows Phone)/i', $ua)) {
-                $device = preg_match('/(iPad)/i', $ua) ? 'iPad' : (preg_match('/(iPhone)/i', $ua) ? 'iPhone' : (preg_match('/(Android)/i', $ua) ? 'Android' : 'Mobile'));
-            } else {
-                $device = 'Компьютер';
-            }
-
+            // Определение устройства
+            $device = 'Компьютер';
+            if (preg_match('/(iPad)/i', $ua)) $device = 'iPad';
+            elseif (preg_match('/(iPhone)/i', $ua)) $device = 'iPhone';
+            elseif (preg_match('/(Android)/i', $ua)) $device = 'Android';
+            
+            // Определение браузера
             $browser = 'Браузер';
-            if (preg_match('/(Chrome|CriOS)/i', $ua) && !preg_match('/(Edg|OPR)/i', $ua)) $browser = 'Chrome';
-            elseif (preg_match('/(Safari)/i', $ua) && !preg_match('/(Chrome)/i', $ua)) $browser = 'Safari';
-            elseif (preg_match('/(Edg)/i', $ua)) $browser = 'Edge';
-            elseif (preg_match('/(Firefox|FxiOS)/i', $ua)) $browser = 'Firefox';
+            if (preg_match('/(Edg)/i', $ua)) $browser = 'Edge';
             elseif (preg_match('/(OPR|Opera)/i', $ua)) $browser = 'Opera';
+            elseif (preg_match('/(Chrome|CriOS)/i', $ua)) $browser = 'Chrome';
+            elseif (preg_match('/(Firefox|FxiOS)/i', $ua)) $browser = 'Firefox';
+            elseif (preg_match('/(Safari)/i', $ua)) $browser = 'Safari';
 
-            $isMobile = in_array($device, ['iPad', 'iPhone', 'Android', 'Mobile']);
+            $isMobile = in_array($device, ['iPad', 'iPhone', 'Android']);
 
             return [
                 'id' => $session->id,
@@ -139,7 +139,7 @@ new class extends Component
                 <x-ui.alert-dialog-trigger>
                     <x-ui.button variant="destructive" size="sm" wire:loading.attr="disabled" wire:target="killAllSessions">
                         <x-lucide-power class="w-4 h-4" wire:loading.remove wire:target="killAllSessions" />
-                        <x-lucide-loader-2 class="w-4 h-4 animate-spin hidden" wire:loading wire:target="killAllSessions" />
+                        <x-lucide-loader-2 class="w-4 h-4 animate-spin" wire:loading wire:target="killAllSessions" />
                         Завершить все сессии
                     </x-ui.button>
                 </x-ui.alert-dialog-trigger>
@@ -192,7 +192,7 @@ new class extends Component
 
                     <x-ui.button variant="ghost" size="sm" wire:click="killSession('{{ $session['id'] }}')" wire:confirm="Завершить эту сессию?" wire:loading.attr="disabled" wire:target="killSession('{{ $session['id'] }}')" class="text-destructive hover:text-destructive shrink-0">
                         <x-lucide-x class="w-4 h-4" wire:loading.remove wire:target="killSession('{{ $session['id'] }}')" />
-                        <x-lucide-loader-2 class="w-4 h-4 animate-spin hidden" wire:loading wire:target="killSession('{{ $session['id'] }}')" />
+                        <x-lucide-loader-2 class="w-4 h-4 animate-spin" wire:loading wire:target="killSession('{{ $session['id'] }}')" />
                         Завершить
                     </x-ui.button>
                 </div>

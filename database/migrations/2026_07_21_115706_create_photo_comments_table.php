@@ -11,53 +11,36 @@ return new class extends Migration
         Schema::create('photo_comments', function (Blueprint $table) {
             $table->id();
             
-            // Фото, к которому оставлен комментарий. 
-            // Убрали cascade, т.к. используем softDeletes у фото. Если фото удалят насовсем, cascade сработает.
             $table->foreignId('photo_id')->nullable()->constrained()->nullOnDelete();
+            $table->foreignId('user_id')->nullable()->constrained('users')->nullOnDelete();
             
-            // Автор комментария. Аналогично, без cascade, чтобы сохранить комментарии забаненных юзеров для истории.
-            $table->foreignId('user_id')->nullable()->constrained()->nullOnDelete();
-            
-            // Текст комментария
             $table->text('content');
             
-            // Статус модерации: pending (ожидает), approved (одобрено), rejected (отклонено), spam (спам)
             $table->enum('status', ['pending', 'approved', 'rejected', 'spam'])->default('pending');
-            
-            // Причина отклонения модератором (mat, insult, spam и т.д.)
             $table->string('reject_reason')->nullable();
             
-            // ID админа/модератора, проверившего комментарий (приводим к единому паттерну с фото)
             $table->foreignId('moderated_by')->nullable()->constrained('users')->nullOnDelete();
-            // Дата и время модерации (заменили approved_at и rejected_at на одно поле)
             $table->timestamp('moderated_at')->nullable();
             
-            // Для вложенных комментариев (ответы). Ссылается на эту же таблицу.
             $table->foreignId('parent_id')->nullable()->constrained('photo_comments')->nullOnDelete();
             
-            // Денормализация для скорости (чтобы не делать COUNT запросы при выводе дерева комментариев)
-            $table->unsignedInteger('likes_count')->default(0);
-            $table->unsignedInteger('reports_count')->default(0);
-            $table->unsignedInteger('replies_count')->default(0); // Добавили счетчик ответов
+            // BigInteger для защиты от переполнения на вирусных фото
+            $table->unsignedBigInteger('likes_count')->default(0);
+            $table->unsignedBigInteger('reports_count')->default(0);
+            $table->unsignedBigInteger('replies_count')->default(0); 
             
-            // Флаги UI
-            $table->boolean('is_pinned')->default(false); // Закрепленный комментарий (владельцем фото или админом)
-            $table->timestamp('edited_at')->nullable(); // Если не null — комментарий был отредактирован (убрали is_edited за ненадобностью)
+            $table->boolean('is_pinned')->default(false); 
+            $table->timestamp('edited_at')->nullable(); 
             
             $table->timestamps();
-            
-            // Мягкое удаление. Критически важно для СБ! Если юзер удалил свой мат, он должен остаться в БД.
             $table->softDeletes();
             
             // === ИНДЕКСЫ ===
             
-            // Основной запрос: вывести одобренные комментарии верхнего уровня (parent_id = null) для фото
-            $table->index(['photo_id', 'status', 'parent_id']);
+            // Добавили created_at для моментальной пагинации дерева комментариев
+            $table->index(['photo_id', 'status', 'parent_id', 'created_at']);
             
-            // История комментариев юзера (для админки и профиля)
             $table->index(['user_id', 'created_at']);
-            
-            // Для очереди модерации в админке
             $table->index(['status', 'created_at']);
         });
     }

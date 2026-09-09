@@ -11,28 +11,23 @@ return new class extends Migration
         Schema::create('diary_rubrics', function (Blueprint $table) {
             $table->id();
 
-            //  Кто создал рубрику. Если null — рубрика системная (от админа)
+            // Кто создал рубрику. Если null — рубрика системная
             $table->foreignId('user_id')->nullable()->constrained('users')->cascadeOnDelete();
             
-            // Название рубрики ("Мысли", "Стихи", "Путешествия")
             $table->string('name');
             
-            // ЧПУ-слаг для URL (mysite.com/diary/thoughts)
+            // slug глобально уникален, отдельный составной индекс не нужен
             $table->string('slug')->unique();
             
-            // Описание (инфо для админки, что входит в рубрику)
             $table->text('description')->nullable();
             
-            // Управление показом
             $table->boolean('is_active')->default(true);
-            
-            // Сортировка в меню рубрик
             $table->unsignedSmallInteger('sort_order')->default(0);
             
             $table->timestamps();
 
-            // Защита: юзер не может создать две рубрики с одинаковым slug у себя
-            $table->unique(['user_id', 'slug']);
+            // Для быстрого вывода активных рубрик в меню (без filesort)
+            $table->index(['is_active', 'sort_order']);
         });
     }
 

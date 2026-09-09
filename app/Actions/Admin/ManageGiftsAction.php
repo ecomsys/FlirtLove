@@ -6,6 +6,7 @@ use App\Models\AdminLog;
 use App\Models\Gift;
 use App\Models\UserGift;
 use App\Models\User;
+use Illuminate\Support\Facades\Cache;
 
 class ManageGiftsAction
 {
@@ -27,6 +28,7 @@ class ManageGiftsAction
         ];
 
         AdminLog::record('gift.create', $gift, $admin, null, $after);
+        $this->clearCache();
         
         return $gift;
     }
@@ -36,10 +38,10 @@ class ManageGiftsAction
      */
     public function updateGift(Gift $gift, array $data, User $admin): Gift
     {
-        $before = $gift->getOriginal(['name', 'slug', 'image_url', 'price', 'category', 'is_active']);
+        $before = $gift->only(['name', 'slug', 'image_url', 'price', 'category', 'is_active']);
+        
         $gift->update($data);
-        $gift->refresh();
-
+        
         $after = [
             'name' => $gift->name,
             'slug' => $gift->slug,
@@ -52,6 +54,7 @@ class ManageGiftsAction
         ];
 
         AdminLog::record('gift.update', $gift, $admin, $before, $after);
+        $this->clearCache();
         
         return $gift;
     }
@@ -66,7 +69,6 @@ class ManageGiftsAction
         if ($sentCount > 0) {
             $before = ['is_active' => $gift->getOriginal('is_active')];
             $gift->update(['is_active' => false]);
-            $gift->refresh();
 
             $after = [
                 'is_active' => false, 
@@ -79,6 +81,7 @@ class ManageGiftsAction
             ];
             
             AdminLog::record('gift.deactivate', $gift, $admin, $before, $after);
+            $this->clearCache();
             
             return false; // Возвращаем false, значит не удалено, а скрыто
         }
@@ -97,6 +100,7 @@ class ManageGiftsAction
 
         AdminLog::record('gift.delete', $gift, $admin, null, $after);
         $gift->delete();
+        $this->clearCache();
         
         return true; // Удалено физически
     }
@@ -108,7 +112,6 @@ class ManageGiftsAction
     {
         $before = ['is_active' => $gift->getOriginal('is_active')];
         $gift->update(['is_active' => !$gift->is_active]);
-        $gift->refresh();
 
         $after = [
             'is_active' => $gift->is_active, 
@@ -120,6 +123,7 @@ class ManageGiftsAction
         ];
 
         AdminLog::record('gift.toggle_status', $gift, $admin, $before, $after);
+        $this->clearCache();
     }
 
     /**
@@ -129,7 +133,6 @@ class ManageGiftsAction
     {
         $before = ['deleted_at' => $userGift->getOriginal('deleted_at')];
         $userGift->delete();
-        $userGift->refresh();
 
         $after = [
             'deleted_at' => now()->toDateTimeString(), 
@@ -143,10 +146,10 @@ class ManageGiftsAction
             ]
         ];
 
-        // Пишем в логи обоим участникам сделки
         $participants = array_filter([$userGift->sender_id, $userGift->receiver_id]);
 
         AdminLog::record('user_gift.hide', $userGift, $admin, $before, $after, participants: $participants);
+        $this->clearCache();
     }
 
     /**
@@ -156,7 +159,6 @@ class ManageGiftsAction
     {
         $before = ['deleted_at' => $userGift->getOriginal('deleted_at')];
         $userGift->restore();
-        $userGift->refresh();
 
         $after = [
             'deleted_at' => null, 
@@ -173,5 +175,14 @@ class ManageGiftsAction
         $participants = array_filter([$userGift->sender_id, $userGift->receiver_id]);
 
         AdminLog::record('user_gift.restore', $userGift, $admin, $before, $after, participants: $participants);
+        $this->clearCache();
+    }
+
+    /**
+     * Сброс кэша счетчиков
+     */
+    private function clearCache(): void
+    {
+        Cache::forget('admin_gifts_counts');
     }
 }

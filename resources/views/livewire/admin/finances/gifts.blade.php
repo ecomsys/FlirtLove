@@ -6,6 +6,8 @@ use App\Models\UserGift;
 use App\Enums\GiftCategory;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rules\Enum;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Validation\Rule;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Layout;
 use Livewire\Volt\Component;
@@ -51,6 +53,18 @@ new #[Layout('layouts.admin')] class extends Component
 
         if (request()->has('history_search')) {
             $this->activeTab = 'history';
+            $searchTerm = (string) request()->input('history_search');
+            
+            if (ctype_digit($searchTerm)) {
+                $gift = UserGift::withTrashed()->find((int) $searchTerm);
+                if ($gift) {
+                    $this->historySearch = $searchTerm;
+                    // Автопереключение фильтра приватности
+                    $this->privacyFilter = $gift->is_private ? 'private' : 'public';
+                    return;
+                }
+            }
+            $this->historySearch = $searchTerm;
             $this->privacyFilter = 'all';
             return;
         }
@@ -62,17 +76,6 @@ new #[Layout('layouts.admin')] class extends Component
         }
 
         $this->activeTab = session('admin_gifts_tab', 'catalog');
-    }
-
-    #[Computed]
-    public function historyCounts(): array
-    {
-        $baseQuery = UserGift::withTrashed();
-        return [
-            'all' => (clone $baseQuery)->count(),
-            'public' => (clone $baseQuery)->where('is_private', false)->count(),
-            'private' => (clone $baseQuery)->where('is_private', true)->count(),
-        ];
     }
 
     #[On('media-selected')]
@@ -94,21 +97,39 @@ new #[Layout('layouts.admin')] class extends Component
         
         unset($this->gifts);
         unset($this->userGifts);
-        unset($this->tabCounts);
-        unset($this->historyCounts);
+        unset($this->counts);
     }
 
+    // ФИКС: Объединили счетчики и закэшировали
     #[Computed]
-    public function tabCounts(): array
+    public function counts(): array
     {
-        return [
-            'catalog' => Gift::count(),
-            'history' => UserGift::withTrashed()->count(),
-        ];
+        return Cache::remember('admin_gifts_counts', 60, function () {
+            $catalogCount = Gift::count();
+            
+            $historyStats = UserGift::withTrashed()
+                ->selectRaw("COUNT(*) as total")
+                ->selectRaw("SUM(CASE WHEN is_private = false THEN 1 ELSE 0 END) as public")
+                ->selectRaw("SUM(CASE WHEN is_private = true THEN 1 ELSE 0 END) as private")
+                ->first();
+
+            return [
+                'catalog' => $catalogCount,
+                'history' => (int) ($historyStats->total ?? 0),
+                'all' => (int) ($historyStats->total ?? 0),
+                'public' => (int) ($historyStats->public ?? 0),
+                'private' => (int) ($historyStats->private ?? 0),
+            ];
+        });
     }
 
     public function updatedCatalogSearch(): void { $this->resetPage(); unset($this->gifts); }
-    public function updatedCategoryFilter(): void { $this->resetPage(); unset($this->gifts); }
+
+    public function updatedCategoryFilter(): void { 
+        $this->catalogSearch = ''; // ДОБАВИЛИ
+        $this->resetPage(); 
+        unset($this->gifts); 
+    }
     
     public function clearCatalogSearch(): void
     {
@@ -178,7 +199,7 @@ new #[Layout('layouts.admin')] class extends Component
         $this->dispatch('show-toast', type: 'success', message: 'Подарок добавлен в каталог!');
         $this->showGiftModal = false;
         unset($this->gifts);
-        unset($this->tabCounts);
+        unset($this->counts);
     }
 
     public function updateGift(ManageGiftsAction $action): void
@@ -219,9 +240,10 @@ new #[Layout('layouts.admin')] class extends Component
         }
         
         unset($this->gifts);
-        unset($this->tabCounts);
+        unset($this->counts);
     }
 
+    // ФИКС: Убрали $gift->fresh(), так как toggleStatus в Action уже обновляет модель в памяти
     public function toggleGiftStatus(int $id, ManageGiftsAction $action): void
     {
         $gift = Gift::find($id);
@@ -229,20 +251,18 @@ new #[Layout('layouts.admin')] class extends Component
 
         $action->toggleStatus($gift, auth()->user());
 
-        $this->dispatch('show-toast', type: 'success', message: $gift->fresh()->is_active ? 'Подарок в продаже' : 'Подарок скрыт');
+        $this->dispatch('show-toast', type: 'success', message: $gift->is_active ? 'Подарок в продаже' : 'Подарок скрыт');
         unset($this->gifts);
     }
 
     protected function giftRules(): array
     {
-        $slugRule = 'required|alpha_dash|unique:gifts,slug';
-        if ($this->editingGiftId) {
-            $slugRule .= ',' . $this->editingGiftId;
-        }
+        // ФИКС: Безопасный Rule::unique для PostgreSQL
+        $slugRule = Rule::unique('gifts', 'slug')->ignore($this->editingGiftId);
 
         return [
             'modalName' => 'required|string|max:255',
-            'modalSlug' => $slugRule,
+            'modalSlug' => ['required', 'regex:/^[a-z0-9\-_]+$/', $slugRule],
             'modalImageUrl' => 'required|string|max:255',
             'modalPrice' => 'required|integer|min:1',
             'modalCategory' => ['required', new Enum(GiftCategory::class)],
@@ -257,11 +277,15 @@ new #[Layout('layouts.admin')] class extends Component
 
         return Gift::query()
             ->when($this->catalogSearch, function ($q) use ($operator) {
-                $search = $this->catalogSearch;
-                $q->where(function ($q) use ($search, $operator) {
+                $search = trim($this->catalogSearch);
+                // ФИКС: ctype_digit
+                $isId = !empty($search) && ctype_digit($search);
+                
+                $q->where(function ($q) use ($search, $operator, $isId) {
                     $q->where('name', $operator, "%{$search}%")
                       ->orWhere('slug', $operator, "%{$search}%");
-                    if (is_numeric($search)) {
+                      
+                    if ($isId) {
                         $q->orWhere('id', (int) $search);
                     }
                 });
@@ -272,8 +296,32 @@ new #[Layout('layouts.admin')] class extends Component
             ->paginate(15);
     }
 
-    public function updatedHistorySearch(): void { $this->resetPage(); unset($this->userGifts); }
-    public function updatedPrivacyFilter(): void { $this->resetPage(); unset($this->userGifts); }
+    public function updatedHistorySearch(): void { 
+        $this->resetPage(); 
+        unset($this->userGifts); 
+        unset($this->counts);
+
+        $search = trim($this->historySearch);
+        if (ctype_digit($search) && !empty($search)) {
+            $gift = UserGift::withTrashed()->find((int) $search);
+            if ($gift) {
+                // Автопереключение фильтра приватности
+                $this->privacyFilter = $gift->is_private ? 'private' : 'public';
+                return;
+            }
+        }
+        
+        // Если ввели текст, а не ID, сбрасываем на "Все", чтобы найти по имени
+        if (!empty($search) && $this->privacyFilter !== 'all') {
+            $this->privacyFilter = 'all';
+        }
+    }
+
+     public function updatedPrivacyFilter(): void { 
+        $this->historySearch = ''; // ДОБАВИЛИ
+        $this->resetPage(); 
+        unset($this->userGifts); 
+    }
     
     public function clearHistorySearch(): void
     {
@@ -291,7 +339,7 @@ new #[Layout('layouts.admin')] class extends Component
 
         $this->dispatch('show-toast', type: 'success', message : 'Подарок отозван и скрыт из профиля юзера');
         unset($this->userGifts);
-        unset($this->historyCounts);
+        unset($this->counts);
     }
 
     public function restoreUserGift(int $id, ManageGiftsAction $action): void
@@ -303,7 +351,7 @@ new #[Layout('layouts.admin')] class extends Component
 
         $this->dispatch('show-toast', type: 'success', message : 'Подарок возвращен в профиль юзера');
         unset($this->userGifts);
-        unset($this->historyCounts);
+        unset($this->counts);
     }
 
     #[Computed]
@@ -311,7 +359,7 @@ new #[Layout('layouts.admin')] class extends Component
     {
         $operator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
         
-        $userQuery = fn($q) => $q->withTrashed()->select('id', 'name', 'email', 'status', 'is_premium', 'premium_expires_at', 'last_seen', 'deleted_at')
+        $userQuery = fn($q) => $q->withTrashed()->select('id', 'name', 'email', 'status', 'premium_expires_at', 'vip_expires_at', 'last_seen', 'deleted_at')
             ->with(['photos' => fn($sq) => $sq->select('id', 'user_id', 'is_primary', 'status', 'path_thumb')->orderByDesc('is_primary')->limit(1)]);
 
         return UserGift::query()
@@ -322,11 +370,15 @@ new #[Layout('layouts.admin')] class extends Component
                 'gift:id,name,image_url'
             ])
             ->when($this->historySearch, function ($q) use ($operator) {
-                $search = $this->historySearch;
-                $q->where(function ($q) use ($search, $operator) {
+                $search = trim($this->historySearch);
+                // ФИКС: ctype_digit
+                $isId = !empty($search) && ctype_digit($search);
+                
+                $q->where(function ($q) use ($search, $operator, $isId) {
                     $q->whereHas('sender', fn($sq) => $sq->withTrashed()->where('name', $operator, "%{$search}%"))
                       ->orWhereHas('receiver', fn($rq) => $rq->withTrashed()->where('name', $operator, "%{$search}%"));
-                    if (is_numeric($search)) {
+                      
+                    if ($isId) {
                         $q->orWhere('id', (int) $search);
                     }
                 });
@@ -360,11 +412,11 @@ new #[Layout('layouts.admin')] class extends Component
         <nav class="flex gap-4 flex-wrap">
             <button wire:click="setTab('catalog')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 {{ $activeTab === 'catalog' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
                 <x-lucide-package class="w-4 h-4" /> Каталог 
-                <x-ui.badge variant="{{ $activeTab === 'catalog' ? 'default' : 'secondary' }}" size="xs">{{ $this->tabCounts['catalog'] }}</x-ui.badge>
+                <x-ui.badge variant="{{ $activeTab === 'catalog' ? 'default' : 'secondary' }}" size="xs">{{ $this->counts['catalog'] }}</x-ui.badge>
             </button>
             <button wire:click="setTab('history')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 {{ $activeTab === 'history' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
                 <x-lucide-history class="w-4 h-4" /> История дарений 
-                <x-ui.badge variant="{{ $activeTab === 'history' ? 'default' : 'secondary' }}" size="xs">{{ $this->tabCounts['history'] }}</x-ui.badge>
+                <x-ui.badge variant="{{ $activeTab === 'history' ? 'default' : 'secondary' }}" size="xs">{{ $this->counts['history'] }}</x-ui.badge>
             </button>
         </nav>
     </div>
@@ -509,13 +561,13 @@ new #[Layout('layouts.admin')] class extends Component
             <div class="flex items-center justify-between gap-3 flex-wrap">
                 <div class="flex flex-wrap gap-1.5">
                     <x-ui.button wire:click="$set('privacyFilter', 'all')" variant="{{ $privacyFilter === 'all' ? 'default' : 'secondary' }}" size="sm">
-                        <x-lucide-list class="w-4 h-4 inline mr-1" /> Все <x-ui.badge size="xs" class="ml-1">{{ $this->historyCounts['all'] }}</x-ui.badge>
+                        <x-lucide-list class="w-4 h-4 inline mr-1" /> Все <x-ui.badge size="xs" class="ml-1">{{ $this->counts['all'] }}</x-ui.badge>
                     </x-ui.button>
                     <x-ui.button wire:click="$set('privacyFilter', 'public')" variant="{{ $privacyFilter === 'public' ? 'default' : 'secondary' }}" size="sm">
-                        <x-lucide-eye class="w-4 h-4 inline mr-1" /> Публичные <x-ui.badge size="xs" class="ml-1">{{ $this->historyCounts['public'] }}</x-ui.badge>
+                        <x-lucide-eye class="w-4 h-4 inline mr-1" /> Публичные <x-ui.badge size="xs" class="ml-1">{{ $this->counts['public'] }}</x-ui.badge>
                     </x-ui.button>
                     <x-ui.button wire:click="$set('privacyFilter', 'private')" variant="{{ $privacyFilter === 'private' ? 'default' : 'secondary' }}" size="sm">
-                        <x-lucide-lock class="w-4 h-4 inline mr-1" /> Приватные <x-ui.badge size="xs" variant="warning" class="ml-1">{{ $this->historyCounts['private'] }}</x-ui.badge>
+                        <x-lucide-lock class="w-4 h-4 inline mr-1" /> Приватные <x-ui.badge size="xs" variant="warning" class="ml-1">{{ $this->counts['private'] }}</x-ui.badge>
                     </x-ui.button>
                 </div>
 
@@ -709,6 +761,8 @@ new #[Layout('layouts.admin')] class extends Component
             <div class="mt-4">{{ $this->userGifts->links('partials.pagination') }}</div>
         </div>
     @endif
+
+    <x-loading-overlay fixed="true" wire:loading.delay wire:key="overlay-loading-page"/>
 
     <!-- МОДАЛКА СОЗДАНИЯ/РЕДАКТИРОВАНИЯ ПОДАРКА -->
     <div x-data x-show="$wire.showGiftModal" 

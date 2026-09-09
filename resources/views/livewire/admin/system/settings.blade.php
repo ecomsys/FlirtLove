@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\AdminLog;
+use App\Models\User;
 use App\Models\Setting;
 use Illuminate\Support\Facades\DB;
 use Livewire\Attributes\Computed;
@@ -12,15 +13,21 @@ new #[Layout('layouts.admin')] class extends Component
     public string $group = 'general';
     public array $settings = [];
 
+    public string $backUrl = '';
+
     public function mount(): void
     {
-        $this->group = session('admin_settings_group', 'general');
+        abort_unless(auth()->user()?->role === User::ROLE_ADMIN, 403);
+
+        $this->group = 'general';
         $this->loadSettings();
+
+        $previousUrl = url()->previous();
+        $this->backUrl = ($previousUrl && $previousUrl !== url()->current()) 
+            ? $previousUrl 
+            : route('admin.dashboard');
     }
 
-    /**
-     * Загрузка настроек текущей группы из БД с автокастингом для UI.
-     */
     public function loadSettings(): void
     {
         $settings = Setting::where('group', $this->group)->orderBy('id')->get();
@@ -28,13 +35,13 @@ new #[Layout('layouts.admin')] class extends Component
         $this->settings = $settings->mapWithKeys(function ($item) {
             $value = $item->value;
             
-            // Приводим значения к удобному виду для Livewire форм
             if ($item->type === 'boolean') {
                 $value = filter_var($value, FILTER_VALIDATE_BOOLEAN);
-            } elseif ($item->type === 'json' && is_string($value)) {
-                $value = json_decode($value, true) ?? [];
             } elseif ($item->type === 'integer') {
                 $value = (int) $value;
+            } elseif ($item->type === 'json') {
+                // ФИКС: Оставляем JSON как строку для textarea, иначе Livewire умрет с Array to string conversion
+                $value = is_string($value) ? $value : json_encode($value, JSON_UNESCAPED_UNICODE);
             }
             
             return [$item->id => [
@@ -43,48 +50,50 @@ new #[Layout('layouts.admin')] class extends Component
                 'type' => $item->type,
                 'label' => $item->label,
                 'description' => $item->description,
-                'options' => $item->options, // Массив для select
+                'options' => $item->options, 
                 'is_public' => $item->is_public,
             ]];
         })->toArray();
     }
 
-    /**
-     * Переключение группы настроек.
-     */
     public function setGroup(string $group): void
     {
         $this->group = $group;
-        session(['admin_settings_group' => $group]);
         $this->loadSettings();
     }
 
-    /**
-     * Сохранение настроек.
-     * Конвертирует данные из форм обратно в строки для БД.
-     */
     public function save(): void
     {
         try {
             DB::transaction(function () {
+                // ФИКС: 1 SELECT запрос вместо 50 (избегаем N+1 в цикле)
+                $ids = array_keys($this->settings);
+                $dbSettings = Setting::whereIn('id', $ids)->get()->keyBy('id');
+                
                 foreach ($this->settings as $id => $data) {
+                    if (!isset($dbSettings[$id])) continue;
+                    
+                    $setting = $dbSettings[$id];
                     $value = $data['value'];
                     
-                    // Обратная конвертация для БД
                     if ($data['type'] === 'boolean') {
                         $value = $value ? '1' : '0';
-                    } elseif ($data['type'] === 'json' && is_array($value)) {
-                        $value = json_encode($value, JSON_UNESCAPED_UNICODE);
+                    } elseif ($data['type'] === 'json') {
+                        // Валидируем JSON, и если он кривой, кодируем заново
+                        $decoded = json_decode($value, true);
+                        if (json_last_error() === JSON_ERROR_NONE) {
+                            $value = json_encode($decoded, JSON_UNESCAPED_UNICODE);
+                        }
                     } elseif ($data['type'] === 'integer') {
                         $value = (string) $value;
                     }
                     
-                    Setting::where('id', $id)->update(['value' => $value]);
+                    $setting->value = $value;
+                    $setting->save(); // Вызовет событие 'saved' модели Setting, которое сбросит кэш!
                 }
             });
 
-            // Кэш сбросится автоматически благодаря boot-методу в модели Setting!
-            AdminLog::record('settings.update', Setting::first(), auth()->user(), [], ['group' => $this->group]);
+            AdminLog::record('settings.update', Setting::first() ?? new Setting(), auth()->user(), [], ['group' => $this->group]);
             
             $this->dispatch('show-toast', type: 'success', message: 'Настройки сохранены!');
             $this->loadSettings();
@@ -94,31 +103,39 @@ new #[Layout('layouts.admin')] class extends Component
     }
 
     /**
-     * Отмена несохраненных изменений.
+     * Сброс настроек текущей группы к значениям по умолчанию (из config/settings.php)
      */
-    public function resetSettings(): void
+    public function resetToDefaults(): void
     {
-        $this->loadSettings();
-        $this->dispatch('show-toast', type: 'info', message: 'Изменения отменены');
+        try {
+            DB::transaction(function () {
+                $settings = Setting::where('group', $this->group)->get();
+                $configDefaults = config('settings', []);
+                
+                foreach ($settings as $setting) {
+                    // Ищем дефолтное значение в конфиге по ключу настройки
+                    if (isset($configDefaults[$setting->key]['default'])) {
+                        $setting->value = $configDefaults[$setting->key]['default'];
+                        $setting->save(); // Это вызовет событие saved, которое сбросит кэш
+                    }
+                }
+            });
+
+            AdminLog::record('settings.reset_defaults', Setting::first() ?? new Setting(), auth()->user(), [], ['group' => $this->group]);
+            
+            $this->dispatch('show-toast', type: 'info', message: 'Настройки сброшены к заводским значениям!');
+            $this->loadSettings();
+        } catch (\Exception $e) {
+            $this->dispatch('show-toast', type: 'error', message: 'Ошибка сброса: ' . $e->getMessage());
+        }
     }
 
-    // ============================================
-    // ВЫВОД ДАННЫХ
-    // ============================================
-
-    /**
-     * Динамический список групп из БД (вместо хардкода).
-     */
     #[Computed]
     public function groups(): \Illuminate\Support\Collection
     {
         return Setting::select('group')->distinct()->orderBy('group')->pluck('group');
     }
 
-    /**
-     * Человекочитаемые названия для групп (для UI).
-     * Если группы нет в списке — выводим как есть (с большой буквы).
-     */
     #[Computed]
     public function groupLabels(): array
     {
@@ -138,31 +155,46 @@ new #[Layout('layouts.admin')] class extends Component
 <div class="space-y-6">
     <!-- Заголовок -->
     <div class="flex items-center justify-between flex-wrap gap-4">
-        <h1 class="text-2xl font-semibold flex items-center gap-2">
-            <x-lucide-settings class="w-6 h-6" />
-            Настройки системы
-        </h1>
+         <div class="flex items-center gap-4">
+            <a href="{{ $backUrl }}" wire:navigate class="p-2 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors">
+                <x-lucide-arrow-left class="w-5 h-5" />
+            </a>
+            <h1 class="text-2xl font-semibold flex items-center gap-2">
+                <x-lucide-settings class="w-6 h-6" />
+                Настройки системы
+            </h1>
+         </div>
         
         <div class="flex items-center gap-2">
-            <x-ui.button wire:click="resetSettings" variant="outline" size="sm">
-                <x-lucide-undo class="w-4 h-4" />
-                Сбросить изменения
+            <!-- ФИКС: Заменили на сброс к дефолтным с подтверждением -->
+            <x-ui.button wire:click="resetToDefaults" variant="destructive" size="sm" wire:confirm="Сбросить настройки этой группы к значениям по умолчанию? Текущие изменения будут потеряны.">
+                <x-lucide-rotate-ccw class="w-4 h-4" />
+                Сбросить к дефолтным
             </x-ui.button>
             
-            <x-ui.button wire:click="save" variant="default" size="sm">
-                <x-lucide-save class="w-4 h-4" />
-                Сохранить
+            <x-ui.button wire:click="save" variant="default" size="sm" wire:loading.attr="disabled" wire:target="save">
+                <!-- Состояние по умолчанию (скрывается при загрузке) -->
+                <span wire:loading.remove wire:target="save" class="flex items-center gap-2">
+                    <x-lucide-save class="w-4 h-4 inline" /> 
+                    <span>Сохранить</span>
+                </span>
+                <!-- Состояние загрузки (появляется при save) -->
+                <span wire:loading wire:target="save" class="flex items-center gap-2">
+                    <x-lucide-loader-2 class="w-4 h-4 animate-spin inline" /> 
+                    <span>Сохранение...</span>
+                </span>
             </x-ui.button>
         </div>
     </div>
 
-    <!-- Группы (Вкладки) -->
+       <!-- Группы (Вкладки) -->
     <div class="flex flex-wrap gap-2 border-b border-border pb-4">
         @foreach ($this->groups as $key)
             @php
                 $label = $this->groupLabels[$key] ?? ucfirst($key);
             @endphp
             <button 
+                wire:key="settings-group-{{ $key }}"
                 wire:click="setGroup('{{ $key }}')"
                 class="px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2
                     {{ $group === $key 
@@ -237,7 +269,7 @@ new #[Layout('layouts.admin')] class extends Component
                                         </x-ui.select-trigger>
                                         <x-ui.select-content>
                                             @foreach($setting['options'] ?? [] as $val => $label)
-                                                <x-ui.select-item value="{{ $val }}">{{ $label }}</x-ui.select-item>
+                                                <x-ui.select-item wire:key="opt-{{ $val }}" value="{{ $val }}">{{ $label }}</x-ui.select-item>
                                             @endforeach
                                         </x-ui.select-content>
                                     </x-ui.select>
@@ -278,6 +310,8 @@ new #[Layout('layouts.admin')] class extends Component
             @endif
         </div>
     </div>
+
+    <x-loading-overlay fixed="true" wire:loading.delay wire:key="overlay-loading-page"/>
 
     <!-- Подсказка -->
     <div class="text-xs text-muted-foreground p-4 bg-muted/10 rounded-lg border border-border">

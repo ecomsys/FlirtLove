@@ -2,7 +2,6 @@
 
 namespace App\Notifications;
 
-use App\Models\DiaryComment;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Notifications\Notification;
@@ -14,29 +13,26 @@ class DiaryCommentModerated extends Notification implements ShouldQueue
 {
     use Queueable;
 
+    // ПЕРЕДАЕМ ТОЛЬКО ДАННЫЕ (СКАЛЯРЫ)
     public function __construct(
-        protected DiaryComment $comment,
+        protected int $commentId,
+        protected int $diaryId,
+        protected string $commentContent,
         protected string $status // approved, rejected, spam, deleted, restored
     ) {}
 
-    /**
-     * Каналы доставки с учетом глобальных тумблеров и категорий
-     */
     public function via($notifiable): array
     {
-        // 1. В кабинет (БД) отправляем ВСЕГДА
         $channels = ['database'];
 
-        // 2. Email: проверяем глобальный тумблер И категорию "Новые события" (on_event).
-        // Не отправляем при "spam" и "restored" по нашей бизнес-логике.
+        $emailSettings = $notifiable->email_settings ?? [];
+        
         if ($notifiable->email_enabled 
-            && ($notifiable->email_settings['on_event'] ?? true) 
+            && ($emailSettings['on_event'] ?? true) 
             && !in_array($this->status, ['spam', 'restored'])) {
             $channels[] = 'mail';
         }
 
-        // 3. Push (Broadcast): отправляем ТОЛЬКО при "approved" и "rejected", 
-        // И ЕСЛИ ВКЛЮЧЕН ГЛОБАЛЬНЫЙ ТУМБЛЕР push_enabled
         if ($notifiable->push_enabled && in_array($this->status, ['approved', 'rejected'])) {
             $channels[] = 'broadcast';
         }
@@ -52,7 +48,7 @@ class DiaryCommentModerated extends Notification implements ShouldQueue
             ->subject($messages['subject'])
             ->greeting("Здравствуйте, {$notifiable->name}!")
             ->line($messages['body'])
-            ->line("Комментарий: \"{$this->comment->content}\"")
+            ->line("Комментарий: \"{$this->commentContent}\"")
             ->when($this->status === 'approved', function ($message) {
                 return $message->line('Теперь он виден всем пользователям под записью в дневнике.');
             })
@@ -72,12 +68,12 @@ class DiaryCommentModerated extends Notification implements ShouldQueue
             'type' => 'diary_comment_moderated',
             'title' => $messages['title'],
             'message' => $messages['message'],
-            'action_url' => url('/diaries/' . $this->comment->diary_id), // Ссылка на пост          
+            'action_url' => url('/diaries/' . $this->diaryId),          
             'data' => [
-                'comment_id' => $this->comment->id,
-                'diary_id' => $this->comment->diary_id,
+                'comment_id' => $this->commentId,
+                'diary_id' => $this->diaryId,
                 'status' => $this->status,
-                'content' => $this->comment->content,
+                'content' => $this->commentContent,
             ]
         ];
     }
@@ -90,13 +86,13 @@ class DiaryCommentModerated extends Notification implements ShouldQueue
             'type' => 'diary_comment_moderated',
             'title' => $messages['title'],
             'message' => $messages['message'],
-            'action_url' => url('/diaries/' . $this->comment->diary_id),
+            'action_url' => url('/diaries/' . $this->diaryId),
             'timestamp' => now()->toDateTimeString(),
             'data' => [
-                'comment_id' => $this->comment->id,
-                'diary_id' => $this->comment->diary_id,
+                'comment_id' => $this->commentId,
+                'diary_id' => $this->diaryId,
                 'status' => $this->status,
-                'content' => $this->comment->content,
+                'content' => $this->commentContent,
             ]
         ]);
     }
@@ -143,11 +139,8 @@ class DiaryCommentModerated extends Notification implements ShouldQueue
         };
     }
 
-    /**
-     * ЗАЩИТА ОЧЕРЕДИ:
-     */
     public function failed(\Throwable $exception): void
     {
-        Log::error("Не удалось отправить DiaryCommentModerated (ID: {$this->comment->id}): " . $exception->getMessage());
+        Log::error("Не удалось отправить DiaryCommentModerated (ID: {$this->commentId}): " . $exception->getMessage());
     }
 }

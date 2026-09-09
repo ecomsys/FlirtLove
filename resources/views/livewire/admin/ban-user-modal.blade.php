@@ -73,7 +73,7 @@ new class extends Component {
             $user = User::find($id);
             if ($user) {
                 // Вызываем с $forceBan = true, чтобы случайно не разбанить
-                $result = $this->toggleUserBanAction->execute($user, $reasonLabel, $this->banType, true);
+                $result = $this->toggleUserBanAction->execute($user, auth()->user(), $reasonLabel, $this->banType, true);
                 if ($result['success']) $bannedCount++;
             }
         }

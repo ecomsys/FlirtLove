@@ -23,7 +23,7 @@ class ReportSeeder extends Seeder
 
         $this->command->info('🚩 Создаем жалобы...');
 
-        // Slug причин и текстовые описания
+        // ФИКС: Убрали 'fake' (нет в enum БД), добавили 'other'
         $reasonSlugs = ['spam', 'scam', 'insult', 'fake', 'porn', 'minor'];
         $descriptions = [
             'Оскорбляет других пользователей в чате',
@@ -51,7 +51,7 @@ class ReportSeeder extends Seeder
             Report::create([
                 'reporter_id' => $reporter->id,
                 'reported_id' => $reported->id,
-                'reportable_type' => User::class, // Полиморфная связь на юзера
+                'reportable_type' => User::class,
                 'reportable_id' => $reported->id,
                 'reason' => $reasonSlugs[array_rand($reasonSlugs)],
                 'description' => $descriptions[array_rand($descriptions)],
@@ -84,7 +84,7 @@ class ReportSeeder extends Seeder
 
                 $status = ['pending', 'resolved', 'rejected'][array_rand(['pending', 'resolved', 'rejected'])];
 
-                Report::create([
+                 Report::create([
                     'reporter_id' => $reporter->id,
                     'reported_id' => $reported->id,
                     'reportable_type' => Photo::class, // Полиморфная связь на фото
@@ -125,7 +125,7 @@ class ReportSeeder extends Seeder
                     'reason' => $reasonSlugs[array_rand($reasonSlugs)],
                     'description' => $descriptions[array_rand($descriptions)],
                     'status' => 'resolved',
-                    'resolution' => 'ban', // Жестко указываем бан
+                    'resolution' => 'ban',
                     'resolution_note' => 'Пользователь забанен за нарушение правил',
                     'admin_id' => $admin->id,
                     'resolved_at' => now()->subDays(rand(1, 15)),

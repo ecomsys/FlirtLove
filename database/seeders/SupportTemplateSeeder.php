@@ -3,7 +3,9 @@
 namespace Database\Seeders;
 
 use App\Models\SupportTemplate;
+use App\Models\SupportTemplateCategory;
 use Illuminate\Database\Seeder;
+use Illuminate\Support\Str;
 
 class SupportTemplateSeeder extends Seeder
 {
@@ -11,7 +13,9 @@ class SupportTemplateSeeder extends Seeder
     {
         $this->command->info('💬 Создаем шаблоны для службы поддержки...');
 
+        // Очищаем обе таблицы (сначала шаблоны, потом категории из-за Foreign Key)
         SupportTemplate::truncate();
+        SupportTemplateCategory::truncate();
 
         $templates = [
             // === ОБЩИЕ ===
@@ -104,7 +108,24 @@ class SupportTemplateSeeder extends Seeder
         ];
 
         foreach ($templates as $template) {
-            SupportTemplate::create(array_merge($template, ['is_active' => true]));
+            // Ищем или создаем категорию
+            $category = SupportTemplateCategory::firstOrCreate(
+                ['name' => $template['category']],
+                [
+                    'slug' => Str::slug($template['category']),
+                    'is_active' => true,
+                    'sort_order' => 99 // Новые категории из сида идут в конец
+                ]
+            );
+
+            // Создаем шаблон, привязывая его к ID категории
+            SupportTemplate::create([
+                'category_id' => $category->id,
+                'title' => $template['title'],
+                'body' => $template['body'],
+                'sort_order' => $template['sort_order'],
+                'is_active' => true,
+            ]);
         }
 
         $this->command->info('✅ Создано шаблонов поддержки: ' . count($templates));

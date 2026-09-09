@@ -2,7 +2,15 @@
 
 namespace Database\Seeders;
 
-use App\Models\{AdminLog, BlogCategory, BlogPost, Broadcast, Chat, ChatParticipant, FraudAlert, Gift, Media, Message, Photo, PhotoComment, Album, Report, StopWord, SubscriptionPlan, Swipe, Transaction, User, UserGift, UserMatch, UserPreference, UserProfile, UserSubscription, Setting, Diary, DiaryComment, DiarySubscription, DiaryRubric, SupportTemplate, GeoIPLocation};
+use App\Models\{
+    AdminLog, UserAuthLog, UserEvent, 
+    BlogCategory, BlogPost, Broadcast, Chat, ChatParticipant, FraudAlert, 
+    Gift, Media, Message, Photo, PhotoComment, Album, Report, StopWord, 
+    SubscriptionPlan, Swipe, Transaction, User, UserGift, UserMatch, 
+    UserPreference, UserProfile, UserSubscription, Setting, Diary, DiaryComment, 
+    DiarySubscription, DiaryRubric, SupportTemplate, GeoIPLocation, UserCard, 
+    PromoCode, PromoCodeUsage, Page, DiaryLike, DiaryCommentLike, ProfileView
+};
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -35,21 +43,28 @@ class DatabaseSeeder extends Seeder
         // 3. ОЧИСТКА КЭША НАСТРОЕК
         // ============================================
         Cache::forget('settings_all'); 
-        Cache::forget('stop_words_active'); // Сбрасываем кэш стоп-слов  
-        Cache::forget('geoip_blocked_iso_codes'); // Сбрасываем кэш гео-блокировок
-        Cache::forget('geoip_feed_blocked_ids'); // Сбрасываем кэш гео-блокировок
+        Cache::forget('stop_words_active');  
+        Cache::forget('geoip_blocked_iso_codes'); 
+        Cache::forget('geoip_feed_blocked_ids'); 
         $this->command->info('🗑️ Кеш настроек и безопасности очищен');
         $this->command->info('');
 
         // ============================================
-        // 4. ЗАПУСК СИДЕРОВ (СТРОГО ПО ЭТАПАМ)
+        // 4. ГЕО-ДАННЫЕ 
+        // ============================================
+        $this->command->info('🌍 ВАЖНО: Если таблицы стран пусты, сначала выполните команду: php artisan world:install');
+        $this->command->info('');
+
+        // ============================================
+        // 5. ЗАПУСК СИДЕРОВ (СТРОГО ПО ЭТАПАМ)
         // ============================================
         $this->command->info('📦 Запуск сидеров...');
         $this->command->info('');
 
-        // ЭТАП 1: БАЗА
-        $this->command->info('📌 ЭТАП 1: Базовые сущности');
+        // ЭТАП 1: БАЗА И ГЕО-БЛОКИРОВКИ
+        $this->command->info('📌 ЭТАП 1: Базовые сущности и Гео');
         $this->call([
+            GeoIPLocationsSeeder::class, 
             AdminSeeder::class,
             StaffSeeder::class,
             UserSeeder::class,
@@ -65,6 +80,7 @@ class DatabaseSeeder extends Seeder
             PageSeeder::class,  
             DiaryRubricSeeder::class,
             BlogSeeder::class,
+            PromoCodeSeeder::class,
         ]);
 
         // ЭТАП 3: КОНТЕНТ ЮЗЕРОВ
@@ -96,6 +112,8 @@ class DatabaseSeeder extends Seeder
         $this->call([          
             FinanceHistorySeeder::class,
             UserGiftSeeder::class,
+            UserCardsSeeder::class,
+            PromoCodeUsagesSeeder::class,
         ]);
 
         // ЭТАП 7: БЕЗОПАСНОСТЬ И МОДЕРАЦИЯ
@@ -108,13 +126,14 @@ class DatabaseSeeder extends Seeder
             UserBlockSeeder::class,
         ]);
 
-        // ЭТАП 8: МАРКЕТИНГ, ЛОГИ, ГЕО И ПОДДЕРЖКА
-        $this->command->info('📌 ЭТАП 8: Рассылки, логи, гео и поддержка');
+        // ЭТАП 8: МАРКЕТИНГ, ЛОГИ И ПОДДЕРЖКА
+        $this->command->info('📌 ЭТАП 8: Рассылки, логи и поддержка');
         $this->call([
             BroadcastSeeder::class,
             TestLogsSeeder::class,            
             SupportTemplateSeeder::class,
-            GeoIPLocationsSeeder::class, // Если файла нет, просто удали эту строку
+            UserAuthLogsSeeder::class,   
+            UserEventsSeeder::class, // Убедись, что внутри этого сидера он тоже переименован в UserEvent!
         ]);
 
         $this->command->info('');
@@ -122,7 +141,7 @@ class DatabaseSeeder extends Seeder
         $this->command->info('');
 
         // ============================================
-        // 5. ИТОГОВАЯ СТАТИСТИКА
+        // 6. ИТОГОВАЯ СТАТИСТИКА
         // ============================================
         $this->command->info('📊 Итоговая статистика базы:');
         $this->command->info('   ┌───────────────────────────┬────────────┐');
@@ -171,38 +190,51 @@ class DatabaseSeeder extends Seeder
         $driver = DB::connection()->getDriverName();
 
         if ($driver === 'pgsql') {
+            // Обновили список таблиц, добавили недостающие (pages, profile_views, diary_likes и т.д.)
             DB::statement('TRUNCATE TABLE 
                 admin_logs,
+                albums,
+                blog_categories,
+                blog_posts,
                 broadcasts,
-                blog_posts,     
-                blog_categories, 
                 chat_participants,
                 chats,
+                diary_comment_likes,
+                diary_comments,
+                diary_likes,
+                diary_rubrics,
+                diary_subscriptions,
+                diaries,
                 fraud_alerts,
                 geoip_locations,
-                media, 
+                gifts,
+                media,
                 messages,
+                pages,
                 photo_comments,
                 photos,
-                albums,
+                profile_views,
+                promo_code_usages,
+                promo_codes,
                 reports,
                 stop_words,
+                subscription_plans,
                 support_templates,
                 swipes,
+                transactions,
+                user_auth_logs,
+                user_balances,
+                user_blocks,
+                user_cards,
+                user_events,
+                user_favorites,
                 user_gifts,
                 user_matches,
                 user_preferences,
                 user_profiles,
                 user_subscriptions,
-                transactions,
-                subscription_plans,
-                gifts,
                 settings,
-                users,
-                diary_comments,
-                diary_subscriptions,
-                diaries,              
-                diary_rubrics
+                users
                 RESTART IDENTITY CASCADE'
             );
         } else {
@@ -216,14 +248,14 @@ class DatabaseSeeder extends Seeder
             Message::query()->delete();
             Chat::query()->delete();
             FraudAlert::query()->delete();         
-            GeoIPLocation::query()->delete(); // ФИКС: Очистка гео
+            GeoIPLocation::query()->delete(); 
             Media::query()->delete(); 
             PhotoComment::query()->delete();
             Photo::query()->delete();
             Album::query()->delete();
             Report::query()->delete();
             StopWord::query()->delete();
-            SupportTemplate::query()->delete(); // ФИКС: Очистка шаблонов
+            SupportTemplate::query()->delete(); 
             Swipe::query()->delete();
             UserGift::query()->delete();
             UserMatch::query()->delete();
@@ -236,20 +268,32 @@ class DatabaseSeeder extends Seeder
             Setting::query()->delete();
             User::query()->delete();
             
+            DiaryCommentLike::query()->delete();
             DiaryComment::query()->delete();
+            DiaryLike::query()->delete();
             DiarySubscription::query()->delete();
             Diary::query()->delete();
             DiaryRubric::query()->delete();
+
+            UserCard::query()->delete();       
+            PromoCode::query()->delete();      
+            PromoCodeUsage::query()->delete(); 
+            ProfileView::query()->delete();
+            Page::query()->delete();
+
+            UserAuthLog::query()->delete();       
+            UserEvent::query()->delete(); // Заменили UserActivity на UserEvent
             
             $tables = [
-                'users', 'user_profiles', 'user_preferences', 'albums', 'photos', 
+                'users', 'user_profiles', 'user_preferences', 'user_balances', 'albums', 'photos', 
                 'photo_comments', 'reports', 'stop_words', 'support_templates', 'swipes', 'user_matches', 
                 'chats', 'chat_participants', 'messages', 'gifts', 'user_gifts', 
                 'subscription_plans', 'user_subscriptions', 'transactions', 'fraud_alerts', 
                 'admin_logs', 'broadcasts', 'settings', 'media', 'geoip_locations',
-                'blog_categories', 
-                'blog_posts',      
-                'diary_comments', 'diary_subscriptions', 'diaries', 'diary_rubrics'               
+                'blog_categories', 'blog_posts', 'pages',
+                'diary_comment_likes', 'diary_comments', 'diary_likes', 'diary_subscriptions', 'diaries', 'diary_rubrics',
+                'user_cards', 'promo_codes', 'promo_code_usages', 'profile_views', 
+                'user_auth_logs', 'user_events', 'user_blocks', 'user_favorites'
             ];
             
             foreach ($tables as $table) {

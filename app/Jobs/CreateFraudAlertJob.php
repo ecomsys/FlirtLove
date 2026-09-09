@@ -11,29 +11,27 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 
-use App\Services\StopWordsFilterService;
-
 class CreateFraudAlertJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     public function __construct(
         public int $userId,
-        public string $triggerType, // Например: 'links_in_chat', 'stop_word_match'
+        public string $triggerType,
         public FraudAlertSeverity $severity,
         public array $meta = []
     ) {}
 
     public function handle(): void
     {
-        // Защита от спама алертами: проверяем, нет ли уже ОТКРЫТОГО алерта на этого юзера
+        // ФИКС: Добавлено ->value для строгой типизации в PostgreSQL
         $existingAlert = FraudAlert::where('user_id', $this->userId)
             ->where('trigger_type', $this->triggerType)
-            ->where('status', FraudAlertStatus::Open)
+            ->where('status', FraudAlertStatus::Open->value)
             ->exists();
 
         if ($existingAlert) {
-            return; // Уже есть открытый алерт, ничего не делаем
+            return; // Уже есть открытый алерт, ничего не делаем (защита от спама алертами)
         }
 
         FraudAlert::create([

@@ -3,6 +3,7 @@
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\DB;
 
 return new class extends Migration
 {
@@ -11,45 +12,27 @@ return new class extends Migration
         Schema::create('swipes', function (Blueprint $table) {
             $table->id();
             
-            // Кто свайпнул (инициатор действия). 
-            // Убрали cascade! Если юзер удаляется, мы не должны терять статистику его свайпов 
-            // и связь для антифрода (например, если он до этого лайкал всех подряд).
-            $table->foreignId('user_id')->constrained('users')->nullable()->nullOnDelete();
+            $table->foreignId('user_id')->nullable()->constrained('users')->nullOnDelete();
+            $table->foreignId('target_user_id')->nullable()->constrained('users')->nullOnDelete();
             
-            // Кого свайпнули (цель). Аналогично без каскадного удаления.
-            $table->foreignId('target_user_id')->constrained('users')->nullable()->nullOnDelete();
-            
-            // Тип свайпа: like (вправо), dislike (влево), superlike (суперлайк)
             $table->enum('type', ['like', 'dislike', 'superlike'])->default('like');
-            
-            // Поле для функции "Отменить свайп" (Rewind), которая обычно платная (VIP).
-            // Если юзер отменил свайп, мы пишем сюда дату отмены. 
-            // При сборке ленты мы будем исключать свайпы, где rewinded_at IS NOT NULL.
             $table->timestamp('rewinded_at')->nullable();
-            // Добавил rewinded_at: В LovePlanet и Tinder есть функция "Отменить последний свайп" (обычно платная). 
-            // Удалять запись из БД нельзя (иначе юзер сможет свайпнуть этого человека снова, как нового, 
-            // а это нарушение логики). Вместо этого мы маркируем свайп как отмененный.
 
             $table->timestamps();
 
             // === ИНДЕКСЫ ===
 
             // 1. Чтобы юзер не мог свайпнуть одного человека дважды.
-            // Уникальное ограничение на пару "Кто -> Кого".
             $table->unique(['user_id', 'target_user_id']);
 
-            // 2. КРИТИЧЕСКИ ВАЖНЫЙ ИНДЕКС ДЛЯ МАТЧЕЙ!
-            // Когда я (user_id=1) лайкаю Машу (target_user_id=2), система делает запрос:
-            // "А лайкала ли Маша (user_id=2) меня (target_user_id=1)?"
-            // Запрос: WHERE target_user_id = 1 AND user_id = 2 AND type = 'like'
-            // Этот составной индекс закрывает этот запрос за миллисекунды (Index-Only Scan).
-            // $table->index(['target_user_id', 'user_id', 'type']);
-            
-            // 3. Для статистики и фидов: "Кого я лайкнул?" или сборка ленты (исключить тех, кого уже свайпнул).
+            // 2. Для сборки ленты (исключить тех, кого уже свайпнул)
             $table->index(['user_id', 'type']);
         });
-         DB::statement("CREATE INDEX swipes_match_check_index ON swipes (target_user_id, user_id) WHERE rewinded_at IS NULL AND type IN ('like', 'superlike')");
 
+        // Киллер-фича: Partial Index.
+        // Добавил type в индекс, чтобы при проверке мэтча база сделала Index-Only Scan.
+        // Запрос: WHERE target_user_id = 1 AND user_id = 2 AND type IN ('like', 'superlike')
+        DB::statement("CREATE INDEX swipes_match_check_index ON swipes (target_user_id, user_id, type) WHERE rewinded_at IS NULL AND type IN ('like', 'superlike')");
     }
 
     public function down(): void
@@ -57,10 +40,6 @@ return new class extends Migration
         Schema::dropIfExists('swipes');
     }
 };
-
-
-
-
 
 
 // Как работает "Отмена свайпа" (Rewind):

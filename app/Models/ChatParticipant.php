@@ -12,9 +12,9 @@ class ChatParticipant extends Model
         'user_id',
         'unread_count',
         'last_read_at',
-        'is_hidden',   // Скрыл ли юзер чат у себя (архив)
-        'is_muted',    // Отключил ли пуши от этого чата
-        'is_blocked',  // Заблокировал ли собеседника
+        'is_hidden',
+        'is_muted',
+        'is_blocked',
     ];
 
     protected $casts = [
@@ -44,8 +44,7 @@ class ChatParticipant extends Model
     // ============================================
 
     /**
-     * Пометить сообщения в чате как прочитанные (Твой код без изменений).
-     * Оптимизация: обновляем БД только если действительно есть непрочитанные.
+     * Пометить сообщения в чате как прочитанные.
      */
     public function markAsRead(): void
     {
@@ -58,42 +57,42 @@ class ChatParticipant extends Model
     }
 
     /**
-     * Увеличить счетчик непрочитанных (когда собеседник шлет сообщение).
+     * Увеличить счетчик непрочитанных.
      */
     public function incrementUnread(): void
     {
+        // Атомарный инкремент в БД + обновление модели в памяти
         $this->increment('unread_count');
     }
 
-    /**
-     * Скрыть чат (отправить в архив).
-     */
     public function hide(): void
     {
         $this->update(['is_hidden' => true]);
     }
 
-    /**
-     * Показать чат (вернуть из архива).
-     */
     public function unhide(): void
     {
         $this->update(['is_hidden' => false]);
     }
 
-    /**
-     * Замьютить чат (отключить уведомления).
-     */
     public function mute(): void
     {
         $this->update(['is_muted' => true]);
     }
 
-    /**
-     * Размьютить чат.
-     */
     public function unmute(): void
     {
         $this->update(['is_muted' => false]);
+    }
+
+    // НОВЫЕ ХЕЛПЕРЫ ДЛЯ БЛОКИРОВКИ (filld gap)
+    public function block(): void
+    {
+        $this->update(['is_blocked' => true]);
+    }
+
+    public function unblock(): void
+    {
+        $this->update(['is_blocked' => false]);
     }
 }

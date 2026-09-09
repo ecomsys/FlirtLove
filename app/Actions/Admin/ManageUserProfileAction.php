@@ -6,6 +6,7 @@ use App\Models\AdminLog;
 use App\Models\User;
 use App\Notifications\ProfileFieldCleared;
 use Illuminate\Support\Str;
+use Illuminate\Support\Facades\Log;
 
 class ManageUserProfileAction
 {
@@ -19,6 +20,9 @@ class ManageUserProfileAction
             return false;
         }
 
+        // ФИКС: Eager load связи, чтобы избежать N+1 запроса в базе!
+        $user->loadMissing('profile');
+        
         $profile = $user->profile;
         if (!$profile) {
             return false;
@@ -50,7 +54,11 @@ class ManageUserProfileAction
 
         // Отправляем юзеру уведомление (если он не удален)
         if (!$user->trashed()) {
-            $user->notify(new ProfileFieldCleared($field));
+            try {
+                $user->notify(new ProfileFieldCleared($field));
+            } catch (\Exception $e) {
+                Log::error('Ошибка отправки уведомления ProfileFieldCleared: ' . $e->getMessage());
+            }
         }
 
         return true;

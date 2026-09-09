@@ -11,45 +11,30 @@ return new class extends Migration
         Schema::create('fraud_alerts', function (Blueprint $table) {
             $table->id();
             
-            // === КТО ПОДОЗРИТЕЛЕН ===
-            // Юзер, на которого сработал триггер. 
-            // Без cascade! Если скаммер успеет удалить аккаунт, алерт должен остаться для аналитики.
-             $table->foreignId('user_id')->nullable()->constrained('users')->nullOnDelete();
+            $table->foreignId('user_id')->nullable()->constrained('users')->nullOnDelete();
             
-            // === СУТЬ НАРУШЕНИЯ ===
-            // Тип триггера (что именно заметила система):
-            // - 'same_device' (10 аккаунтов с одного телефона)
-            // - 'mass_messaging' (спам одинаковыми сообщениями)
-            // - 'links_in_chat' (кидает ссылки на телеграм/казино в первые сообщения)
-            // - 'prostitute' (стоп-слова в описании)
-            $table->string('trigger_type')->index();
+            $table->string('trigger_type', 50)->index();
             
-            // Уровень опасности: low (просто отметить), medium (теневой бан), high (перма-бан автоматически)
             $table->enum('severity', ['low', 'medium', 'high'])->default('medium');
             
-            // Доказательства (JSON). Сюда воркер положит логи.
-            // Пример: {"ip": "192.168.1.1", "message_text": "Пиши в тг @scammer", "matched_rule": "tg_link_regex"}
-            $table->json('meta')->nullable();
+            //  jsonb (для поиска по IP и текстам внутри meta)
+            $table->jsonb('meta')->nullable();
             
-            // === СТАТУС РАЗБИРАТЕЛЬСТВА ===
-            // open (новый алерт, ждет админа), resolved (разобран), false_positive (ложняк, юзер чист)
-            $table->string('status')->default('open')->index();
+            //  enum (экономия места и скорость индексов)
+            $table->enum('status', ['open', 'resolved', 'false_positive'])->default('open')->index();
             
-            // === КТО РАЗОБРАЛ ===
-            // Админ, который принял решение. Без cascade.
             $table->foreignId('admin_id')->nullable()->constrained('users')->nullOnDelete();
             $table->timestamp('resolved_at')->nullable();
 
             $table->timestamps();
             
             // === ИНДЕКСЫ ===
-            
-            // 1. Главный индекс для админки: вывести все нерешенные алерты по уровню опасности
             $table->index(['status', 'severity', 'created_at']);
-            
-            // 2. Для проверки, есть ли уже алерты на этого юзера (чтобы не спамить админа одинаковыми триггерами)
             $table->index(['user_id', 'trigger_type']);
         });
+
+        // GIN-индекс для мгновенного поиска по IP и другим полям внутри JSONB
+        DB::statement('CREATE INDEX fraud_alerts_meta_gin_index ON fraud_alerts USING GIN (meta)');
     }
 
     public function down(): void

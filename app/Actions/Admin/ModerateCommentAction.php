@@ -8,14 +8,18 @@ use App\Models\User;
 use App\Notifications\CommentModerated;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Str; // <--- ДОБАВИЛИ ИМПОРТ
+use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Cache;
-
 
 class ModerateCommentAction
 {
     public function approve(PhotoComment $comment, User $admin): bool
     {
+        // Проверяем родителя, подгружая его только если он не загружен (избегаем N+1)
+        if ($comment->parent_id && !$comment->relationLoaded('parent')) {
+            $comment->load('parent');
+        }
+
         if ($comment->parent_id && $comment->parent && $comment->parent->status !== 'approved') {
             return false;
         }
@@ -25,14 +29,13 @@ class ModerateCommentAction
             'reject_reason' => $comment->getOriginal('reject_reason')
         ];
         
+        // Атомарный апдейт без транзакции
         $comment->update([
             'status' => 'approved', 
             'moderated_at' => now(),
             'reject_reason' => null,
             'moderated_by' => $admin->id
         ]);
-        
-        $comment->refresh();
         
         $after = [
             'status' => 'approved', 
@@ -50,7 +53,7 @@ class ModerateCommentAction
         
         AdminLog::record('photo_comment.approve', $comment, $admin, $before, $after, participants: $participants);
         $this->notifyAuthor($comment, 'approved');
-        Cache::forget('admin_sidebar_stats');
+        $this->clearCaches();
         
         return true;
     }
@@ -69,8 +72,6 @@ class ModerateCommentAction
             'moderated_by' => $admin->id
         ]);
         
-        $comment->refresh();
-        
         $after = [
             'status' => 'rejected', 
             'reject_reason' => $reason, 
@@ -88,7 +89,7 @@ class ModerateCommentAction
         
         AdminLog::record('photo_comment.reject', $comment, $admin, $before, $after, participants: $participants);
         $this->notifyAuthor($comment, 'rejected');
-        Cache::forget('admin_sidebar_stats');
+        $this->clearCaches();
     }
 
     public function markSpam(PhotoComment $comment, User $admin): void
@@ -104,8 +105,6 @@ class ModerateCommentAction
             'reject_reason' => 'spam',
             'moderated_by' => $admin->id
         ]);
-        
-        $comment->refresh();
         
         $after = [
             'status' => 'spam', 
@@ -124,7 +123,7 @@ class ModerateCommentAction
         
         AdminLog::record('photo_comment.spam', $comment, $admin, $before, $after, participants: $participants);
         $this->notifyAuthor($comment, 'spam');
-        Cache::forget('admin_sidebar_stats');
+        $this->clearCaches();
     }
 
     public function restore(PhotoComment $comment, User $admin): void
@@ -141,8 +140,6 @@ class ModerateCommentAction
             'moderated_by' => null
         ]);
         
-        $comment->refresh();
-        
         $after = [
             'status' => 'pending', 
             'restored_by' => $admin->id, 
@@ -158,109 +155,120 @@ class ModerateCommentAction
         $participants = array_filter([$comment->user_id, $comment->photo?->user_id]);
         
         AdminLog::record('photo_comment.restore', $comment, $admin, $before, $after, participants: $participants);
-        $this->notifyAuthor($comment, 'restored');
-        Cache::forget('admin_sidebar_stats');
+        $this->clearCaches();
     }
 
     public function bulkApprove($comments, User $admin): int
     {
-        $approvedCount = 0;
-        $firstComment = null;
         $approvedIds = [];
+        $firstComment = null;
+        $notifiedUsers = []; 
 
-        DB::transaction(function () use ($comments, $admin, &$approvedCount, &$firstComment, &$approvedIds) {
-            foreach ($comments as $comment) {
-                if ($comment->parent_id && $comment->parent && $comment->parent->status !== 'approved') {
-                    continue;
-                }
-
-                $comment->update([
-                    'status' => 'approved', 
-                    'moderated_at' => now(),
-                    'reject_reason' => null,
-                    'moderated_by' => $admin->id
-                ]);
-                $this->notifyAuthor($comment, 'approved');
-                
-                if (!$firstComment) $firstComment = $comment;
-                $approvedIds[] = $comment->id;
-                $approvedCount++;
+        foreach ($comments as $comment) {
+            if ($comment->parent_id && $comment->parent && $comment->parent->status !== 'approved') {
+                continue;
             }
+
+            $approvedIds[] = $comment->id;
+            
+            if ($comment->user_id && !isset($notifiedUsers[$comment->user_id])) {
+                $this->notifyAuthor($comment, 'approved');
+                $notifiedUsers[$comment->user_id] = true; 
+            }
+
+            if (!$firstComment) $firstComment = $comment;
+        }
+
+        if (empty($approvedIds)) return 0;
+
+        DB::transaction(function () use ($approvedIds, $admin) {
+            PhotoComment::whereIn('id', $approvedIds)->update([
+                'status' => 'approved', 
+                'moderated_at' => now(),
+                'reject_reason' => null,
+                'moderated_by' => $admin->id
+            ]);
         });
 
-        if ($approvedCount > 0 && $firstComment) {
-            $after = [
-                'count' => $approvedCount, 
-                'ids' => $approvedIds, 
-                'moderated_by' => $admin->id,
-                'context' => [
-                    'user_id' => $firstComment->user_id
-                ]
-            ];
-            $participants = array_filter([$firstComment->user_id]);
-            
-            AdminLog::record('photo_comment.mass_approve', $firstComment, $admin, null, $after, participants: $participants);
-        }
-        Cache::forget('admin_sidebar_stats');
+        $logIds = count($approvedIds) > 100 ? array_slice($approvedIds, 0, 100) : $approvedIds;
+        
+        $after = [
+            'count' => count($approvedIds), 
+            'sample_ids' => $logIds, 
+            'moderated_by' => $admin->id,
+            'context' => ['first_user_id' => $firstComment->user_id ?? null]
+        ];
+        
+        AdminLog::record('photo_comment.mass_approve', $firstComment, $admin, null, $after, participants: array_keys($notifiedUsers));
+        $this->clearCaches();
 
-        return $approvedCount;
+        return count($approvedIds);
     }
 
     public function bulkReject($comments, User $admin, string $reason = 'mass_reject'): int
     {
-        $firstComment = null;
         $rejectedIds = [];
-        $count = 0;
+        $firstComment = null;
+        $notifiedUsers = []; 
 
-        DB::transaction(function () use ($comments, $admin, $reason, &$firstComment, &$count, &$rejectedIds) {
-             $notifiedUsers = [];
+        foreach ($comments as $comment) {
+            $rejectedIds[] = $comment->id;
 
-            foreach ($comments as $comment) {
-                $comment->update([
-                    'status' => 'rejected', 
-                    'moderated_at' => now(),
-                    'reject_reason' => $reason,
-                    'moderated_by' => $admin->id
-                ]);
-                
-                if ($comment->user_id && !in_array($comment->user_id, $notifiedUsers)) {
-                    $this->notifyAuthor($comment, 'rejected');
-                    $notifiedUsers[] = $comment->user_id;
-                }
-                
-                if (!$firstComment) $firstComment = $comment;
-                $rejectedIds[] = $comment->id;
-                $count++;
+            if ($comment->user_id && !isset($notifiedUsers[$comment->user_id])) {
+                $this->notifyAuthor($comment, 'rejected');
+                $notifiedUsers[$comment->user_id] = true;
             }
+
+            if (!$firstComment) $firstComment = $comment;
+        }
+
+        if (empty($rejectedIds)) return 0;
+
+        DB::transaction(function () use ($rejectedIds, $admin, $reason) {
+            PhotoComment::whereIn('id', $rejectedIds)->update([
+                'status' => 'rejected', 
+                'moderated_at' => now(),
+                'reject_reason' => $reason,
+                'moderated_by' => $admin->id
+            ]);
         });
 
-        if ($count > 0 && $firstComment) {
-            $after = [
-                'count' => $count, 
-                'ids' => $rejectedIds, 
-                'reason' => $reason, 
-                'moderated_by' => $admin->id,
-                'context' => [
-                    'user_id' => $firstComment->user_id
-                ]
-            ];
-            $participants = array_filter([$firstComment->user_id]);
-            
-            AdminLog::record('photo_comment.mass_reject', $firstComment, $admin, null, $after, participants: $participants);
-        }
-        Cache::forget('admin_sidebar_stats');
+        $logIds = count($rejectedIds) > 100 ? array_slice($rejectedIds, 0, 100) : $rejectedIds;
+        
+        $after = [
+            'count' => count($rejectedIds), 
+            'sample_ids' => $logIds, 
+            'reason' => $reason, 
+            'moderated_by' => $admin->id,
+            'context' => ['first_user_id' => $firstComment->user_id ?? null]
+        ];
+        
+        AdminLog::record('photo_comment.mass_reject', $firstComment, $admin, null, $after, participants: array_keys($notifiedUsers));
+        $this->clearCaches();
 
-        return $count;
+        return count($rejectedIds);
     }
 
     private function notifyAuthor(PhotoComment $comment, string $status): void
     {
         try {
             if ($comment->user) {
-                $comment->user->notify(new CommentModerated($comment, $status));
+                 // ВАЖНО: Передаем $status, а не жестко прописанное 'approved'
+                 $comment->user->notify(new CommentModerated(
+                    $comment->id, 
+                    $comment->photo_id, 
+                    $comment->content, 
+                    $status
+                 ));
             }
         } catch (\Exception $e) {
             Log::error('Ошибка уведомления о модерации комментария: ' . $e->getMessage());
         }
+    }
+
+    private function clearCaches(): void
+    {
+        Cache::forget('admin_sidebar_stats');
+        Cache::forget('admin_comment_counts');
     }
 }

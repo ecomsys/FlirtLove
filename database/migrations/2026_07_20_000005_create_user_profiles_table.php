@@ -3,6 +3,7 @@
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\DB;
 
 return new class extends Migration
 {
@@ -14,31 +15,33 @@ return new class extends Migration
 
             // === БАЗОВАЯ ИНФА ===
             $table->enum('gender', ['male', 'female'])->nullable()->index();
-            $table->unsignedTinyInteger('age')->nullable()->index(); 
-            $table->date('birth_date')->nullable()->index();
+            
+            // Храним только дату рождения. Индекс на ней дает максимальную скорость для фильтров
+            $table->date('birth_date')->nullable()->index(); 
+            
             $table->enum('dating_goal', ['friends', 'romantic', 'family', 'casual', 'travel'])->nullable()->index();
-            $table->string('city')->nullable()->index();
-            $table->string('country')->nullable();
+            
+            // === СПРАВОЧНИКИ ===
+            $table->foreignId('city_id')->nullable()->constrained('cities')->nullOnDelete()->index();
+            $table->foreignId('country_id')->nullable()->constrained('countries')->nullOnDelete();
             
             // === ТЕКСТОВЫЕ БЛОКИ ===
-            $table->string('headline')->nullable(); // Короткий статус
-            $table->text('bio')->nullable(); // Свободно о себе
-            $table->text('looking_for')->nullable(); // Кого я хочу найти
-            $table->json('interests')->nullable(); // Теги
+            $table->string('headline')->nullable(); 
+            $table->text('bio')->nullable(); 
+            $table->text('looking_for')->nullable(); 
 
-            // === АВТОПОРТРЕТ (Любимое, Отношение к жизни и т.д.) ===
-            // Вся простыня текстовых полей, которые не участвуют в поиске.
-            // Структура: {"favorite_music": "...", "favorite_movies": "...", "best_in_life": "..."}
-            $table->json('self_portrait')->nullable(); 
+            // JSONB
+            $table->jsonb('interests')->nullable(); 
+            $table->jsonb('self_portrait')->nullable(); 
 
-            // === ВНЕШНОСТЬ (Одиночный выбор -> TINYINT) ===
+            // === ВНЕШНОСТЬ ===
             $table->unsignedTinyInteger('body_type')->default(0);
             $table->unsignedTinyInteger('eye_color')->default(0);
             $table->unsignedTinyInteger('hair_color')->default(0);
             $table->unsignedInteger('height')->nullable();
             $table->unsignedInteger('weight')->nullable();
 
-            // === ЛИЧНЫЕ ДАННЫЕ (Одиночный выбор -> TINYINT) ===
+            // === ЛИЧНЫЕ ДАННЫЕ ===
             $table->unsignedTinyInteger('relationship_status')->default(0);
             $table->unsignedTinyInteger('children_status')->default(0);
             $table->unsignedTinyInteger('pets')->default(0);
@@ -48,10 +51,10 @@ return new class extends Migration
             $table->unsignedTinyInteger('alcohol')->default(0);
             $table->unsignedTinyInteger('zodiac_sign')->default(0);
 
-            // === ЛИЧНЫЕ ДАННЫЕ (Множественный выбор -> JSON) ===
-            $table->json('body_decorations')->nullable(); 
-            $table->json('languages')->nullable();
-            $table->json('sports')->nullable();
+            // === Множественный выбор -> JSONB ===
+            $table->jsonb('body_decorations')->nullable(); 
+            $table->jsonb('languages')->nullable();
+            $table->jsonb('sports')->nullable();
 
             // === РАБОТА И ОБРАЗОВАНИЕ ===
             $table->string('education')->nullable();           
@@ -65,14 +68,27 @@ return new class extends Migration
             $table->string('address')->nullable();
 
             $table->timestamps();
-
-            // === ИНДЕКСЫ ===
-            $table->index('body_type');
-            $table->index('smoking');
-            $table->index('relationship_status');
-            $table->index('education');
-            $table->spatialIndex('location'); // Для молниеносного ST_DWithin
         });
+
+        // === КРИТИЧЕСКИ ВАЖНЫЕ ИНДЕКСЫ ===
+        
+        // Составной индекс для ленты свайпов (Пол + Дата рождения)
+        // База будет фильтровать по birth_date вместо age, что работает в 100 раз быстрее!
+        DB::statement('CREATE INDEX user_profiles_gender_birthdate_index ON user_profiles (gender, birth_date)');
+
+        // Индексы для частых фильтров
+        DB::statement('CREATE INDEX user_profiles_body_type_index ON user_profiles (body_type)');
+        DB::statement('CREATE INDEX user_profiles_smoking_index ON user_profiles (smoking)');
+        DB::statement('CREATE INDEX user_profiles_relationship_status_index ON user_profiles (relationship_status)');
+        DB::statement('CREATE INDEX user_profiles_education_index ON user_profiles (education)');
+        
+        // Пространственный индекс для геолокации
+        DB::statement('CREATE INDEX user_profiles_location_sidx ON user_profiles USING GIST (location)');
+
+        // GIN-индексы для мгновенного поиска по JSONB массивам
+        DB::statement('CREATE INDEX user_profiles_interests_gin ON user_profiles USING GIN (interests jsonb_path_ops)');
+        DB::statement('CREATE INDEX user_profiles_languages_gin ON user_profiles USING GIN (languages jsonb_path_ops)');
+        DB::statement('CREATE INDEX user_profiles_sports_gin ON user_profiles USING GIN (sports jsonb_path_ops)');    
     }
 
     public function down(): void

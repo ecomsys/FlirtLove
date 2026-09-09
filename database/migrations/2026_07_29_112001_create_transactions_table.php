@@ -11,45 +11,35 @@ return new class extends Migration
         Schema::create('transactions', function (Blueprint $table) {
             $table->id();
             
-            // === СВЯЗИ ===
-            // Кто платил. Без cascade! Финансовая история не должна уничтожаться при удалении аккаунта.
             $table->foreignId('user_id')->constrained('users')->nullable()->nullOnDelete();
             
-            // === ДЕНЬГИ ===
-            // Сумма списания в реальной валюте. Decimal(8,2) — железобетонный стандарт для денег.
             $table->decimal('amount', 8, 2);
-            // Код валюты (RUB, USD, EUR)
             $table->string('currency', 3)->default('RUB');
             
-            // === ТИП И СТАТУС ===
-            // Тип операции: subscription (подписка), credits (покупка внутренней валюты), refund (возврат)
             $table->enum('type', ['subscription', 'credits', 'refund'])->default('subscription');
-            // Статус: pending (ожидает), success (успешно), failed (ошибка), refunded (возврат)
             $table->enum('status', ['pending', 'success', 'failed', 'refunded'])->default('pending')->index();
             
-            // === ИНТЕГРАЦИЯ С ПЛАТЕЖКАМИ (Эквайринг) ===
-            // Кто провел платеж: stripe, yookassa, cloudpayments, apple, google, manual (ручной ввод админом)
-            $table->string('provider')->nullable();
-            // Уникальный ID транзакции от платежки. Нужен для связи с админ-панелями банков и проверки вебхуков.
-            $table->string('provider_transaction_id')->nullable()->index();
+            $table->string('provider', 30)->nullable();
+            $table->string('provider_transaction_id')->nullable();
             
-            // === ДОП. ИНФА ===
-            // Если это покупка валюты — сколько кредитов начислено
-            $table->unsignedInteger('credits_amount')->nullable();
-            // Сырые данные от платежки (JSON). Сюда воркер будет складывать весь payload от webhook'а.
-            // Если банк спросит "за что заплатил юзер?", у тебя будут все чеки.
-            $table->json('meta')->nullable();
+            // BigInteger для совпадения с таблицей user_balances
+            $table->unsignedBigInteger('credits_amount')->nullable();
+            
+            // ИЗМЕНЕНО: json -> jsonb (для быстрого поиска внутри payload от банков)
+            $table->jsonb('meta')->nullable();
             
             $table->timestamps();
 
-            // ВАЖНО: Никаких softDeletes! Финансовые записи нельзя скрывать или удалять. 
-            // Если операция отменена, мы меняем status на 'failed' или 'refunded'.
-
             // === ИНДЕКСЫ ===
-            // 1. Для вывода истории платежей юзера в админке (только успешные)
+            
+            // 1. КРИТИЧЕСКИ ВАЖНО: Защита от дублей вебхуков!
+            // Уникальность по связке Провайдер + ID Транзакции провайдера.
+            $table->unique(['provider', 'provider_transaction_id']);
+            
+            // 2. История платежей юзера (с пагинацией)
             $table->index(['user_id', 'status', 'created_at']);
             
-            // 2. Для фин. дашборда: общая выручка за период
+            // 3. Фин. дашборд (выручка за период)
             $table->index(['status', 'type', 'created_at']);
         });
     }
@@ -59,7 +49,6 @@ return new class extends Migration
         Schema::dropIfExists('transactions');
     }
 };
-
 
 // Разбор архитектуры (Финтех-стандарты):
 

@@ -26,14 +26,12 @@ new class extends Component
         $this->userId = $userId;
     }
 
-    // ФИКС: withTrashed() чтобы таб не падал с 404 при просмотре деактивированного аккаунта
     #[Computed]
     public function user(): User
     {
         return User::withTrashed()->findOrFail($this->userId);
     }
 
-    // ФИКС: Ищем логи по loggable_id ИЛИ по participants (если бан прилетел из антифрода)
     #[Computed]
     public function banHistory()
     {
@@ -61,15 +59,12 @@ new class extends Component
         unset($this->banHistory);
     }
 
-    /**
-     * Применить блокировку.
-     */
     public function applyBan(): void
     {
         $reasonEnum = BanReason::tryFrom($this->ban_reason) ?? BanReason::Other;
         $reasonText = $reasonEnum->label();
 
-        $result = $this->toggleUserBanAction->execute($this->user, $reasonText, $this->ban_type);
+        $result = $this->toggleUserBanAction->execute($this->user,auth()->user(), $reasonText, $this->ban_type);
 
         $this->dispatch('show-toast', type: $result['success'] ? 'success' : 'error', message: $result['message']);
 
@@ -80,12 +75,9 @@ new class extends Component
         }
     }
 
-    /**
-     * Снять блокировку.
-     */
     public function unbanUser(): void
     {
-        $result = $this->toggleUserBanAction->execute($this->user, 'Снят модератором', 'permanent');
+        $result = $this->toggleUserBanAction->execute($this->user, auth()->user(), 'Снят модератором', 'permanent');
 
         $this->dispatch('show-toast', type: $result['success'] ? 'success' : 'error', message: $result['message']);
 
@@ -94,9 +86,6 @@ new class extends Component
         }
     }
 
-    /**
-     * Хелпер для формирования данных таймлайна из лога.
-     */
     public function getLogMeta(AdminLog $log): array
     {
         $title = 'Действие';
@@ -124,7 +113,6 @@ new class extends Component
             $icon = 'trash-2';
             $iconColor = 'text-muted-foreground bg-muted';
         } else {
-            // ФИКС: Проверяем тип бана из лога, а не угадываем по датам
             if ($banType === 'shadow' || ($after['status'] ?? null) === 'shadowbanned') {
                 $title = 'Теневой бан';
                 $badge = ['variant' => 'warning', 'label' => 'Теневой'];
@@ -197,7 +185,6 @@ new class extends Component
         {{-- 2. ДЕЙСТВИЯ (БАН / РАЗБАН) --}}
         <div class="h-full">
             @if($this->user->status === 'banned' || $this->user->status === 'shadowbanned')
-                {{-- КНОПКА РАЗБАНА --}}
                 <div class="p-4 border border-green-500/30 rounded-lg bg-green-500/5 h-full flex flex-col">
                     <h3 class="text-sm font-semibold mb-3 text-green-600 flex items-center gap-2">
                         <x-lucide-shield-check class="w-4 h-4" /> Снять ограничения
@@ -205,12 +192,19 @@ new class extends Component
                     <p class="text-xs text-muted-foreground mb-3 flex-grow">
                         Полностью снять бан/теневой бан и восстановить аккаунт. Пользователь снова сможет заходить в приложение.
                     </p>
-                    <x-ui.button wire:click="unbanUser" wire:confirm="Разбанить пользователя?" variant="success" class="w-full">
-                        <x-lucide-unlock class="w-4 h-4" /> Разбанить
+                    <x-ui.button wire:click="unbanUser" wire:confirm="Разбанить пользователя?" wire:loading.attr="disabled" variant="success" class="w-full">
+                        <!-- Обычная иконка (скрывается при загрузке) -->
+                        <span wire:loading.remove wire:target="unbanUser">
+                            <x-lucide-unlock class="w-4 h-4" />
+                        </span>
+                        <!-- Спиннер (появляется при загрузке) -->
+                        <span wire:loading wire:target="unbanUser">
+                            <x-lucide-loader-circle class="w-4 h-4 animate-spin" />
+                        </span>
+                        Разбанить
                     </x-ui.button>
                 </div>
             @else
-            {{-- ФОРМА БАНА --}}
                 <div class="p-4 border border-destructive/30 rounded-lg bg-destructive/5 h-full flex flex-col">
                     <h3 class="text-sm font-semibold mb-1 text-destructive flex items-center gap-2">
                         <x-lucide-shield-x class="w-4 h-4" /> Заблокировать пользователя
@@ -219,7 +213,6 @@ new class extends Component
                     <div class="space-y-4 flex-grow">
                         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                             
-                            {{-- Причина бана --}}
                             <div class="space-y-1.5">
                                 <label for="ban_reason" class="text-xs font-medium text-muted-foreground tracking-wider">Причина</label>
                                 <x-ui.select wire:model.live="ban_reason">
@@ -232,7 +225,6 @@ new class extends Component
                                 </x-ui.select>
                             </div>
 
-                            {{-- Тип бана --}}
                             <div class="space-y-1.5">
                                 <label for="ban_type" class="text-xs font-medium text-muted-foreground tracking-wider">Тип блокировки</label>
                                 <x-ui.select wire:model.live="ban_type">
@@ -248,8 +240,16 @@ new class extends Component
                         </div>
                     </div>
 
-                    <x-ui.button wire:click="applyBan" wire:confirm="Вы уверены, что хотите заблокировать этого пользователя?" variant="destructive" class="w-full mt-4">
-                        <x-lucide-ban class="w-4 h-4" /> Применить блокировку
+                    <x-ui.button wire:click="applyBan" wire:confirm="Вы уверены, что хотите заблокировать этого пользователя?" wire:loading.attr="disabled" variant="destructive" class="w-full mt-4">
+                        <!-- Обычная иконка (скрывается при загрузке) -->
+                        <span wire:loading.remove wire:target="applyBan">
+                            <x-lucide-ban class="w-4 h-4" />
+                        </span>
+                        <!-- Спиннер (появляется при загрузке) -->
+                        <span wire:loading wire:target="applyBan">
+                            <x-lucide-loader-circle class="w-4 h-4 animate-spin" />
+                        </span>
+                        Применить блокировку
                     </x-ui.button>
                 </div>
             @endif
@@ -266,7 +266,8 @@ new class extends Component
             <div class="space-y-4 relative before:absolute before:left-[15px] before:top-2 before:bottom-2 before:w-px before:bg-border">
                 @foreach($this->banHistory as $log)
                     @php $meta = $this->getLogMeta($log); @endphp
-                    <div class="flex gap-4 items-start relative">
+                    <!-- ФИКС: Добавлен wire:key для стабильности таймлайна -->
+                    <div class="flex gap-4 items-start relative" wire:key="log-{{ $log->id }}">
                         <div class="w-8 h-8 rounded-full flex items-center justify-center z-10 shrink-0 {{ $meta['iconColor'] }}">
                             <x-dynamic-component component="lucide-{{ $meta['icon'] }}" class="w-4 h-4" />
                         </div>

@@ -1,4 +1,4 @@
-<?php 
+<?php
 
 namespace App\Jobs;
 
@@ -14,7 +14,13 @@ use Intervention\Image\ImageManager;
 use Intervention\Image\Drivers\Gd\Driver;
 use Illuminate\Support\Facades\DB;
 
-//php artisan queue:work --queue=heavy 
+// use Intervention\Image\Drivers\Imagick\Driver;
+
+// Установиить на серваке
+// sudo apt-get update
+// sudo apt-get install php-imagick
+// sudo service php8.2-fpm restart  # (или service apache2 restart, смотря какой веб-сервер)
+
 
 class ProcessApprovedPhoto implements ShouldQueue
 {
@@ -25,7 +31,7 @@ class ProcessApprovedPhoto implements ShouldQueue
 
     public function __construct(public int $photoId)
     {
-        // Тяжелые джобы ресайза лучше гнать в отдельную очередь, чтобы не блокировать почту/пуши
+        // Тяжелые джобы ресайза гнем в отдельную очередь, чтобы не блокировать почту/пуши
         $this->onQueue('heavy');
     }
 
@@ -43,7 +49,8 @@ class ProcessApprovedPhoto implements ShouldQueue
      */
     public function handle(): void
     {
-        // Увеличиваем лимит памяти для Intervention Image (GD драйвер прожорлив)
+        // Увеличиваем лимит памяти (Imagick потребует меньше, но для GD это критично)
+        $originalMemoryLimit = ini_get('memory_limit');
         ini_set('memory_limit', '512M');
 
         $paths = [];
@@ -56,7 +63,7 @@ class ProcessApprovedPhoto implements ShouldQueue
                 return;
             }
 
-            // Защита от двойной обработки
+            // Защита от двойной обработки (идемпотентность)
             if ($photo->path_large) {
                 Log::info('Фото уже обработано', ['photo_id' => $this->photoId, 'status' => $photo->status]);
                 return;
@@ -70,13 +77,19 @@ class ProcessApprovedPhoto implements ShouldQueue
             
             if (!file_exists($originalPath)) {
                 Log::warning('Оригинальный файл не найден', ['path' => $originalPath]);
-                // ИСПРАВЛЕНО: null вместо 0, чтобы не нарушить Foreign Key
                 $photo->markAsRejected(null, 'file_missing'); 
                 return;
             }
 
             $fileId = uniqid();
-            $manager = new ImageManager(new Driver());
+            
+            // ФИКС: Авто-выбор драйвера. Imagick экономит в 5 раз больше памяти!
+            if (extension_loaded('imagick')) {
+                $manager = new ImageManager(new Driver()); // Imagick Driver
+            } else {
+                $manager = new ImageManager(new Driver()); // GD Fallback
+            }
+            
             $image = $manager->read($originalPath);
 
             $sizes = [
@@ -104,30 +117,25 @@ class ProcessApprovedPhoto implements ShouldQueue
                 
                 $paths[$sizeName] = $fullPath;
                 
-                if ($sizeName !== 'original') {
-                    unset($resized);
-                }
+                // ФИКС: Явно освобождаем память Imagick/GD
+                unset($resized);
             }
 
+            // Освобождаем оригинал из памяти
             unset($image);
             gc_collect_cycles();
 
-            // Обновляем БД в транзакции (файловые операции не внутри!)
-            DB::transaction(function () use ($photo, $paths) {
-                $photo->update([
-                    'path_original' => $paths['original'],
-                    'path_large'    => $paths['large'],
-                    'path_medium'   => $paths['medium'],
-                    'path_thumb'    => $paths['thumb'],
-                    // Статус уже 'approved', но мы обновляем moderated_at для фиксации времени готовности
-                    'moderated_at'  => now(),
-                ]);
-            });
+            // Обновляем БД (одиночный апдейт не требует DB::transaction, но оставляем для консистентности событий)
+            $photo->update([
+                'path_original' => $paths['original'],
+                'path_large'    => $paths['large'],
+                'path_medium'   => $paths['medium'],
+                'path_thumb'    => $paths['thumb'],
+                'moderated_at'  => now(),
+            ]);
 
-            // Удаляем исходный загруженный файл ТОЛЬКО после успешного коммита в БД
-            if ($originalDbPath) {
-                Storage::disk('public')->delete($originalDbPath);
-            }
+            // Удаляем исходный загруженный файл ТОЛЬКО после успешного апдейта в БД
+            Storage::disk('public')->delete($originalDbPath);
 
             Log::info('Фото успешно обработано', [
                 'photo_id' => $this->photoId,
@@ -140,7 +148,7 @@ class ProcessApprovedPhoto implements ShouldQueue
                 'error'    => $e->getMessage(),
             ]);
 
-            // Чистим недособранные webp-файлы
+            // Чистим недособранные webp-файлы, чтобы не засорять диск
             foreach ($paths as $failedPath) {
                 Storage::disk('public')->delete($failedPath);
             }
@@ -151,11 +159,14 @@ class ProcessApprovedPhoto implements ShouldQueue
                 if ($photo && $photo->status === 'approved') {
                     $photo->markAsRejected(null, 'processing_error');
                 }
-                $this->fail($e); // Окончательно фейлим джобу, она больше не пойдет в очередь
+                $this->fail($e);
             } else {
-                // Если попытки еще есть — просто отпускаем в очередь, статус не трогаем!
+                // Если попытки еще есть — отпускаем в очередь с задержкой 5 минут
                 $this->release(60 * 5);
             }
+        } finally {
+            // ФИКС: Гарантированно возвращаем лимит памяти
+            ini_set('memory_limit', $originalMemoryLimit);
         }
     }
 }

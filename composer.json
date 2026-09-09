@@ -11,6 +11,7 @@
         "gehrisandro/tailwind-merge-laravel": "^1.4",
         "intervention/image": "3.0",
         "laravel/framework": "^13.8",
+        "laravel/sanctum": "^4.3",
         "laravel/tinker": "^3.0",
         "livewire/livewire": "^3.6.4",
         "livewire/volt": "^1.7.0",

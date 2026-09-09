@@ -12,6 +12,12 @@ class DiaryComment extends Model
 {
     use SoftDeletes;
 
+    // КОНСТАНТЫ СТАТУСОВ
+    public const STATUS_APPROVED = 'approved';
+    public const STATUS_PENDING = 'pending';
+    public const STATUS_REJECTED = 'rejected';
+    public const STATUS_SPAM = 'spam';
+
     protected $fillable = [
         'diary_id',
         'user_id',
@@ -34,6 +40,11 @@ class DiaryComment extends Model
     // ============================================
     // СВЯЗИ
     // ============================================
+    
+    public function likes(): HasMany
+    {
+        return $this->hasMany(DiaryCommentLike::class);
+    }
 
     public function diary(): BelongsTo
     {
@@ -50,23 +61,20 @@ class DiaryComment extends Model
         return $this->belongsTo(User::class, 'moderated_by');
     }
 
-    // Родительский комментарий (на который ответили/процитировали)
     public function parent(): BelongsTo
     {
         return $this->belongsTo(DiaryComment::class, 'parent_id');
     }
 
-    // Ответы на этот комментарий
     public function replies(): HasMany
     {
-        // По умолчанию тянем только одобренные ответы
-        return $this->hasMany(DiaryComment::class, 'parent_id')->where('status', 'approved')->latest();
+        return $this->hasMany(DiaryComment::class, 'parent_id')->where('status', self::STATUS_APPROVED)->latest();
     }
 
-    // Все ответы (для админки)
     public function allReplies(): HasMany
     {
-        return $this->hasMany(DiaryComment::class, 'parent_id')->withoutGlobalScopes();
+        // Убрали withoutGlobalScopes(), просто тянем все ответы без фильтра по статусу
+        return $this->hasMany(DiaryComment::class, 'parent_id')->latest();
     }
 
     // ============================================
@@ -80,7 +88,7 @@ class DiaryComment extends Model
 
     public function scopeApproved(Builder $query): Builder
     {
-        return $query->where('status', 'approved');
+        return $query->where('status', self::STATUS_APPROVED);
     }
 
     // ============================================
@@ -95,7 +103,7 @@ class DiaryComment extends Model
     public function approve(int $adminId): void
     {
         $this->update([
-            'status' => 'approved',
+            'status' => self::STATUS_APPROVED,
             'moderated_by' => $adminId,
             'moderated_at' => now(),
             'reject_reason' => null,
@@ -105,7 +113,7 @@ class DiaryComment extends Model
     public function reject(int $adminId, string $reason): void
     {
         $this->update([
-            'status' => 'rejected',
+            'status' => self::STATUS_REJECTED,
             'moderated_by' => $adminId,
             'moderated_at' => now(),
             'reject_reason' => $reason,

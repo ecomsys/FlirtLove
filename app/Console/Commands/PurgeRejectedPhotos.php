@@ -9,46 +9,52 @@ use Illuminate\Support\Facades\Log;
 class PurgeRejectedPhotos extends Command
 {
     protected $signature = 'photos:purge-quarantine';
-    protected $description = 'Физически удаляет файлы отклоненных фото старше 30 дней (Очистка карантина)';
+    protected $description = 'Физически удаляет файлы отклоненных/спам фото старше 30 дней (Очистка карантина)';
 
     public function handle(): int
     {
         $cutoffDate = now()->subDays(30);
 
-        // Создаем базовый запрос
+        // Ищем только те фото, что УЖЕ лежат в карантине (soft deleted) 
+        // и имеют статус rejected или spam.
         $query = Photo::onlyTrashed()
-            ->where('status', 'rejected')
+            ->whereIn('status', ['rejected', 'spam'])
             ->where('deleted_at', '<', $cutoffDate);
 
-        // Клонируем запрос для подсчета (чтобы не сбить курсор чанков)
         $count = (clone $query)->count();
 
         if ($count === 0) {
             $this->info('Нет фото в карантине для удаления.');
-            return 0;
+            return Command::SUCCESS;
         }
 
-        $this->info("Найдено {$count} фото в карантине. Начинаю очистку...");
+        $this->info("Найдено {$count} фото в карантине. Начинаю физическую очистку...");
 
         $deletedCount = 0;
         $failedCount = 0;
 
-        // Удаляем чанками по 500 (фото удаляются дольше из-за файлов, 500 — оптимальный размер)
+        // Удаляем чанками по 500
         $query->chunkById(500, function ($photos) use (&$deletedCount, &$failedCount, $count) {
             foreach ($photos as $photo) {
                 try {
-                    // forceDelete() сам вызовет событие forceDeleting в модели, которое удалит файлы с диска!
+                    // forceDelete() на экземпляре модели вызовет booted() -> forceDeleting -> deleteFiles()
+                    // Это гарантированно удалит файлы (original, large, medium, thumb) с диска!
                     $photo->forceDelete(); 
                     $deletedCount++;
                 } catch (\Exception $e) {
                     $failedCount++;
-                    Log::error('Ошибка при очистке карантина фото', [
+                    Log::error('Крон: Ошибка физ. удаления фото', [
                         'photo_id' => $photo->id,
                         'error' => $e->getMessage()
                     ]);
                 }
             }
-            $this->info("Обработано {$deletedCount} из {$count}...");
+            
+            $this->info("Обработано {$deletedCount} из {$count}... (Ошибок: {$failedCount})");
+            
+            // Микро-задержка 0.1 сек, чтобы не перегружать I/O диска при удалении тысяч файлов
+            usleep(100000); 
+            
         });
 
         if ($deletedCount > 0 || $failedCount > 0) {
@@ -57,6 +63,6 @@ class PurgeRejectedPhotos extends Command
 
         $this->info("Очистка завершена. Удалено: {$deletedCount}, Ошибок: {$failedCount}.");
 
-        return 0;
+        return Command::SUCCESS;
     }
 }

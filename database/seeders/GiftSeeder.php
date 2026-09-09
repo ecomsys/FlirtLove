@@ -13,12 +13,6 @@ class GiftSeeder extends Seeder
     {
         $this->command->info('🎁 Заполняем каталог подарков...');
 
-        $deletedCount = Gift::count();
-        if ($deletedCount > 0) {
-            Gift::query()->delete();
-            $this->command->info("🗑️ Удалено {$deletedCount} старых подарков");
-        }
-
         $gifts = [
             // === Романтика (romantic) ===
             ['name' => 'Красная роза', 'category' => GiftCategory::Romantic->value, 'price' => 50],
@@ -60,14 +54,19 @@ class GiftSeeder extends Seeder
         $createdCount = 0;
 
         foreach ($gifts as $gift) {
-            Gift::create([
-                'name' => $gift['name'],
-                'slug' => Str::slug($gift['name']),
-                'image_url' => '', // Никаких внешних ссылок, только наш медиа-склад!
-                'price' => $gift['price'],
-                'category' => $gift['category'],
-                'is_active' => ($createdCount % 10 !== 9), 
-            ]);
+            $slug = Str::slug($gift['name']);
+
+            // ИСПОЛЬЗУЕМ updateOrCreate для защиты от External Key при повторном запуске
+            Gift::updateOrCreate(
+                ['slug' => $slug],
+                [
+                    'name' => $gift['name'],
+                    'image_url' => '', 
+                    'price' => $gift['price'],
+                    'category' => $gift['category'],
+                    'is_active' => ($createdCount % 10 !== 9), 
+                ]
+            );
 
             $createdCount++;
             $bar->advance();
@@ -79,27 +78,25 @@ class GiftSeeder extends Seeder
         // ============================================
         // СТАТИСТИКА
         // ============================================
-        $this->command->info('✅ Создано подарков: ' . Gift::count());
-        $this->command->info('');
-        $this->command->info('📊 Статистика каталога:');
-        
         $total = Gift::count();
         $active = Gift::where('is_active', true)->count();
         $inactive = Gift::where('is_active', false)->count();
 
+        $this->command->info('✅ Создано подарков: ' . $total);
+        $this->command->info('');
+        $this->command->info('📊 Статистика каталога:');
+        
         $this->command->info("   ┌─────────────────────┬──────────┐");
         $this->command->info("   │ Категория           │ Кол-во   │");
         $this->command->info("   ├─────────────────────┼──────────┤");
-        $this->command->info("   │ Всего               │ {$total}        │");
-        $this->command->info("   │ Активных            │ {$active}        │");
-        $this->command->info("   │ Скрытых (inactive)  │ {$inactive}        │");
+        $this->command->info("   │ Всего               │ " . str_pad($total, 8, ' ') . " │");
+        $this->command->info("   │ Активных            │ " . str_pad($active, 8, ' ') . " │");
+        $this->command->info("   │ Скрытых (inactive)  │ " . str_pad($inactive, 8, ' ') . " │");
         $this->command->info("   ├─────────────────────┼──────────┤");
 
-        // Динамически выводим статистику по всем категориям из Enum
         foreach (GiftCategory::cases() as $category) {
             $count = Gift::where('category', $category->value)->count();
-            $label = mb_substr($category->label(), 0, 19);
-            $label = str_pad($label, 19, ' ');
+            $label = str_pad(mb_substr($category->label(), 0, 19), 19, ' ');
             $countStr = str_pad((string) $count, 8, ' ');
             $this->command->info("   │ {$label} │ {$countStr} │");
         }

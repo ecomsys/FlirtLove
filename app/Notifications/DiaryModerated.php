@@ -2,38 +2,38 @@
 
 namespace App\Notifications;
 
-use App\Models\Diary;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Notifications\Notification;
 use Illuminate\Notifications\Messages\MailMessage;
 use Illuminate\Notifications\Messages\BroadcastMessage;
+use Illuminate\Support\Facades\Log;
 
 class DiaryModerated extends Notification implements ShouldQueue
 {
     use Queueable;
 
+    // ПЕРЕДАЕМ ТОЛЬКО ДАННЫЕ (СКАЛЯРЫ), А НЕ МОДЕЛЬ
     public function __construct(
-        protected Diary $diary,
+        protected int $diaryId,
+        protected string $diaryTitle,
         protected string $status, // approved, rejected, unpublished
         protected ?string $reason = null
     ) {}
 
-    /**
-     * Каналы доставки с учетом глобальных тумблеров и категорий
-     */
     public function via($notifiable): array
     {
         $channels = ['database'];
 
-        // Email: отправляем всегда, кроме случая, когда пост снят с публикации (незачем спамить)
+        // БЕЗОПАСНАЯ проверка: если email_settings = null, используем пустой массив
+        $emailSettings = $notifiable->email_settings ?? [];
+        
         if ($notifiable->email_enabled 
-            && ($notifiable->email_settings['on_event'] ?? true) 
+            && ($emailSettings['on_event'] ?? true) 
             && !in_array($this->status, ['unpublished'])) {
             $channels[] = 'mail';
         }
 
-        // Push (Broadcast): отправляем при всех важных статусах
         if ($notifiable->push_enabled && in_array($this->status, ['approved', 'rejected', 'unpublished'])) {
             $channels[] = 'broadcast';
         }
@@ -49,7 +49,7 @@ class DiaryModerated extends Notification implements ShouldQueue
             ->subject($messages['subject'])
             ->greeting("Здравствуйте, {$notifiable->name}!")
             ->line($messages['body'])
-            ->line("Заголовок записи: {$this->diary->title}")
+            ->line("Заголовок записи: {$this->diaryTitle}")
             ->when($this->status === 'rejected', function ($message) {
                 return $message->line('Причина: ' . $this->getReasonText())
                                ->line('Вы можете отредактировать запись и отправить ее снова.');
@@ -67,9 +67,9 @@ class DiaryModerated extends Notification implements ShouldQueue
             'type' => 'diary_moderated',
             'title' => $messages['title'],
             'message' => $messages['message'],
-            'action_url' => url('/diaries/' . $this->diary->id),          
+            'action_url' => url('/diaries/' . $this->diaryId),          
             'data' => [
-                'diary_id' => $this->diary->id,
+                'diary_id' => $this->diaryId,
                 'status' => $this->status,
                 'reason' => $this->reason,
             ]
@@ -78,7 +78,20 @@ class DiaryModerated extends Notification implements ShouldQueue
 
     public function toBroadcast($notifiable): BroadcastMessage
     {
-        return new BroadcastMessage($this->toDatabase($notifiable));
+        $messages = $this->getMessages();
+        
+        return new BroadcastMessage([
+            'type' => 'diary_moderated',
+            'title' => $messages['title'],
+            'message' => $messages['message'],
+            'action_url' => url('/diaries/' . $this->diaryId),
+            'timestamp' => now()->toDateTimeString(),
+            'data' => [
+                'diary_id' => $this->diaryId,
+                'status' => $this->status,
+                'reason' => $this->reason,
+            ]
+        ]);
     }
 
     private function getReasonText(): string
@@ -95,19 +108,19 @@ class DiaryModerated extends Notification implements ShouldQueue
                 'subject' => 'Ваша запись в дневнике одобрена',
                 'title' => '✅ Запись одобрена',
                 'body' => 'Ваша запись в дневнике была одобрена модератором.',
-                'message' => "Ваша запись «{$this->diary->title}» опубликована.",
+                'message' => "Ваша запись «{$this->diaryTitle}» опубликована.",
             ],
             'rejected' => [
                 'subject' => 'Ваша запись в дневнике отклонена',
                 'title' => '❌ Запись отклонена',
                 'body' => 'Ваша запись в дневнике была отклонена модератором.',
-                'message' => "Запись «{$this->diary->title}» отклонена. Причина: {$this->getReasonText()}",
+                'message' => "Запись «{$this->diaryTitle}» отклонена. Причина: {$this->getReasonText()}",
             ],
             'unpublished' => [
                 'subject' => 'Ваша запись снята с публикации',
                 'title' => '⏸️ Запись снята с публикации',
                 'body' => 'Ваша запись в дневнике была снята с публикации администратором.',
-                'message' => "Запись «{$this->diary->title}» снята с публикации и возвращена в черновики.",
+                'message' => "Запись «{$this->diaryTitle}» снята с публикации и возвращена в черновики.",
             ],
             default => [
                 'subject' => 'Статус записи изменен',
@@ -118,11 +131,8 @@ class DiaryModerated extends Notification implements ShouldQueue
         };
     }
 
-    /**
-     * ЗАЩИТА ОЧЕРЕДИ:
-     */
     public function failed(\Throwable $exception): void
     {
-        \Illuminate\Support\Facades\Log::error("Не удалось отправить DiaryModerated (ID: {$this->diary->id}): " . $exception->getMessage());
+        Log::error("Не удалось отправить DiaryModerated (ID: {$this->diaryId}): " . $exception->getMessage());
     }
 }

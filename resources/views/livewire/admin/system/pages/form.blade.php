@@ -82,12 +82,16 @@ new #[Layout('layouts.admin')] class extends Component
      * @param string $slug Базовый slug
      * @return string Уникальный slug
      */
-    protected function generateUniqueSlug(string $slug): string
+      protected function generateUniqueSlug(string $slug): string
     {
+        // ФИКС: Str::slug может вернуть пустую строку (если ввести только смайлы). Защищаемся.
+        if (empty($slug)) {
+            $slug = 'page-' . time();
+        }
+
         $originalSlug = $slug;
         $counter = 1;
 
-        // Проверяем, есть ли уже такой slug в базе
         while (Page::where('slug', $slug)->exists()) {
             $slug = $originalSlug . '-' . $counter;
             $counter++;
@@ -96,18 +100,10 @@ new #[Layout('layouts.admin')] class extends Component
         return $slug;
     }
 
-    /**
-     * Правила валидации данных.
-     * Уникальность slug проверяется с исключением текущей страницы при редактировании.
-     *
-     * @return array
-     */
     protected function rules(): array
     {
-        $slugRule = 'required|alpha_dash|unique:pages,slug';
-        if ($this->page && $this->page->exists) {
-            $slugRule .= ',' . $this->page->id;
-        }
+        // ФИКС: Жесткая регулярка + Rule::unique для PostgreSQL
+        $slugRule = ['required', 'regex:/^[a-z0-9-]+$/', \Illuminate\Validation\Rule::unique('pages', 'slug')->ignore($this->page?->id)];
 
         return [
             'title' => 'required|string|max:255',
@@ -117,7 +113,6 @@ new #[Layout('layouts.admin')] class extends Component
             'is_active' => 'boolean',
         ];
     }
-
         /**
      * Сохранение (создание или обновление) страницы.
      *
@@ -159,7 +154,7 @@ new #[Layout('layouts.admin')] class extends Component
 ?>
 
 
-<div class="space-y-6 pb-6" x-data="pageForm()">
+<div class="space-y-6 pb-6" x-data="pageForm()" wire:key="page-form-{{ $page?->id ?? 'new' }}">
     <!-- Заголовок и хлебные крошки -->
     <div class="flex items-center justify-between flex-wrap gap-4">
         <div class="flex items-start gap-3">
@@ -169,7 +164,7 @@ new #[Layout('layouts.admin')] class extends Component
             
             <div class="flex flex-col gap-1">
                 <div class="flex items-center gap-2 text-sm text-muted-foreground">
-                    <a href="{{ route('admin.system.pages.index') }}" wire:navigate class="hover:text-foreground transition-colors">Страницы</a>
+                    <a href="{{ route('admin.system.pages.index') }}" wire:navigate class="hover:text-foreground transition-colors">Назад к страницам</a>
                     <x-lucide-chevron-right class="w-4 h-4" />
                     <span>{{ $page && $page->exists ? 'Редактирование' : 'Создание' }}</span>
                 </div>
@@ -225,7 +220,7 @@ new #[Layout('layouts.admin')] class extends Component
 
                     <!-- Редактор -->
                     <div wire:ignore class="tinymce-wrapper flex-1 min-h-0 flex flex-col" x-show="isEditorLoaded" x-cloak>
-                        <textarea id="tinyMceBody" wire:model="body" placeholder="Введите текст контента..."></textarea>
+                        <textarea id="tinyMceBody">{{ $body }}</textarea>                        
                     </div>
                     
                     @error('body') <p class="text-xs text-destructive mt-1">{{ $message }}</p> @enderror
@@ -243,20 +238,21 @@ new #[Layout('layouts.admin')] class extends Component
                 </h3>
 
                 <div class="flex flex-col gap-2 mb-4">
-                    <x-ui.label for="slug" class="text-xs">URL (Slug)</x-ui.label>
+                    <x-ui.label for="slug" class="text-xs">Slug</x-ui.label>
                     <div class="flex items-center gap-2">                       
                         <x-ui.input id="slug" wire:model="slug" placeholder="url-stranitsy" class="flex-1 text-sm" />
                     </div>
                     @error('slug') <p class="text-xs text-destructive mt-1">{{ $message }}</p> @enderror
                 </div>
 
-                <div class="flex items-center justify-between p-3 rounded-md border border-border mb-4 bg-muted/30">
-                    <div class="pr-4">
-                        <p class="text-sm font-medium">Статус</p>
-                        <p class="text-xs text-muted-foreground">{{ $is_active ? 'Доступна всем' : 'Черновик' }}</p>
+               <div class="flex items-center justify-between p-3 rounded-md border border-border mb-4 bg-muted/30" x-data="{ active: @entangle('is_active') }">
+                  <div class="pr-4">
+                        <p class="text-sm font-medium">Доступность страницы</p>
+                        <!-- ФИКС: Используем x-text, чтобы Alpine сам мгновенно менял текст -->
+                        <p class="text-xs text-muted-foreground" x-text="active ? 'Опубликовано (страница видна всем)' : 'Скрыто (страница недоступна)'"></p>
                     </div>
                     <label class="relative inline-flex items-center cursor-pointer">
-                        <input type="checkbox" wire:model="is_active" class="sr-only peer" />
+                        <input type="checkbox" wire:model="is_active"  x-model="active"  class="sr-only peer" />
                         <div class="w-11 h-6 bg-muted rounded-full peer peer-checked:after:translate-x-full peer-checked:bg-primary after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border after:border-border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:border-primary"></div>
                     </label>
                 </div>
@@ -310,9 +306,8 @@ new #[Layout('layouts.admin')] class extends Component
         </div>
     </div>
 
-   <!-- Подключаем TinyMCE и наш внешний файл конфигурации -->
+    <!-- Подключаем только сам TinyMCE -->
     <script src="https://cdn.jsdelivr.net/npm/tinymce@6.8.4/tinymce.min.js"></script>
-    <script src="{{ asset('js/tinymce.config.js') }}"></script>
 
     <script>
         window.pageForm = function () {
@@ -331,7 +326,6 @@ new #[Layout('layouts.admin')] class extends Component
                             this.waitForTinyMCE();
                             this.setupThemeWatcher();
                         } else {
-                            // ФИКС: Если DOM еще не готов, ждем 100мс и пробуем снова, пока не найдет textarea
                             setTimeout(() => this.init(), 100);
                         }
                     });
@@ -355,11 +349,7 @@ new #[Layout('layouts.admin')] class extends Component
 
                 initTinyMCE() {
                     if (typeof tinymce === 'undefined' || !this.textareaElement) return;
-                    
-                    // ФИКС: Жестко убиваем старые инстансы, если они зависли, чтобы не было гонок
-                    if (tinymce.get('tinyMceBody')) {
-                        tinymce.get('tinyMceBody').remove();
-                    }
+                    if (tinymce.get('tinyMceBody')) return; // Защита от дублей
 
                     this.currentTheme = this.getTheme();
                     const isDark = this.currentTheme === 'dark';
@@ -370,27 +360,52 @@ new #[Layout('layouts.admin')] class extends Component
                     const mutedColor = this.getCssVar('--muted-foreground');
                     const mutedBgColor = this.getCssVar('--muted');
 
-                    // Достаем настройки из внешнего файла
-                    const config = window.getTinyMceConfig(isDark, textColor, bgColor, borderColor, mutedColor, mutedBgColor);
-                    
-                    // Добавляем селектор и коллбэки
-                    config.selector = '#tinyMceBody';
-                    config.setup = (editor) => {
-                        editor.on('init', () => {
-                            this.isEditorLoaded = true; 
-                        });
+                    tinymce.init({
+                        selector: '#tinyMceBody',
+                        license_key: 'gpl',
+                        menubar: false,
+                        height: '100%',
+                        plugins: 'lists link table image autolink wordcount code fullscreen quickbars',
+                        toolbar: 'undo redo | blocks | bold italic underline strikethrough | alignleft aligncenter alignright | bullist numlist outdent indent | link table image | code fullscreen',
+                        skin: isDark ? 'oxide-dark' : 'oxide',
+                        content_css: isDark ? 'dark' : 'default',
+                        statusbar: false, 
+                        placeholder: 'Введите текст контента...',
+                        
+                        content_style: `
+                            body { 
+                                background-color: ${bgColor} !important; 
+                                color: ${textColor} !important;
+                                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; 
+                                font-size: 0.85rem; 
+                                line-height: 1.6; 
+                                padding: 1rem; 
+                                margin: 0 !important;
+                            }
+                            h1, h2, h3, h4 { color: ${textColor} !important; }
+                            h1 { font-size: 1.5rem; font-weight: 700; margin-top: 1rem; margin-bottom: 0.5rem; }
+                            h2 { font-size: 1.25rem; font-weight: 600; margin-top: 1rem; margin-bottom: 0.5rem; }
+                            p { margin: 0 0 1rem 0; }
+                            a { color: #3b82f6; text-decoration: underline; }
+                            blockquote { border-left: 0.25rem solid ${borderColor}; padding-left: 1rem; color: ${mutedColor}; font-style: italic; margin: 1rem 0; }
+                            pre { background-color: ${mutedBgColor}; color: ${textColor}; padding: 1rem; border-radius: 0.5rem; font-family: monospace; overflow-x: auto; }
+                            table { border-collapse: collapse; width: 100%; }
+                            th, td { border: 0.625rem solid ${borderColor}; padding: 0.5rem; }
+                        `,
+                        
+                        setup: (editor) => {
+                            editor.on('init', () => {
+                                this.isEditorLoaded = true; 
+                            });
 
-                        editor.on('input change keyup undo redo SetContent', () => {
-                            clearTimeout(this.typingTimer);
-                            this.typingTimer = setTimeout(() => {
-                                // ФИКС: Напрямую пушим в Livewire, минуя баги с textarea. 
-                                // Добавили ?? '', чтобы не уронить Livewire, если getContent вдруг вернет null
-                                this.$wire.set('body', editor.getContent() ?? '');
-                            }, 500);
-                        });
-                    };
-
-                    tinymce.init(config);
+                            editor.on('input change keyup undo redo SetContent', () => {
+                                clearTimeout(this.typingTimer);
+                                this.typingTimer = setTimeout(() => {
+                                    this.$wire.set('body', editor.getContent() ?? '');
+                                }, 500);
+                            });
+                        }
+                    });
                 },
 
                 destroyTinyMCE() {
@@ -402,18 +417,26 @@ new #[Layout('layouts.admin')] class extends Component
                 },
 
                 setupThemeWatcher() {
+                    // ФИКС: Реагируем ТОЛЬКО на смену класса 'dark', а не на любой чих Livewire
                     this.themeObserver = new MutationObserver((mutations) => {
-                        mutations.forEach((mutation) => {
+                        for (const mutation of mutations) {
                             if (mutation.attributeName === 'class') {
-                                const newTheme = this.getTheme();
-                                if (newTheme !== this.currentTheme) {
+                                const target = mutation.target;
+                                const isDarkNow = target.classList.contains('dark');
+                                
+                                if (isDarkNow && this.currentTheme !== 'dark') {
+                                    this.currentTheme = 'dark';
+                                    this.destroyTinyMCE();
+                                    setTimeout(() => this.initTinyMCE(), 50);
+                                } else if (!isDarkNow && this.currentTheme !== 'light') {
+                                    this.currentTheme = 'light';
                                     this.destroyTinyMCE();
                                     setTimeout(() => this.initTinyMCE(), 50);
                                 }
                             }
-                        });
+                        }
                     });
-                    this.themeObserver.observe(document.documentElement, { attributes: true });
+                    this.themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
                 },
 
                 destroy() {

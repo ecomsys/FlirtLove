@@ -2,23 +2,33 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class Transaction extends Model
 {
-    // ВАЖНО: Никаких SoftDeletes! Финансовые записи нельзя удалять или скрывать.
+    // КОНСТАНТЫ СТАТУСОВ
+    public const STATUS_PENDING = 'pending';
+    public const STATUS_SUCCESS = 'success';
+    public const STATUS_FAILED = 'failed';
+    public const STATUS_REFUNDED = 'refunded';
+
+    // КОНСТАНТЫ ТИПОВ
+    public const TYPE_SUBSCRIPTION = 'subscription';
+    public const TYPE_CREDITS = 'credits';
+    public const TYPE_REFUND = 'refund';
 
     protected $fillable = [
         'user_id',
         'amount',
         'currency',
-        'type',                  // subscription, credits, refund
-        'status',                // pending, success, failed, refunded
-        'provider',              // stripe, yookassa, apple, google, manual
+        'type',
+        'status',
+        'provider',
         'provider_transaction_id',
-        'credits_amount',        // Если покупали внутреннюю валюту
-        'meta',                  // Сырый JSON от платежки (вебхук)
+        'credits_amount',
+        'meta',
     ];
 
     protected $casts = [
@@ -37,98 +47,84 @@ class Transaction extends Model
     }
 
     // ============================================
-    // СКОПЫ (Для админки и финансового дашборда)
+    // СКОПЫ
     // ============================================
 
-    public function scopeSuccess($query)
+    public function scopeSuccess(Builder $query): Builder
     {
-        return $query->where('status', 'success');
+        return $query->where('status', self::STATUS_SUCCESS);
     }
 
-    public function scopeFailed($query)
+    public function scopeFailed(Builder $query): Builder
     {
-        return $query->where('status', 'failed');
+        return $query->where('status', self::STATUS_FAILED);
     }
 
-    public function scopeRefunded($query)
+    public function scopeRefunded(Builder $query): Builder
     {
-        return $query->where('status', 'refunded');
+        return $query->where('status', self::STATUS_REFUNDED);
     }
 
-    public function scopePending($query)
+    public function scopePending(Builder $query): Builder
     {
-        return $query->where('status', 'pending');
+        return $query->where('status', self::STATUS_PENDING);
     }
 
-    public function scopeSubscriptions($query)
+    public function scopeSubscriptions(Builder $query): Builder
     {
-        return $query->where('type', 'subscription');
+        return $query->where('type', self::TYPE_SUBSCRIPTION);
     }
 
-    public function scopeCredits($query)
+    public function scopeCredits(Builder $query): Builder
     {
-        return $query->where('type', 'credits');
+        return $query->where('type', self::TYPE_CREDITS);
     }
 
-    /**
-     * Выручка за определенный период (для дашборда админки).
-     * Использование: Transaction::success()->period(now()->startOfMonth(), now())->sum('amount')
-     */
-    public function scopePeriod($query, $startDate, $endDate)
+     public function scopePeriod(Builder $query, $startDate, $endDate): Builder
     {
         return $query->whereBetween('created_at', [$startDate, $endDate]);
     }
 
     // ============================================
-    // ХЕЛПЕРЫ СТАТУСОВ (Для вебхуков и сервис-классов)
+    // ХЕЛПЕРЫ СТАТУСОВ
     // ============================================
 
     public function isSuccess(): bool
     {
-        return $this->status === 'success';
+        return $this->status === self::STATUS_SUCCESS;
     }
 
-    /**
-     * Отметить платеж как успешный (вызывается при получении вебхука от платежки).
-     */
     public function markAsSuccess(array $metaData = []): bool
     {
-        if ($this->status === 'success') {
-            return true; // Идемпотентность: если уже успешен, не делаем лишних запросов
+        if ($this->status === self::STATUS_SUCCESS) {
+            return true; 
         }
 
         return $this->update([
-            'status' => 'success',
+            'status' => self::STATUS_SUCCESS,
             'meta' => array_merge($this->meta ?? [], $metaData),
         ]);
     }
 
-    /**
-     * Отметить платеж как ошибочный.
-     */
     public function markAsFailed(?string $reason = null): bool
     {
         return $this->update([
-            'status' => 'failed',
+            'status' => self::STATUS_FAILED,
             'meta' => array_merge($this->meta ?? [], ['fail_reason' => $reason]),
         ]);
     }
 
-    /**
-     * Оформить возврат (Refund).    
-     */
-   public function markAsRefunded(array $metaData = []): bool
+    public function markAsRefunded(array $metaData = []): bool
     {
-        if ($this->status !== 'success') {
-            return false; // Нельзя вернуть деньги за платеж, который не прошел
+        if ($this->status !== self::STATUS_SUCCESS) {
+            return false; 
         }
 
         $updated = $this->update([
-            'status' => 'refunded',
+            'status' => self::STATUS_REFUNDED,
             'meta' => array_merge($this->meta ?? [], $metaData),
         ]);
 
-        // Если статус успешно обновлен — запускам событие, которое снимет VIP/кредиты!
         if ($updated) {
             event(new \App\Events\TransactionRefunded($this));
         }
@@ -143,18 +139,14 @@ class Transaction extends Model
     public function getStatusBadgeAttribute(): array
     {
         return match ($this->status) {
-            'pending'  => ['variant' => 'warning', 'label' => 'В ожидании'],
-            'success'  => ['variant' => 'success', 'label' => 'Успешно'],
-            'failed'   => ['variant' => 'destructive', 'label' => 'Ошибка'],
-            'refunded' => ['variant' => 'secondary', 'label' => 'Возврат'],
-            default    => ['variant' => 'secondary', 'label' => 'Неизвестно'],
+            self::STATUS_PENDING  => ['variant' => 'warning', 'label' => 'В ожидании'],
+            self::STATUS_SUCCESS  => ['variant' => 'success', 'label' => 'Успешно'],
+            self::STATUS_FAILED   => ['variant' => 'destructive', 'label' => 'Ошибка'],
+            self::STATUS_REFUNDED => ['variant' => 'secondary', 'label' => 'Возврат'],
+            default               => ['variant' => 'secondary', 'label' => 'Неизвестно'],
         };
     }
 
-    /**
-     * Форматированная сумма с валютой (для вывода в таблицах админки).
-     * Пример: "999.00 ₽"
-     */
     public function getFormattedAmountAttribute(): string
     {
         return number_format($this->amount, 2, '.', ' ') . ' ' . $this->currency;

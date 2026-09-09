@@ -5,13 +5,12 @@ namespace App\Models;
 use App\Enums\FraudAlertSeverity;
 use App\Enums\FraudAlertStatus;
 use App\Enums\FraudTriggerType;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class FraudAlert extends Model
 {
-    // Никаких SoftDeletes! Алерты должны храниться вечно для аналитики паттернов мошенников.
-
     protected $fillable = [
         'user_id',
         'trigger_type',
@@ -27,7 +26,7 @@ class FraudAlert extends Model
         'resolved_at' => 'datetime',
         'status' => FraudAlertStatus::class,
         'severity' => FraudAlertSeverity::class,
-        'trigger_type' => FraudTriggerType::class, // НОВЫЙ КАСТ
+        'trigger_type' => FraudTriggerType::class, 
     ];
 
     // ============================================
@@ -48,13 +47,15 @@ class FraudAlert extends Model
     // СКОПЫ
     // ============================================
 
-    public function scopeOpen($query) { return $query->where('status', FraudAlertStatus::Open); }
-    public function scopeResolved($query) { return $query->where('status', FraudAlertStatus::Resolved); }
-    public function scopeFalsePositive($query) { return $query->where('status', FraudAlertStatus::FalsePositive); }
-    public function scopeHighSeverity($query) { return $query->where('severity', FraudAlertSeverity::High); }
+    public function scopeOpen(Builder $query): Builder { return $query->where('status', FraudAlertStatus::Open); }
+    public function scopeResolved(Builder $query): Builder { return $query->where('status', FraudAlertStatus::Resolved); }
+    public function scopeFalsePositive(Builder $query): Builder { return $query->where('status', FraudAlertStatus::FalsePositive); }
+    public function scopeHighSeverity(Builder $query): Builder { return $query->where('severity', FraudAlertSeverity::High); }
     
-    // Скоп теперь строго принимает Enum
-    public function scopeOfTrigger($query, FraudTriggerType $type) { return $query->where('trigger_type', $type); }
+    public function scopeOfTrigger(Builder $query, FraudTriggerType $type): Builder 
+    { 
+        return $query->where('trigger_type', $type); 
+    }
 
     // ============================================
     // ХЕЛПЕРЫ БИЗНЕС-ЛОГИКИ
@@ -62,7 +63,6 @@ class FraudAlert extends Model
 
     public function isOpen(): bool
     {
-        // Теперь нам не нужны проверки на строку, так как каст гарантирует Enum
         return $this->status === FraudAlertStatus::Open;
     }
 
@@ -92,8 +92,12 @@ class FraudAlert extends Model
 
     public function getTriggerLabelAttribute(): string
     {
-        // Если вдруг в базе старые данные, которые не совпали с Enum, fallback спасет от 500 ошибки
-        return $this->trigger_type?->label() ?? ucfirst(str_replace('_', ' ', $this->getRawOriginal('trigger_type')));
+        if ($this->trigger_type instanceof FraudTriggerType) {
+            return $this->trigger_type->label();
+        }
+        // Усиленная защита от падения, если в базе мусор или null
+        $raw = $this->getRawOriginal('trigger_type');
+        return is_string($raw) ? ucfirst(str_replace('_', ' ', $raw)) : 'Unknown';
     }
 
     public function getStatusBadgeAttribute(): array
@@ -112,6 +116,7 @@ class FraudAlert extends Model
         ];
     }
 }
+
 
 // модель FraudAlert — это иммунная система платформы. В дейтинге скаммеры и боты — это главная причина оттока нормальных юзеров. 
 // Если девушка заходит в аппку и получает 10 сообщений от ботов "кинь на карту 500 рублей", она удалит приложение навсегда.

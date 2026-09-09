@@ -33,8 +33,8 @@ new class extends Component
                 }
             })
             ->limit(10)
-            // ФИКС: Добавили 'deleted_at', чтобы компонент статуса видел, что юзер удален
-            ->get(['id', 'name', 'email', 'is_premium', 'premium_expires_at', 'status', 'last_seen', 'deleted_at']);
+            // ФИКС: Убрали несуществующую колонку is_premium, добавили vip_expires_at и deleted_at
+            ->get(['id', 'name', 'email', 'status', 'premium_expires_at', 'vip_expires_at', 'last_seen', 'deleted_at']);
     }
 
     public function selectUser(int $userId): void
@@ -122,13 +122,15 @@ new class extends Component
                     wire:key="user-{{ $u->id }}"
                     wire:click="selectUser({{ $u->id }})" 
                     class="user-search-item w-full p-3 flex items-center gap-3 hover:bg-muted/50 text-left transition-colors border-l-4 border-transparent"
-                    :class="highlightedIndex === {{ $loop->index }} ? 'bg-blue-500/10 border-blue-500' : ''"
+                    :class="highlightedIndex === {{ $loop->index }} ? '!bg-blue-500/20 !border-blue-500 text-blue-600 dark:text-blue-400' : ''"
                 >
                     <x-avatar src="{{ $u->avatar_url }}" name="{{ $u->name }}" size="sm" userId="{{ $u->id }}" showStatus="true" :isOnline="$u->is_online" />
                     <div class="flex-1 min-w-0">
-                        <div class="flex items-center gap-1">
+                        <div class="flex items-center gap-1.5 min-w-0">
                             <x-user-status-sign :user="$u" />
                             <span class="font-medium text-sm truncate">{{ $u->name }}</span>
+                            <!-- ФИКС: ID в скобках перенесен к имени, как ты просил -->
+                            <span class="text-xs text-muted-foreground/70 font-mono shrink-0">(#{{ $u->id }})</span>
                             @if($u->has_active_premium)
                                 <x-lucide-crown class="w-3 h-3 text-yellow-500 shrink-0" />
                             @endif
@@ -136,7 +138,7 @@ new class extends Component
                                 <x-ui.badge variant="destructive" size="xs" class="shrink-0">Бан</x-ui.badge>
                             @endif
                         </div>
-                        <div class="text-xs text-muted-foreground truncate">{{ $u->email }} (ID: {{ $u->id }})</div>
+                        <div class="text-xs text-muted-foreground truncate">{{ $u->email }}</div>
                     </div>
                 </button>
             @empty

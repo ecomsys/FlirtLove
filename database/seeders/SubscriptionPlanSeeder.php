@@ -12,8 +12,6 @@ class SubscriptionPlanSeeder extends Seeder
     {
         $this->command->info('💎 Создаем тарифы (Premium & VIP)...');
 
-        SubscriptionPlan::query()->delete();
-
         $plans = [
             // === PREMIUM (Базовая подписка) ===
             [
@@ -47,7 +45,7 @@ class SubscriptionPlanSeeder extends Seeder
                 'tier' => 'premium',
                 'name' => 'Premium на 3 месяца (Выгодный)',
                 'price' => 1690.00,
-                'old_price' => 2970.00, // 990 * 3
+                'old_price' => 2970.00,
                 'duration_days' => 90,
                 'is_active' => true,
                 'sort_order' => 4,
@@ -79,19 +77,24 @@ class SubscriptionPlanSeeder extends Seeder
         $bar = $this->command->getOutput()->createProgressBar(count($plans));
 
         foreach ($plans as $plan) {
-            SubscriptionPlan::create([
-                'tier' => $plan['tier'],
-                'name' => $plan['name'],
-                'slug' => Str::slug($plan['name']),
-                'price' => $plan['price'],
-                'old_price' => $plan['old_price'],
-                'currency' => 'RUB',
-                'duration_days' => $plan['duration_days'],
-                'apple_product_id' => 'com.flirtlove.' . $plan['tier'] . '.' . $plan['duration_days'],
-                'google_product_id' => $plan['tier'] . '_' . $plan['duration_days'] . '_days',
-                'is_active' => $plan['is_active'],
-                'sort_order' => $plan['sort_order'],
-            ]);
+            $slug = Str::slug($plan['name']);
+
+            // ИСПОЛЬЗУЕМ updateOrCreate для защиты от дубликатов при повторном запуске
+            SubscriptionPlan::updateOrCreate(
+                ['slug' => $slug],
+                [
+                    'tier' => $plan['tier'],
+                    'name' => $plan['name'],
+                    'price' => $plan['price'],
+                    'old_price' => $plan['old_price'],
+                    'currency' => 'RUB',
+                    'duration_days' => $plan['duration_days'],
+                    'apple_product_id' => 'com.flirtlove.' . $plan['tier'] . '.' . $plan['duration_days'],
+                    'google_product_id' => $plan['tier'] . '_' . $plan['duration_days'] . '_days',
+                    'is_active' => $plan['is_active'],
+                    'sort_order' => $plan['sort_order'],
+                ]
+            );
             $bar->advance();
         }
 

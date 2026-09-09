@@ -2,12 +2,12 @@
 
 use App\Actions\Admin\BlogPostsAction;
 use App\Models\BlogPost;
-
+use App\Models\User;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Url;
-use Livewire\Attributes\Session;
 use Livewire\Volt\Component;
 use Livewire\WithPagination;
 
@@ -15,43 +15,43 @@ new #[Layout('layouts.admin')] class extends Component
 {
     use WithPagination;
 
-    #[Url(as: 'q', except: '')] 
-    #[Session] 
+    #[Url(as: 'q', except: '')]
     public string $search = '';
-    #[Session] 
-    public string $statusFilter = 'all';
-    #[Session] 
+    
+    #[Url(as: 'status', except: 'published')]
+    public string $statusFilter = 'published';
+    
     public int $perPage = 15;
     
-      public array $selected = [];
+    public array $selected = [];
     public bool $selectAll = false;
     public string $bulkAction = '';
 
-    /** @var string URL для кнопки "Назад" */
     public string $backUrl = '';
 
-       public function mount(): void
+    public function mount(): void
     {
+        abort_unless(in_array(auth()->user()?->role, [User::ROLE_ADMIN, User::ROLE_MODERATOR]), 403);
+
         $previousUrl = url()->previous();
         $this->backUrl = ($previousUrl && $previousUrl !== url()->current()) 
             ? $previousUrl 
             : route('admin.dashboard');
 
-        // ФИКС: Читаем напрямую из URL, чтобы перебить Session
         $qParam = request()->query('q', '');
-        if (!empty($qParam) && is_numeric($qParam)) {
+        if (!empty($qParam) && ctype_digit((string)$qParam)) {
             $this->search = (string) $qParam;
-            $this->statusFilter = 'all'; // Сбрасываем фильтр статуса, чтобы пост 100% нашелся
+            $this->statusFilter = 'all';
         }
     }
 
-       public function setStatusFilter(string $status): void 
+    public function setStatusFilter(string $status): void 
     { 
         $this->statusFilter = $status; 
         $this->search = ''; 
         $this->resetPage(); 
         $this->clearSelection();
-        $this->clearComputedCache(); // ФИКС: Сбрасываем кэш
+        $this->clearComputedCache();
     }
 
     public function deletePost(int $id, BlogPostsAction $action): void
@@ -59,7 +59,7 @@ new #[Layout('layouts.admin')] class extends Component
         try {
             $action->delete(BlogPost::findOrFail($id), auth()->user());
             $this->dispatch('show-toast', type: 'success', message: 'Пост удален');
-            $this->clearComputedCache(); // ФИКС: Сбрасываем кэш
+            $this->clearComputedCache();
         } catch (\Exception $e) {
             Log::error("Ошибка удаления: " . $e->getMessage());
             $this->dispatch('show-toast', type: 'error', message: 'Ошибка сервера!');
@@ -102,12 +102,11 @@ new #[Layout('layouts.admin')] class extends Component
         }
     }
 
-        public function duplicatePost(int $id, BlogPostsAction $action): void
+    public function duplicatePost(int $id, BlogPostsAction $action): void
     {
         try {
             $post = BlogPost::findOrFail($id);
             $action->duplicate($post, auth()->user());
-            
             $this->dispatch('show-toast', type: 'success', message: 'Пост продублирован');
             $this->clearComputedCache();
         } catch (\Exception $e) {
@@ -151,8 +150,7 @@ new #[Layout('layouts.admin')] class extends Component
         $this->clearSelection();
         $this->clearComputedCache();
 
-        // ФИКС: Умная подсветка вкладки при ручном вводе ID
-        if (is_numeric($this->search) && !empty($this->search)) {
+        if (ctype_digit($this->search) && !empty($this->search)) {
             $post = BlogPost::find((int) $this->search);
             if ($post) {
                 $this->statusFilter = $post->status;
@@ -178,27 +176,28 @@ new #[Layout('layouts.admin')] class extends Component
         $this->selectAll = false; 
     }
 
-        #[Computed]
+    #[Computed]
     public function posts()
     {
         $searchOperator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
+        $isId = !empty($this->search) && ctype_digit($this->search);
 
         return BlogPost::query()
             ->with(['category', 'cover']) 
-            ->when($this->search, function ($query) use ($searchOperator) {
+            ->when($this->search, function ($query) use ($searchOperator, $isId) {
                 $search = $this->search;
-                $query->where(function ($q) use ($search, $searchOperator) {
+                $query->where(function ($q) use ($search, $searchOperator, $isId) {
                     $q->where('title', $searchOperator, "%{$search}%")
                       ->orWhere('slug', $searchOperator, "%{$search}%");
                     
-                    // ФИКС: Если ищем число, ищем точное совпадение по ID
-                    if (is_numeric($search)) {
+                    if ($isId) {
                         $q->orWhere('id', (int) $search);
                     }
                 });
             })
             ->when($this->statusFilter === 'uncategorized', fn($q) => $q->whereNull('category_id'))
             ->when(!in_array($this->statusFilter, ['all', 'uncategorized']), fn($q) => $q->where('status', $this->statusFilter))
+            ->orderBy('is_featured', 'desc')
             ->latest('created_at')
             ->latest('id')
             ->paginate(min(max($this->perPage, 1), 100));
@@ -207,21 +206,23 @@ new #[Layout('layouts.admin')] class extends Component
     #[Computed]
     public function counts(): array
     {
-        $stats = BlogPost::query()
-            ->selectRaw("COUNT(*) as total")
-            ->selectRaw("SUM(CASE WHEN status = 'published' THEN 1 ELSE 0 END) as published")
-            ->selectRaw("SUM(CASE WHEN status = 'draft' THEN 1 ELSE 0 END) as draft")
-            ->selectRaw("SUM(CASE WHEN status = 'archived' THEN 1 ELSE 0 END) as archived")
-            ->selectRaw("SUM(CASE WHEN category_id IS NULL THEN 1 ELSE 0 END) as uncategorized")
-            ->first();
+        return Cache::remember('admin_blog_counts', 60, function () {
+            $stats = BlogPost::query()
+                ->selectRaw("COUNT(*) as total")
+                ->selectRaw("SUM(CASE WHEN status = 'published' THEN 1 ELSE 0 END) as published")
+                ->selectRaw("SUM(CASE WHEN status = 'draft' THEN 1 ELSE 0 END) as draft")
+                ->selectRaw("SUM(CASE WHEN status = 'archived' THEN 1 ELSE 0 END) as archived")
+                ->selectRaw("SUM(CASE WHEN category_id IS NULL THEN 1 ELSE 0 END) as uncategorized")
+                ->first();
 
-        return [
-            'all' => $stats->total ?? 0,
-            'published' => $stats->published ?? 0,
-            'draft' => $stats->draft ?? 0,
-            'archived' => $stats->archived ?? 0,
-            'uncategorized' => $stats->uncategorized ?? 0,
-        ];
+            return [
+                'all' => (int)($stats?->total ?? 0),
+                'published' => (int)($stats?->published ?? 0),
+                'draft' => (int)($stats?->draft ?? 0),
+                'archived' => (int)($stats?->archived ?? 0),
+                'uncategorized' => (int)($stats?->uncategorized ?? 0),
+            ];
+        });
     }
 }; 
 ?>
@@ -268,7 +269,7 @@ new #[Layout('layouts.admin')] class extends Component
             <x-ui.input wire:model.live.debounce.300ms="search" type="search" placeholder="Поиск по названию или id..." class="pl-9 pr-8" />
             <x-lucide-search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             @if (!empty($search))
-                <button wire:click="clearSearch" class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+                <button wire:click="clearSearch" class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground z-10">
                     <x-lucide-x class="w-4 h-4" />
                 </button>
             @endif
@@ -276,7 +277,7 @@ new #[Layout('layouts.admin')] class extends Component
     </div>
 
     <!-- Панель массовых действий -->
-    <div x-show="$wire.selected.length > 0" x-cloak x-transition class="bg-muted/30 border border-border rounded-lg p-3 flex flex-wrap items-center gap-3">
+    <div x-show="$wire.selected.length > 0" x-cloak class="bg-muted/30 border border-border rounded-lg p-3 flex flex-wrap items-center gap-3">
         <span class="text-sm font-medium">Выбрано: <span x-text="$wire.selected.length" class="text-primary"></span></span>
         <div class="flex-1"></div>
         
@@ -316,16 +317,15 @@ new #[Layout('layouts.admin')] class extends Component
             </x-ui.table-row>
         </x-ui.table-header>
 
-           <x-ui.table-body>
+        <x-ui.table-body>
             @forelse ($this->posts as $post)
                 @php 
-                    // ФИКС: Строгое равенство, чтобы не подсвечивало 15 при поиске 5
-                    $isHighlighted = is_numeric($this->search) && $post->id === (int)$this->search; 
+                    $isHighlighted = ctype_digit($this->search) && $post->id === (int)$this->search;
                 @endphp
 
-                <x-ui.table-row 
-                    wire:key="post-{{ $post->id }}-status-{{ $post->status }}" 
-                    class="table-row-animate {{ $isHighlighted ? 'bg-primary/10 ring-2 ring-primary/50 transition-all duration-500' : '' }} {{ in_array((string)$post->id, $this->selected) ? 'bg-muted/30' : '' }}"
+               <x-ui.table-row 
+                    wire:key="post-{{ $post->id }}" 
+                    class="{{ $isHighlighted ? 'bg-primary/10 ring-2 ring-primary/50 transition-all duration-500' : '' }} {{ in_array((string)$post->id, $this->selected) ? 'bg-muted/30' : '' }} {{ $post->is_featured && !$isHighlighted && !in_array((string)$post->id, $this->selected) ? 'bg-yellow-500/5 border-l-4 border-yellow-500/30' : '' }}"
                     x-data="{ isHi: {{ $isHighlighted ? 'true' : 'false' }} }"
                     x-init="isHi && $nextTick(() => { $el.scrollIntoView({ behavior: 'smooth', block: 'center' }) })"
                 >
@@ -333,7 +333,6 @@ new #[Layout('layouts.admin')] class extends Component
                         <x-checkbox wire:model.live="selected" value="{{ $post->id }}" />
                     </x-ui.table-cell>
                     
-                    <!-- ID: Подсвечивается синим, если это искомый ID -->
                     <x-ui.table-cell class="text-xs font-mono whitespace-nowrap {{ $isHighlighted ? 'text-primary font-bold' : 'text-muted-foreground' }}">
                         #{{ $post->id }}
                     </x-ui.table-cell>
@@ -350,14 +349,21 @@ new #[Layout('layouts.admin')] class extends Component
                         @endif
                     </x-ui.table-cell>
 
-                   <x-ui.table-cell>
-                        <div class="max-w-[12rem] md:max-w-[22rem]">
-                            <a href="{{ route('admin.system.blog.edit', $post) }}" wire:navigate class="block truncate font-medium text-sm hover:text-primary hover:underline">
-                                {{ $post->title }}
-                            </a>
-                            @if($post->excerpt)
-                                <div class="truncate text-xs text-muted-foreground mt-0.5">{{ $post->excerpt }}</div>
+                    <x-ui.table-cell>
+                        <div class="flex items-center gap-2 max-w-[12rem] md:max-w-[22rem]">
+                            @if($post->is_featured)
+                                <span class="shrink-0 text-yellow-500 flex items-center" title="Закрепленный пост">
+                                    <x-lucide-pin class="w-4 h-4" />
+                                </span>
                             @endif
+                            <div class="min-w-0 flex-1">
+                                <a href="{{ route('admin.system.blog.edit', $post) }}" wire:navigate class="flex items-center gap-1 font-medium text-sm hover:text-primary hover:underline">
+                                    <span class="truncate">{{ $post->title }}</span>
+                                </a>
+                                @if($post->excerpt)
+                                    <div class="truncate text-xs text-muted-foreground mt-0.5">{{ $post->excerpt }}</div>
+                                @endif
+                            </div>
                         </div>
                     </x-ui.table-cell>
                     
@@ -380,7 +386,7 @@ new #[Layout('layouts.admin')] class extends Component
                     </x-ui.table-cell>
                     
                     <x-ui.table-cell class="text-right">
-                        <x-ui.dropdown-menu>
+                        <x-ui.dropdown-menu wire:key="dropdown-post-{{ $post->id }}-{{ $post->status }}">
                             <x-ui.dropdown-menu-trigger>
                                 <x-ui.button variant="ghost" size="icon-sm"><x-lucide-more-horizontal class="w-4 h-4" /></x-ui.button>
                             </x-ui.dropdown-menu-trigger>
@@ -429,20 +435,16 @@ new #[Layout('layouts.admin')] class extends Component
                 </x-ui.table-row>
             @empty
                 <x-ui.table-row wire:key="empty-state">
-                    <x-ui.table-cell colspan="8" class="py-12 text-center text-muted-foreground bg-card">
-                        <x-ui.empty>
-                            <x-ui.empty-header>
-                                <x-ui.empty-media variant="icon">
-                                    <x-lucide-newspaper class="w-12 h-12 opacity-30" />
-                                </x-ui.empty-media>
-                                <x-ui.empty-title>Посты не найдены</x-ui.empty-title>       
-                            </x-ui.empty-header>    
-                        </x-ui.empty>                        
+                    <x-ui.table-cell colspan="8" class="py-12 text-center text-muted-foreground">
+                        <x-lucide-newspaper class="w-12 h-12 opacity-30 mx-auto mb-2" />
+                        <p>Посты не найдены</p>
                     </x-ui.table-cell>
                 </x-ui.table-row>
             @endforelse
         </x-ui.table-body>
     </x-ui.table>
+
+    <x-loading-overlay fixed="true" wire:loading.delay wire:key="overlay-loading-page"/>
 
     <!-- Пагинация -->
     <div class="flex items-center justify-between flex-wrap gap-2">

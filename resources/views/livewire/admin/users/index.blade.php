@@ -59,7 +59,6 @@ new #[Layout('layouts.admin')] class extends Component
 
     public function openBanModal(int $userId, string $banType): void
     {
-        // Защита от саппорта
         if (!in_array(auth()->user()->role, ['admin', 'moderator'])) {
             $this->dispatch('show-toast', type: 'error', message: 'У вас нет прав для этого действия.');
             return;
@@ -69,7 +68,6 @@ new #[Layout('layouts.admin')] class extends Component
 
     public function openMassBanModal(string $banType): void
     {
-        // Защита от саппорта
         if (!in_array(auth()->user()->role, ['admin', 'moderator'])) {
             $this->dispatch('show-toast', type: 'error', message: 'У вас нет прав для этого действия.');
             return;
@@ -84,7 +82,6 @@ new #[Layout('layouts.admin')] class extends Component
 
     public function openDeleteModal(int $userId): void
     {
-        // Защита от саппорта
         if (!in_array(auth()->user()->role, ['admin', 'moderator'])) {
             $this->dispatch('show-toast', type: 'error', message: 'У вас нет прав для этого действия.');
             return;
@@ -123,11 +120,13 @@ new #[Layout('layouts.admin')] class extends Component
         $search = trim($this->search);
 
         return User::query()
-            ->select(['id', 'name', 'email', 'created_at', 'last_seen', 'last_login_ip', 'status', 'is_premium', 'premium_expires_at', 'is_verified', 'has_completed_onboarding', 'deleted_at'])
+            // УБРАЛИ is_premium ИЗ SELECT!
+            ->select(['id', 'name', 'email', 'created_at', 'last_seen', 'last_login_ip', 'status', 'premium_expires_at', 'is_verified', 'has_completed_onboarding', 'deleted_at'])
             ->excludeStaff()
             ->withTrashed()
             ->with([
-                'profile',
+               'profile.city.state',
+                'profile.country',
                 'photos' => fn($q) => $q->select(['id', 'user_id', 'path_thumb', 'is_primary', 'status', 'position', 'type'])
                                         ->where('status', 'approved')
                                         ->where('type', 'profile')
@@ -144,15 +143,22 @@ new #[Layout('layouts.admin')] class extends Component
                         $q->orWhere('id', (int) $search);
                     }
                     
-                    $q->orWhereHas('profile', function ($sub) use ($search, $operator) {
-                        $sub->where('city', $operator, "%{$search}%");
+                    $q->orWhereHas('profile.city', function ($sub) use ($search, $operator) {
+                        $sub->where('name', $operator, "%{$search}%");
+                    });
+                    
+                    $q->orWhereHas('profile.country', function ($sub) use ($search, $operator) {
+                        $sub->where('name', $operator, "%{$search}%");
                     });
                 });
             })
             ->when($this->statusFilter, fn($q) => $q->where('status', $this->statusFilter))
             ->when($this->genderFilter, fn($q) => $q->whereHas('profile', fn($sub) => $sub->where('gender', $this->genderFilter)))
-            ->when($this->premiumFilter === 'yes', fn($q) => $q->where('is_premium', true))
-            ->when($this->premiumFilter === 'no', fn($q) => $q->where('is_premium', false))
+            // ФИКС: Ищем по дате окончания, а не по булевому флагу
+            ->when($this->premiumFilter === 'yes', fn($q) => $q->where('premium_expires_at', '>', now()))
+            ->when($this->premiumFilter === 'no', fn($q) => $q->where(function ($sub) {
+                $sub->whereNull('premium_expires_at')->orWhere('premium_expires_at', '<=', now());
+            }))
             ->orderBy('created_at', $this->sortDirection)
             ->orderBy('id', $this->sortDirection)
             ->paginate($this->perPage);
@@ -166,7 +172,9 @@ new #[Layout('layouts.admin')] class extends Component
             ->selectRaw("status, count(*) as aggregate")
             ->groupBy('status')
             ->pluck('aggregate', 'status');
-        $premium = User::excludeStaff()->where('is_premium', true)->count();
+        
+        // ФИКС: Считаем по дате
+        $premium = User::excludeStaff()->where('premium_expires_at', '>', now())->count();
         $verified = User::excludeStaff()->where('is_verified', true)->count();
 
         return [
@@ -180,7 +188,6 @@ new #[Layout('layouts.admin')] class extends Component
 
     public function toggleBan(int $userId): void
     {
-        // Защита от саппорта
         if (!in_array(auth()->user()->role, ['admin', 'moderator'])) {
             $this->dispatch('show-toast', type: 'error', message: 'У вас нет прав для этого действия.');
             return;
@@ -196,7 +203,6 @@ new #[Layout('layouts.admin')] class extends Component
 
     public function restoreUser(int $userId): void
     {
-        // Защита от саппорта
         if (!in_array(auth()->user()->role, ['admin', 'moderator'])) {
             $this->dispatch('show-toast', type: 'error', message: 'У вас нет прав для этого действия.');
             return;
@@ -211,7 +217,6 @@ new #[Layout('layouts.admin')] class extends Component
     }
 }; 
 ?>
-
 
 <div class="space-y-6">
     <div class="flex items-center justify-between gap-4">
@@ -286,7 +291,8 @@ new #[Layout('layouts.admin')] class extends Component
                 </x-ui.button>
             @endif           
 
-            <x-ui.select wire:model.live="statusFilter" wire:key="status-filter-{{ $statusFilter }}">
+            <!-- УБРАЛИ динамические wire:key отсюда! -->
+            <x-ui.select wire:model.live="statusFilter">
                 <x-ui.select-trigger class="w-[9rem]"><x-ui.select-value placeholder="Все статусы" /></x-ui.select-trigger>
                 <x-ui.select-content>
                     <x-ui.select-item value="">Все статусы</x-ui.select-item>
@@ -297,7 +303,7 @@ new #[Layout('layouts.admin')] class extends Component
                 </x-ui.select-content>
             </x-ui.select>
 
-            <x-ui.select wire:model.live="genderFilter" wire:key="gender-filter-{{ $genderFilter }}">
+            <x-ui.select wire:model.live="genderFilter">
                 <x-ui.select-trigger class="w-[9rem]"><x-ui.select-value placeholder="Любой пол" /></x-ui.select-trigger>
                 <x-ui.select-content>
                     <x-ui.select-item value="">Любой пол</x-ui.select-item>
@@ -306,7 +312,7 @@ new #[Layout('layouts.admin')] class extends Component
                 </x-ui.select-content>
             </x-ui.select>
 
-            <x-ui.select wire:model.live="premiumFilter" wire:key="premium-filter-{{ $premiumFilter }}">
+            <x-ui.select wire:model.live="premiumFilter">
                 <x-ui.select-trigger class="w-[9rem]"><x-ui.select-value placeholder="Все (VIP)" /></x-ui.select-trigger>
                 <x-ui.select-content>
                     <x-ui.select-item value="">Все (VIP)</x-ui.select-item>
@@ -327,142 +333,152 @@ new #[Layout('layouts.admin')] class extends Component
         </div>
     </div>
 
-    <!-- Таблица -->
-    <x-ui.table>
-        <x-ui.table-header>
-            <x-ui.table-row>
-                <!-- Чекбокс "Выбрать все" (ТОЛЬКО ДЛЯ АДМИНОВ И МОДЕРАТОРОВ) -->
-                @if(in_array(auth()->user()->role, ['admin', 'moderator']))
-                    <x-ui.table-head class="w-10">
-                        <x-checkbox wire:model.live="selectAll" />                    
-                    </x-ui.table-head>
-                @endif
-                
-                <x-ui.table-head class="w-12">ID</x-ui.table-head>
-                <x-ui.table-head class="w-12">Фото</x-ui.table-head>
-                <x-ui.table-head>Имя / Email</x-ui.table-head>
-                <x-ui.table-head>Пол</x-ui.table-head>
-                <x-ui.table-head>Город</x-ui.table-head>
-                <x-ui.table-head>
-                    <button wire:click="toggleSort" class="flex items-center gap-1 hover:text-foreground transition-colors">
-                        Регистрация
-                        @if($sortDirection === 'desc') <x-lucide-chevron-down class="w-3 h-3" /> @else <x-lucide-chevron-up class="w-3 h-3" /> @endif
-                    </button>
-                </x-ui.table-head>
-                <x-ui.table-head>Статус</x-ui.table-head>
-                <x-ui.table-head class="w-10 text-right"><span class="sr-only">Действия</span></x-ui.table-head>
-            </x-ui.table-row>
-        </x-ui.table-header>
-
-        <x-ui.table-body>
-            @forelse ($this->users as $user)
-                <x-ui.table-row wire:key="user-{{ $user->id }}-{{ $user->status }}" class="{{ $user->status !== 'active' ? 'opacity-60 bg-muted/30' : '' }}">
-                    
-                    <!-- Чекбокс выбора (ТОЛЬКО ДЛЯ АДМИНОВ И МОДЕРАТОРОВ) -->
+    <!-- Таблица (Добавлен плавный wire:loading) -->
+    <div class="relative">
+        
+        <x-loading-overlay fixed="true" wire:loading.delay wire:key="overlay-loading-page"/>
+    
+        <x-ui.table>
+            <x-ui.table-header>
+                <x-ui.table-row>
                     @if(in_array(auth()->user()->role, ['admin', 'moderator']))
-                        <x-ui.table-cell>
-                            <x-checkbox value="{{ $user->id }}" wire:model.live="selectedUsers" />                        
-                        </x-ui.table-cell>
+                        <x-ui.table-head class="w-10">
+                            <x-checkbox wire:model.live="selectAll" />                    
+                        </x-ui.table-head>
                     @endif
                     
-                    <x-ui.table-cell class="text-muted-foreground text-xs">#{{ $user->id }}</x-ui.table-cell>
-                    <x-ui.table-cell>
-                        <x-avatar src="{{ $user->avatar_url }}" name="{{ $user->name }}" size="sm" userId="{{ $user->id }}" showStatus="true" :isOnline="$user->is_online"/>
-                    </x-ui.table-cell>
-                    <x-ui.table-cell>
-                        <a href="{{ route('admin.users.show', $user->id) }}" class="block group" wire:navigate>
-                            <div class="font-medium text-foreground flex items-center gap-2 flex-wrap group-hover:text-primary transition-colors">
-                                <x-user-status-sign :user="$user" />
-                                {{ $user->name }}                                
-                                @if($user->has_active_premium)<x-lucide-crown class="w-3.5 h-3.5 text-yellow-500" />@endif                                                   
-                            </div>
-                            <div class="text-xs text-muted-foreground">{{ $user->email }}</div>
-                        </a>
-                    </x-ui.table-cell>
-                    <x-ui.table-cell class="text-xs">
-                        @if($user->profile?->gender === 'male') <span class="text-blue-500">М</span>
-                        @elseif($user->profile?->gender === 'female') <span class="text-pink-500">Ж</span>
-                        @else —
-                        @endif
-                    </x-ui.table-cell>
-                    <x-ui.table-cell class="text-xs">{{ $user->profile?->city ?? '—' }}</x-ui.table-cell>
-                    <x-ui.table-cell class="text-muted-foreground text-xs whitespace-nowrap">
-                        {{ $user->created_at->format('d.m.Y') }}
-                    </x-ui.table-cell>
-                    <x-ui.table-cell>
-                        @php 
-                            $statusBadge = match($user->status) {
-                                'active' => ['variant' => 'success', 'label' => 'Активен'],
-                                'banned' => ['variant' => 'destructive', 'label' => 'Бан'],
-                                'shadowbanned' => ['variant' => 'warning', 'label' => 'Теневой'],
-                                'deactivated' => ['variant' => 'secondary', 'label' => 'Деактивирован'],
-                                default => ['variant' => 'secondary', 'label' => $user->status]
-                            };
-                        @endphp
-                        <x-ui.badge variant="{{ $statusBadge['variant'] }}" size="sm">{{ $statusBadge['label'] }}</x-ui.badge>
-                    </x-ui.table-cell>
-                    <x-ui.table-cell class="text-right">
-                        <!-- Выпадающее меню действий (ТОЛЬКО ДЛЯ АДМИНОВ И МОДЕРАТОРОВ) -->
-                        @if(in_array(auth()->user()->role, ['admin', 'moderator']))
-                            <x-ui.dropdown-menu>
-                                <x-ui.dropdown-menu-trigger>
-                                    <x-ui.button variant="ghost" size="icon-sm">
-                                        <x-lucide-more-horizontal class="w-4 h-4" />
-                                    </x-ui.button>
-                                </x-ui.dropdown-menu-trigger>
-                                <x-ui.dropdown-menu-content align="end">
-                                    @if($user->trashed())
-                                        {{-- ЕСЛИ ЮЗЕР ДЕАКТИВИРОВАН: Только восстановить --}}
-                                        <x-ui.dropdown-menu-label>Аккаунт удален</x-ui.dropdown-menu-label>
-                                        <x-ui.dropdown-menu-separator />
-                                        <x-ui.dropdown-menu-item wire:click="restoreUser({{ $user->id }})" wire:confirm="Восстановить аккаунт пользователя?">
-                                            <x-lucide-rotate-ccw class="w-4 h-4 text-green-500" /> Восстановить
-                                        </x-ui.dropdown-menu-item>
-                                    @else
-                                        {{-- ОБЫЧНОЕ МЕНЮ --}}
-                                        <x-ui.dropdown-menu-item href="{{ route('admin.users.show', $user->id) }}" wire:navigate>
-                                            <x-lucide-eye class="w-4 h-4" /> Просмотр
-                                        </x-ui.dropdown-menu-item>
-                                        <x-ui.dropdown-menu-separator />
+                    <x-ui.table-head class="w-12">ID</x-ui.table-head>
+                    <x-ui.table-head class="w-12">Фото</x-ui.table-head>
+                    <x-ui.table-head>Имя / Email</x-ui.table-head>
+                    <x-ui.table-head>Пол</x-ui.table-head>
+                    <x-ui.table-head>Локация</x-ui.table-head>
+                    <x-ui.table-head>
+                        <button wire:click="toggleSort" class="flex items-center gap-1 hover:text-foreground transition-colors">
+                            Регистрация
+                            @if($sortDirection === 'desc') <x-lucide-chevron-down class="w-3 h-3" /> @else <x-lucide-chevron-up class="w-3 h-3" /> @endif
+                        </button>
+                    </x-ui.table-head>
+                    <x-ui.table-head>Статус</x-ui.table-head>
+                    <x-ui.table-head class="w-10 text-right"><span class="sr-only">Действия</span></x-ui.table-head>
+                </x-ui.table-row>
+            </x-ui.table-header>
 
-                                        @if($user->status === 'banned' || $user->status === 'shadowbanned')
-                                            <x-ui.dropdown-menu-item wire:click="toggleBan({{ $user->id }})" wire:confirm="Снять бан с пользователя?">
-                                                <x-lucide-unlock class="w-4 h-4 text-green-500" /> Разбанить
+            <x-ui.table-body>
+                @forelse ($this->users as $user)
+                    <!-- ФИКС: Жестко привязали key только к ID. Статус убран. -->
+                    <x-ui.table-row wire:key="user-{{ $user->id }}" class="{{ $user->status !== 'active' ? 'opacity-60 bg-muted/30' : '' }}">
+                        
+                        @if(in_array(auth()->user()->role, ['admin', 'moderator']))
+                            <x-ui.table-cell>
+                                <x-checkbox value="{{ $user->id }}" wire:model.live="selectedUsers" />                        
+                            </x-ui.table-cell>
+                        @endif
+                        
+                        <x-ui.table-cell class="text-muted-foreground text-xs">#{{ $user->id }}</x-ui.table-cell>
+                        <x-ui.table-cell>
+                            <x-avatar src="{{ $user->avatar_url }}" name="{{ $user->name }}" size="sm" userId="{{ $user->id }}" showStatus="true" :isOnline="$user->is_online"/>
+                        </x-ui.table-cell>
+                        <x-ui.table-cell>
+                            <a href="{{ route('admin.users.show', $user->id) }}" class="block group" wire:navigate>
+                                <div class="font-medium text-foreground flex items-center gap-2 flex-wrap group-hover:text-primary transition-colors">
+                                    <x-user-status-sign :user="$user" />
+                                    {{ $user->name }}                                
+                                    @if($user->has_active_premium)<x-lucide-crown class="w-3.5 h-3.5 text-yellow-500" />@endif                                                   
+                                </div>
+                                <div class="text-xs text-muted-foreground">{{ $user->email }}</div>
+                            </a>
+                        </x-ui.table-cell>
+                        <x-ui.table-cell class="text-xs">
+                            @if($user->profile?->gender === 'male') <span class="text-blue-500">М</span>
+                            @elseif($user->profile?->gender === 'female') <span class="text-pink-500">Ж</span>
+                            @else —
+                            @endif
+                        </x-ui.table-cell>
+                        <x-ui.table-cell class="text-xs">
+                            <div class="font-medium">{{ $user->profile?->city?->name ?? '—' }}</div>
+                            @if($user->profile?->city?->state?->name || $user->profile?->country?->name)
+                                <div class="text-muted-foreground">
+                                    {{ $user->profile?->city?->state?->name }}
+                                    @if($user->profile?->city?->state?->name && $user->profile?->country?->name), @endif
+                                    {{ $user->profile?->country?->name }}
+                                </div>
+                            @endif
+                        </x-ui.table-cell>
+                        <x-ui.table-cell class="text-muted-foreground text-xs whitespace-nowrap">
+                            {{ $user->created_at->format('d.m.Y') }}
+                        </x-ui.table-cell>
+                        <x-ui.table-cell>
+                            @php 
+                                $statusBadge = match($user->status) {
+                                    'active' => ['variant' => 'success', 'label' => 'Активен'],
+                                    'banned' => ['variant' => 'destructive', 'label' => 'Бан'],
+                                    'shadowbanned' => ['variant' => 'warning', 'label' => 'Теневой'],
+                                    'deactivated' => ['variant' => 'secondary', 'label' => 'Деактивирован'],
+                                    default => ['variant' => 'secondary', 'label' => $user->status]
+                                };
+                            @endphp
+                            <x-ui.badge variant="{{ $statusBadge['variant'] }}" size="sm">{{ $statusBadge['label'] }}</x-ui.badge>
+                        </x-ui.table-cell>
+                        <x-ui.table-cell class="text-right">
+                            @if(in_array(auth()->user()->role, ['admin', 'moderator']))
+                                <x-ui.dropdown-menu wire:key="dropdown-actions-{{ $user->id }}-{{ $user->status }}">
+                                    <x-ui.dropdown-menu-trigger>
+                                        <x-ui.button variant="ghost" size="icon-sm">
+                                            <x-lucide-more-horizontal class="w-4 h-4" />
+                                        </x-ui.button>
+                                    </x-ui.dropdown-menu-trigger>
+                                    <x-ui.dropdown-menu-content align="end">
+                                        @if($user->trashed())
+                                            <x-ui.dropdown-menu-label>Аккаунт удален</x-ui.dropdown-menu-label>
+                                            <x-ui.dropdown-menu-separator />
+                                            <x-ui.dropdown-menu-item wire:click="restoreUser({{ $user->id }})" wire:confirm="Восстановить аккаунт пользователя?">
+                                                <x-lucide-rotate-ccw class="w-4 h-4 text-green-500" /> Восстановить
                                             </x-ui.dropdown-menu-item>
                                         @else
-                                            <x-ui.dropdown-menu-item wire:click="openBanModal({{ $user->id }}, 'shadow')">
-                                                <x-lucide-eye-off class="w-4 h-4 text-purple-500" /> Теневой бан
+                                            <x-ui.dropdown-menu-item href="{{ route('admin.users.show', $user->id) }}" wire:navigate>
+                                                <x-lucide-eye class="w-4 h-4" /> Просмотр
                                             </x-ui.dropdown-menu-item>
-                                            <x-ui.dropdown-menu-item wire:click="openBanModal({{ $user->id }}, 'temp')">
-                                                <x-lucide-clock class="w-4 h-4 text-yellow-500" /> Бан на 3 дня
-                                            </x-ui.dropdown-menu-item>
-                                            <x-ui.dropdown-menu-item wire:click="openBanModal({{ $user->id }}, 'permanent')">
-                                                <x-lucide-lock class="w-4 h-4 text-red-500" /> Вечный бан
+                                            <x-ui.dropdown-menu-separator />
+
+                                            @if($user->status === 'banned' || $user->status === 'shadowbanned')
+                                                <x-ui.dropdown-menu-item wire:click="toggleBan({{ $user->id }})" wire:confirm="Снять бан с пользователя?">
+                                                    <x-lucide-unlock class="w-4 h-4 text-green-500" /> Разбанить
+                                                </x-ui.dropdown-menu-item>
+                                            @else
+                                                <x-ui.dropdown-menu-item wire:click="openBanModal({{ $user->id }}, 'shadow')">
+                                                    <x-lucide-eye-off class="w-4 h-4 text-purple-500" /> Теневой бан
+                                                </x-ui.dropdown-menu-item>
+                                                <x-ui.dropdown-menu-item wire:click="openBanModal({{ $user->id }}, 'temp')">
+                                                    <x-lucide-clock class="w-4 h-4 text-yellow-500" /> Бан на 3 дня
+                                                </x-ui.dropdown-menu-item>
+                                                <x-ui.dropdown-menu-item wire:click="openBanModal({{ $user->id }}, 'permanent')">
+                                                    <x-lucide-lock class="w-4 h-4 text-red-500" /> Вечный бан
+                                                </x-ui.dropdown-menu-item>
+                                            @endif
+
+                                            <x-ui.dropdown-menu-separator />
+                                            <x-ui.dropdown-menu-item wire:click="openDeleteModal({{ $user->id }})" variant="destructive">
+                                                <x-lucide-trash-2 class="w-4 h-4" /> Деактивировать
                                             </x-ui.dropdown-menu-item>
                                         @endif
-
-                                        <x-ui.dropdown-menu-separator />
-                                        <x-ui.dropdown-menu-item wire:click="openDeleteModal({{ $user->id }})" variant="destructive">
-                                            <x-lucide-trash-2 class="w-4 h-4" /> Деактивировать
-                                        </x-ui.dropdown-menu-item>
-                                    @endif
-                                </x-ui.dropdown-menu-content>
-                            </x-ui.dropdown-menu>
-                        @endif
-                    </x-ui.table-cell>
-                </x-ui.table-row>
-            @empty
-                <x-ui.table-row>
-                    <x-ui.table-cell colspan="9" class="py-12 text-center text-muted-foreground">
-                        <div class="flex flex-col items-center gap-2">
-                            <x-lucide-users class="w-12 h-12 opacity-30" />
-                            <p>Пользователи не найдены</p>
-                        </div>
-                    </x-ui.table-cell>
-                </x-ui.table-row>
-            @endforelse
-        </x-ui.table-body>
-    </x-ui.table>
+                                    </x-ui.dropdown-menu-content>
+                                </x-ui.dropdown-menu>
+                            @endif
+                        </x-ui.table-cell>
+                    </x-ui.table-row>
+                @empty
+                    <x-ui.table-row>
+                        <x-ui.table-cell colspan="9" class="py-12 text-center text-muted-foreground">
+                            <div class="flex flex-col items-center gap-2">
+                                <x-lucide-users class="w-12 h-12 opacity-30" />
+                                <p>Пользователи не найдены</p>
+                            </div>
+                        </x-ui.table-cell>
+                    </x-ui.table-row>
+                @endforelse
+            </x-ui.table-body>
+        </x-ui.table>
+    </div>
 
     <!-- Пагинация -->
     <div class="flex items-center justify-between flex-wrap gap-2">

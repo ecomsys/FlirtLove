@@ -8,6 +8,8 @@ use App\Models\Photo;
 use App\Services\GeoIPBlockService;
 use App\Services\StopWordsFilterService;
 
+use App\Listeners\InvalidateOldSessions;
+
 use App\Models\UserSubscription;
 use App\Observers\UserSubscriptionObserver;
 use App\Observers\PhotoObserver;
@@ -48,11 +50,12 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void        
     {   
+        // выкидуем из старых сессий при новом входе а аккаунт
+         Event::listen(Login::class, InvalidateOldSessions::class);
+
         // счетчик непрочитанных сообшений
         \App\Models\Message::observe(\App\Observers\MessageObserver::class);
-
-        // Высчитываем возраст юзера
-        \App\Models\UserProfile::observe(\App\Observers\UserProfileObserver::class);
+       
 
         // наблюдаем за измененимя чтобы сразу обновлять таблицу
         Photo::observe(PhotoObserver::class);

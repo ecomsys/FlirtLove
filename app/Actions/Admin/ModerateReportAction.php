@@ -3,12 +3,15 @@
 namespace App\Actions\Admin;
 
 use App\Enums\ReportResolution;
+use App\Enums\ReportReason;
 use App\Models\AdminLog;
 use App\Models\Report;
 use App\Models\User;
 use App\Notifications\ReportModerated;
-use Illuminate\Support\Facades\Log;
+use App\Notifications\UserWarned;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
 
 class ModerateReportAction
 {
@@ -23,7 +26,6 @@ class ModerateReportAction
         ];
         
         $report->resolve($admin->id, $resolution->value, $note);
-        $report->refresh();
         
         $after = [
             'status' => 'resolved', 
@@ -43,11 +45,34 @@ class ModerateReportAction
         $participants = array_filter([$report->reporter_id, $report->reported_id]);
 
         AdminLog::record('report.resolve', $report, $admin, $before, $after, participants: $participants);
-        Cache::forget('admin_sidebar_stats');
-        
+        $this->clearCaches();
 
+        // 1. Уведомляем жалобщика (что жалоба решена)
         if ($report->reporter) {
-            $report->reporter->notify(new ReportModerated($report, 'resolved'));
+            $report->reporter->notify(new ReportModerated(
+                reportId: $report->id,
+                reportableType: $report->reportable_type,
+                reportableId: $report->reportable_id,
+                reportedName: $report->reported?->name,
+                reason: $report->reason,
+                action: 'resolved',
+                additionalInfo: $note
+            ));
+        }
+
+        // 2. ФИКС: Если вынесено предупреждение — уведомляем нарушителя (перенесено из Livewire!)
+        if ($resolution === ReportResolution::Warn && $report->reported) {
+            $reasonText = 'Нарушение правил сервиса';
+            $reportReasonEnum = ReportReason::tryFrom($report->reason ?? '');
+            if ($reportReasonEnum) {
+                $reasonText = $reportReasonEnum->label();
+            }
+            
+            try {
+                $report->reported->notify(new UserWarned($reasonText));
+            } catch (\Exception $e) {
+                Log::error('Ошибка отправки уведомления UserWarned: ' . $e->getMessage());
+            }
         }
     }
 
@@ -61,9 +86,7 @@ class ModerateReportAction
             'resolution' => $report->getOriginal('resolution')
         ];
         
-        // Используем resolve модели, но передаем 'no_action' (модель сама поставит status='rejected')
         $report->resolve($admin->id, 'no_action', $note);
-        $report->refresh();
         
         $after = [
             'status' => 'rejected', 
@@ -82,57 +105,93 @@ class ModerateReportAction
         $participants = array_filter([$report->reporter_id, $report->reported_id]);
 
         AdminLog::record('report.reject', $report, $admin, $before, $after, participants: $participants);
-        Cache::forget('admin_sidebar_stats');
-        
+        $this->clearCaches();
 
         if ($report->reporter) {
-            $report->reporter->notify(new ReportModerated($report, 'rejected'));
+            $report->reporter->notify(new ReportModerated(
+                reportId: $report->id,
+                reportableType: $report->reportable_type,
+                reportableId: $report->reportable_id,
+                reportedName: $report->reported?->name,
+                reason: $report->reason,
+                action: 'rejected',
+                additionalInfo: $note
+            ));
         }
     }
 
     /**
-     * Массовое закрытие жалоб (например, при бане юзера или удалении фото).
-     * Используется внутри toggleBan и deletePhoto.
+     * МАССОВОЕ ЗАКРЫТИЕ ЖАЛОБ (Оптимизировано под High-Load)
      */
     public function bulkResolveReports($reports, User $admin, ReportResolution $resolution): void
     {
-        // Массив для запоминания, кому мы уже отправили уведомление
-        $notifiedReporters = [];
+        if ($reports->isEmpty()) return;
 
-        foreach ($reports as $report) {
-            $before = [
-                'status' => $report->getOriginal('status'), 
-                'resolution' => $report->getOriginal('resolution')
-            ];
-            
-            $report->resolve($admin->id, $resolution->value, "Автоматическое закрытие при: {$resolution->label()}");
-            $report->refresh();
+        $reports->loadMissing(['reported', 'reporter']);
+
+        $reportIds = $reports->pluck('id');
+        $resolutionValue = $resolution->value;
+        $resolutionNote = "Автоматическое закрытие при: {$resolution->label()}";
+        $resolvedAt = now();
+
+        DB::transaction(function () use ($reports, $reportIds, $admin, $resolutionValue, $resolutionNote, $resolvedAt) {
+            Report::whereIn('id', $reportIds)->update([
+                'status' => 'resolved',
+                'resolution' => $resolutionValue,
+                'resolution_note' => $resolutionNote,
+                'admin_id' => $admin->id,
+                'resolved_at' => $resolvedAt,
+            ]);
+
+            $notifiedReporters = []; 
+
+            foreach ($reports as $report) {
+                if ($report->reporter && !isset($notifiedReporters[$report->reporter_id])) {
+                    $report->reporter->notify(new ReportModerated(
+                        reportId: $report->id,
+                        reportableType: $report->reportable_type,
+                        reportableId: $report->reportable_id,
+                        reportedName: $report->reported?->name,
+                        reason: $report->reason,
+                        action: 'resolved',
+                        additionalInfo: $resolutionNote
+                    ));
+                    $notifiedReporters[$report->reporter_id] = true;
+                }
+            }
+
+            $firstReport = $reports->first();
+            $logIds = $reportIds->take(100)->toArray();
             
             $after = [
                 'status' => 'resolved', 
-                'resolution' => $resolution->value, 
+                'resolution' => $resolutionValue, 
                 'resolved_by' => $admin->id, 
-                'resolved_at' => now()->toDateTimeString(),
+                'resolved_at' => $resolvedAt->toDateTimeString(),
                 'context' => [
-                    'report_id' => $report->id,
-                    'reporter_id' => $report->reporter_id,
-                    'reported_id' => $report->reported_id,
-                    'reason' => $report->reason,
-                    'auto_resolved' => true
+                    'count' => $reportIds->count(),
+                    'sample_ids' => $logIds,
+                    'auto_resolved' => true,
+                    'reason' => $firstReport->reason ?? null,
                 ]
             ];
             
-            $participants = array_filter([$report->reporter_id, $report->reported_id]);
-
-            AdminLog::record('report.resolve', $report, $admin, $before, $after, participants: $participants);
+            $participants = $reports->pluck('reporter_id')->merge($reports->pluck('reported_id'))->filter()->unique()->toArray();
             
-
-            if ($report->reporter && !in_array($report->reporter->id, $notifiedReporters)) {
-                $report->reporter->notify(new ReportModerated($report, 'resolved'));
-                $notifiedReporters[] = $report->reporter->id;
-            }
-        }
-        Cache::forget('admin_sidebar_stats');
+            AdminLog::record('report.bulk_resolve', $firstReport, $admin, null, $after, participants: $participants);
+        });
         
+        $this->clearCaches();
+    }
+
+    /**
+     * Сброс кэшей счетчиков в админке
+     */
+    private function clearCaches(): void
+    {
+        Cache::forget('admin_sidebar_stats');
+        Cache::forget('admin_report_counts_all');
+        Cache::forget('admin_report_counts_user');
+        Cache::forget('admin_report_counts_photo');
     }
 }

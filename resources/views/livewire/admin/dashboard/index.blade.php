@@ -20,6 +20,8 @@ use Livewire\Volt\Component;
 
 new #[Layout('layouts.admin')] class extends Component 
 {
+    public string $chartKey = 'init';
+
     public function with(): array
     {
         $role = auth()->user()->role;
@@ -48,20 +50,26 @@ new #[Layout('layouts.admin')] class extends Component
         $data = array_merge($data, $liveData);
         $data['moderationQueue'] = $data['pendingPhotos'] + $data['pendingPhotoComments'] + $data['pendingDiaries'] + $data['pendingDiaryComments'] + $data['pendingReports'];
 
-        // Ленты (Последние юзеры)
-        $data['recentUsers'] = User::excludeStaff()->with('photos')->select('id', 'name', 'created_at', 'last_seen')->latest()->limit(8)->get();
+        // ФИКС: Жадная загрузка фоток для аватарок, чтобы не словить N+1
+        $data['recentUsers'] = User::excludeStaff()
+            ->select('id', 'name', 'created_at', 'last_seen')
+            ->with(['photos' => fn($q) => $q->select('id', 'user_id', 'path_thumb', 'is_primary', 'status')->where('status', 'approved')->orderByDesc('is_primary')->limit(1)])
+            ->latest()
+            ->limit(8)
+            ->get();
 
-        // Лента аудита (Для Админа и Саппорта)
         if (in_array($role, ['admin', 'support'])) {
-            $data['recentLogs'] = AdminLog::with('admin:id,name,last_seen')->latest()->limit(8)->get();
+            // ФИКС: Подгружаем админа и его фотку для аватарки
+            $data['recentLogs'] = AdminLog::with(['admin' => fn($q) => $q->select('id', 'name', 'last_seen')->with(['photos' => fn($sq) => $sq->select('id', 'user_id', 'path_thumb', 'is_primary', 'status')->orderByDesc('is_primary')->limit(1)])])
+                ->latest()
+                ->limit(8)
+                ->get();
         }
 
-        // 2. ДАННЫЕ ДЛЯ ГРАФИКОВ (Для Админа и Модератора)
         if (in_array($role, ['admin', 'moderator'])) {
             $data['activityData'] = $this->getActivityData();
         }
 
-        // 3. ТЯЖЕЛЫЕ МЕТРИКИ И ДЕМОГРАФИЯ (ТОЛЬКО ДЛЯ АДМИНА)
         if ($role === 'admin') {
             $metrics = Cache::remember('admin_dashboard_metrics_v8', 600, function () {
                 $revenueData = $this->getRevenueData(30);
@@ -89,18 +97,12 @@ new #[Layout('layouts.admin')] class extends Component
         return $data;
     }
 
-     // Добавили свойство для принудительной перерисовки графиков
-    public string $chartKey = 'init';
-
-        public function refresh(): void
+    public function refresh(): void
     {
         if (auth()->user()->role === 'admin') {
             Cache::forget('admin_dashboard_metrics_v8');
         }
-        
-        // Сбрасываем минутный кэш живых данных при ручном обновлении
         Cache::forget('admin_dashboard_live_v2');
-        
         $this->chartKey = uniqid(); 
         $this->dispatch('show-toast', type: 'success', message: 'Данные обновлены!');
     }
@@ -129,10 +131,13 @@ new #[Layout('layouts.admin')] class extends Component
 
     private function getRegistrationData(int $days): array
     {
+        // ФИКС: Используем to_char для совместимости с PostgreSQL
         $stats = User::excludeStaff()
-            ->selectRaw('DATE(created_at) as date, count(*) as total')
+            ->selectRaw("to_char(created_at, 'YYYY-MM-DD') as date, count(*) as total")
             ->where('created_at', '>=', now()->subDays($days))
-            ->groupBy('date')->orderBy('date')->pluck('total', 'date')->toArray();
+            ->groupByRaw("to_char(created_at, 'YYYY-MM-DD')")
+            ->orderByRaw("to_char(created_at, 'YYYY-MM-DD')")
+            ->pluck('total', 'date')->toArray();
 
         $data = [];
         for ($i = $days - 1; $i >= 0; $i--) {
@@ -144,10 +149,13 @@ new #[Layout('layouts.admin')] class extends Component
 
     private function getRevenueData(int $days): array
     {
+        // ФИКС: Используем to_char для совместимости с PostgreSQL
         $stats = Transaction::where('status', 'success')
-            ->selectRaw('DATE(created_at) as date, SUM(amount) as total')
+            ->selectRaw("to_char(created_at, 'YYYY-MM-DD') as date, SUM(amount) as total")
             ->where('created_at', '>=', now()->subDays($days))
-            ->groupBy('date')->orderBy('date')->pluck('total', 'date')->toArray();
+            ->groupByRaw("to_char(created_at, 'YYYY-MM-DD')")
+            ->orderByRaw("to_char(created_at, 'YYYY-MM-DD')")
+            ->pluck('total', 'date')->toArray();
 
         $data = [];
         for ($i = $days - 1; $i >= 0; $i--) {
@@ -160,9 +168,25 @@ new #[Layout('layouts.admin')] class extends Component
     private function getActivityData(): array
     {
         $period = now()->subDays(7);
-        $swipes = Swipe::selectRaw('DATE(created_at) as date, count(*) as total')->where('created_at', '>=', $period)->groupBy('date')->orderBy('date')->pluck('total', 'date')->toArray();
-        $matches = UserMatch::selectRaw('DATE(created_at) as date, count(*) as total')->where('created_at', '>=', $period)->groupBy('date')->orderBy('date')->pluck('total', 'date')->toArray();
-        $messages = Message::selectRaw('DATE(created_at) as date, count(*) as total')->where('created_at', '>=', $period)->groupBy('date')->orderBy('date')->pluck('total', 'date')->toArray();
+        
+        // ФИКС: Используем to_char для совместимости с PostgreSQL
+        $swipes = Swipe::selectRaw("to_char(created_at, 'YYYY-MM-DD') as date, count(*) as total")
+            ->where('created_at', '>=', $period)
+            ->groupByRaw("to_char(created_at, 'YYYY-MM-DD')")
+            ->orderByRaw("to_char(created_at, 'YYYY-MM-DD')")
+            ->pluck('total', 'date')->toArray();
+
+        $matches = UserMatch::selectRaw("to_char(created_at, 'YYYY-MM-DD') as date, count(*) as total")
+            ->where('created_at', '>=', $period)
+            ->groupByRaw("to_char(created_at, 'YYYY-MM-DD')")
+            ->orderByRaw("to_char(created_at, 'YYYY-MM-DD')")
+            ->pluck('total', 'date')->toArray();
+
+        $messages = Message::selectRaw("to_char(created_at, 'YYYY-MM-DD') as date, count(*) as total")
+            ->where('created_at', '>=', $period)
+            ->groupByRaw("to_char(created_at, 'YYYY-MM-DD')")
+            ->orderByRaw("to_char(created_at, 'YYYY-MM-DD')")
+            ->pluck('total', 'date')->toArray();
 
         $swipesData = []; $matchesData = []; $messagesData = [];
         for ($i = 6; $i >= 0; $i--) {
@@ -204,7 +228,16 @@ new #[Layout('layouts.admin')] class extends Component
 
     private function getTopCities(): array
     {
-        return UserProfile::whereNotNull('city')->select('city', DB::raw('count(*) as total'))->groupBy('city')->orderBy('total', 'desc')->limit(5)->pluck('total', 'city')->toArray();
+        return UserProfile::whereNotNull('user_profiles.city_id')
+            ->join('cities', 'user_profiles.city_id', '=', 'cities.id')
+            ->join('countries', 'cities.country_id', '=', 'countries.id')
+            ->where('countries.iso2', 'RU')
+            ->select('cities.name', DB::raw('count(*) as total'))
+            ->groupBy('cities.id', 'cities.name')
+            ->orderBy('total', 'desc')
+            ->limit(5)
+            ->pluck('total', 'cities.name')
+            ->toArray();
     }
 }; 
 ?>

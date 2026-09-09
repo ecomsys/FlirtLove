@@ -2,11 +2,16 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class SubscriptionPlan extends Model
 {
+    // КОНСТАНТЫ ТИРОВ
+    public const TIER_PREMIUM = 'premium';
+    public const TIER_VIP = 'vip';
+
     protected $fillable = [
         'tier', 'name', 'slug', 'price', 'old_price', 'currency', 
         'duration_days', 'apple_product_id', 'google_product_id', 'is_active', 'sort_order'
@@ -24,6 +29,11 @@ class SubscriptionPlan extends Model
         return $this->hasMany(UserSubscription::class);
     }
 
-    public function scopeActive($query) { return $query->where('is_active', true); }
-    public function scopeOrdered($query) { return $query->orderBy('sort_order'); }
+    public function scopeActive(Builder $query): Builder { 
+        return $query->where('is_active', true); 
+    }
+
+    public function scopeOrdered(Builder $query): Builder { 
+        return $query->orderBy('sort_order'); 
+    }
 }

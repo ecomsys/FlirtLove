@@ -2,6 +2,7 @@
 
 use App\Actions\Admin\ManageMediaAction;
 use App\Models\Media;
+use Illuminate\Support\Facades\Cache;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Url;
@@ -23,20 +24,19 @@ new #[Layout('layouts.admin')] class extends Component
 
     public string $backUrl = '';
 
-       public function mount(): void
+    public function mount(): void
     {
         $previousUrl = url()->previous();
         $this->backUrl = ($previousUrl && $previousUrl !== url()->current()) 
             ? $previousUrl 
             : route('admin.dashboard');
 
-        // ФИКС: Умный отлов ID прямо из URL (?q=123)
         $qParam = request()->query('q', '');
         if (!empty($qParam)) {
             $this->search = (string) $qParam;
             
-            // ФИКС: Ищем коллекцию файла, чтобы переключить вкладку и применить ПРАВИЛЬНЫЕ ПРОПОРЦИИ!
-            if (is_numeric($qParam)) {
+            // ФИКС: ctype_digit для строгой проверки целого числа
+            if (ctype_digit((string)$qParam)) {
                 $media = Media::find((int) $qParam);
                 if ($media) {
                     $this->collectionFilter = $media->collection;
@@ -51,28 +51,24 @@ new #[Layout('layouts.admin')] class extends Component
     { 
         $this->resetPage(); 
 
-        // ФИКС: Умный поиск. Если ввели число, ищем коллекцию этого файла
-        if (is_numeric($this->search) && !empty($this->search)) {
+        // ФИКС: ctype_digit
+        if (ctype_digit($this->search) && !empty($this->search)) {
             $media = Media::find((int) $this->search);
             
             if ($media) {
-                // Если файл нашли — переключаем фильтр на его коллекцию
                 $this->collectionFilter = $media->collection;
             } else {
-                // Если файла нет — переключаем на "Все", чтобы не смотреть пустой экран
                 $this->collectionFilter = 'all';
             }
             
-            // Сбрасываем кэш, чтобы список перерисовался с новой коллекцией
             unset($this->mediaItems);
         }
     }
     
-    //  Вызывается только при ручном клике на кнопки фильтров
     public function setCollection(string $collection): void
     {
         $this->collectionFilter = $collection;
-        $this->search = ''; // Очищаем поиск только при ручном клике!
+        $this->search = ''; 
         $this->resetPage(); 
     }
 
@@ -85,7 +81,7 @@ new #[Layout('layouts.admin')] class extends Component
 
     public function openManagerModal(string $collection = 'default'): void
     {
-        $this->dispatch('open-media-manager', collection: $collection)->to('admin.media-manager');
+        $this->dispatch('open-media-manager', collection: $collection);
     }
 
     public function deleteMedia(int $id, ManageMediaAction $action): void
@@ -101,6 +97,9 @@ new #[Layout('layouts.admin')] class extends Component
 
         $this->dispatch('show-toast', type: 'success', message: 'Файл успешно удален.');
         
+        // ФИКС: Сбрасываем кэш счетчиков
+        Cache::forget('admin_media_counts');
+        
         unset($this->mediaItems);
         unset($this->collectionCounts);
     }
@@ -113,6 +112,7 @@ new #[Layout('layouts.admin')] class extends Component
     #[On('media-updated')]
     public function refreshMedia(): void
     {
+        Cache::forget('admin_media_counts'); // ФИКС: Сбрасываем кэш при загрузке новых файлов
         unset($this->mediaItems);
         unset($this->collectionCounts);
     }
@@ -120,18 +120,21 @@ new #[Layout('layouts.admin')] class extends Component
     #[Computed]
     public function collectionCounts(): array
     {
-        $dbCounts = Media::where('type', 'image')
-            ->selectRaw('collection, count(*) as count')
-            ->groupBy('collection')
-            ->pluck('count', 'collection');
+        // ФИКС: Кэшируем счетчики на 1 минуту, чтобы не делать GROUP BY при каждом клике
+        return Cache::remember('admin_media_counts', 60, function () {
+            $dbCounts = Media::where('type', 'image')
+                ->selectRaw('collection, count(*) as count')
+                ->groupBy('collection')
+                ->pluck('count', 'collection');
 
-        $counts = ['all' => $dbCounts->sum()];
-        
-        foreach (\App\Enums\MediaCollection::cases() as $case) {
-            $counts[$case->value] = $dbCounts[$case->value] ?? 0;
-        }
-        
-        return $counts;
+            $counts = ['all' => $dbCounts->sum()];
+            
+            foreach (\App\Enums\MediaCollection::cases() as $case) {
+                $counts[$case->value] = $dbCounts[$case->value] ?? 0;
+            }
+            
+            return $counts;
+        });
     }
 
     #[Computed]
@@ -145,14 +148,16 @@ new #[Layout('layouts.admin')] class extends Component
     public function mediaItems()
     {
         $operator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
+        // ФИКС: ctype_digit
+        $isId = !empty($this->search) && ctype_digit($this->search);
 
         return Media::query()
             ->where('type', 'image')
-            ->when($this->search, function ($q) use ($operator) {
+            ->when($this->search, function ($q) use ($operator, $isId) {
                 $search = $this->search;
-                $q->where(function ($q) use ($search, $operator) {
+                $q->where(function ($q) use ($search, $operator, $isId) {
                     $q->where('file_name', $operator, "%{$search}%");
-                    if (is_numeric($search)) {
+                    if ($isId) {
                         $q->orWhere('id', (int) $search);
                     }
                 });
@@ -162,19 +167,15 @@ new #[Layout('layouts.admin')] class extends Component
             ->paginate(24);
     }
 
-       // НОВЫЙ ХЕЛПЕР: Жестко берет пропорции из конфига media.php
     public function getAspectRatio(string $collection): string
     {
-        // Читаем прямо из конфига: media.collections.ПОСТ.thumb.size
         $thumbSize = config("media.collections.{$collection}.variants.thumb.size", '300x300');
         
-        // Если размер указан как '800w' (только ширина), делаем квадрат
         if (str_contains($thumbSize, 'w') && !str_contains($thumbSize, 'x')) {
             $ratioW = (int) rtrim($thumbSize, 'w');
             return "{$ratioW} / {$ratioW}";
         }
         
-        // Разбиваем '320x180' на ширину и высоту
         $parts = explode('x', strtolower($thumbSize));
         $ratioW = (int) ($parts[0] ?? 300);
         $ratioH = (int) ($parts[1] ?? $ratioW);
@@ -184,7 +185,13 @@ new #[Layout('layouts.admin')] class extends Component
 }; 
 ?>
 
-<div class="space-y-6">
+
+<div class="space-y-6" x-data x-init="
+    const scrollParent = $el.closest('.overflow-y-auto');
+    if (scrollParent) {
+        scrollParent.addEventListener('scroll', () => { $dispatch('close-ctx-menu') });
+    }
+">
     <!-- Шапка -->
     <div class="flex items-center justify-between flex-wrap gap-4">
         <div class="flex items-center gap-4">
@@ -275,9 +282,8 @@ new #[Layout('layouts.admin')] class extends Component
                         @endif
                     </h3>
             @endif
-            
-                <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 {{ $gridCols }} gap-4 mb-8"
-                 x-data="{
+              <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 {{ $gridCols }} gap-4 mb-8"
+                x-data="{
                     menuOpen: false,
                     activeMediaId: null,
                     activeMediaUrl: '',
@@ -288,16 +294,16 @@ new #[Layout('layouts.admin')] class extends Component
                         this.activeMediaId = id;
                         this.activeMediaUrl = url;
                         this.menuOpen = true;
-                    },
-                    init() {
-                        // Слушаем скролл на ВСЕМ документе (включая кастомные скроллбары внутри div-ов)
-                        window.addEventListener('scroll', () => { this.menuOpen = false; }, { capture: true });
                     }
-                 }">
+                }"
+                @close-ctx-menu.window="menuOpen = false"
+                @resize.window="menuOpen = false"
+                @keydown.escape.window="menuOpen = false"
+                >
                  
                 @foreach($items as $media)
                     @php $itemCollectionEnum = \App\Enums\MediaCollection::tryFrom($media->collection); @endphp
-                    @php $isHighlighted = is_numeric($this->search) && $media->id === (int)$this->search; @endphp
+                    @php $isHighlighted = ctype_digit($this->search) && $media->id === (int)$this->search; @endphp
                     
                     <div wire:key="media-{{ $media->id }}" 
                          x-data="{ isHi: {{ $isHighlighted ? 'true' : 'false' }} }"
@@ -379,6 +385,8 @@ new #[Layout('layouts.admin')] class extends Component
     
     <livewire:admin.media-manager />  
 
+    <x-loading-overlay fixed="true" wire:loading.delay wire:key="overlay-loading-page"/>
+
     <!-- МОДАЛКА ПРОСМОТРА ИНФОРМАЦИИ -->
     @if($viewingMediaId)
     <div wire:key="view-media-modal-{{ $viewingMediaId }}"
@@ -439,7 +447,8 @@ new #[Layout('layouts.admin')] class extends Component
                             <div class="space-y-2">
                                 @foreach($this->viewingMedia->variants as $key => $path)
                                     @php 
-                                        $variantUrl = asset(\Illuminate\Support\Facades\Storage::url($path));
+                                        // ФИКС: Убрали asset(), чтобы не было двойного URL при переезде на S3
+                                        $variantUrl = \Illuminate\Support\Facades\Storage::url($path);
                                         $variantConfig = config("media.collections.{$this->viewingMedia->collection}.variants.{$key}");
                                         $sizeStr = $variantConfig['size'] ?? '—';
                                         $fitStr = $variantConfig['fit'] ?? '—';

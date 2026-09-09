@@ -4,250 +4,198 @@ use App\Actions\Admin\ModerateCommentAction;
 use App\Enums\CommentRejectReason;
 use App\Models\Photo;
 use App\Models\PhotoComment;
+use App\Models\User;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Layout;
 use Livewire\Volt\Component;
 use Livewire\WithPagination;
 use Livewire\Attributes\Url;
+use Illuminate\Support\Facades\Cache;
 
 new #[Layout('layouts.admin')] class extends Component 
 {
     use WithPagination;
 
-    /** @var string Текущая вкладка фильтра статуса */
+    #[Url(as: 'status', except: 'pending')]
     public string $statusFilter = 'pending';
     
-    /** @var string Строка поиска (по тексту, имени или ID коммента) */
     #[Url(as: 'q', except: '')]
     public string $search = '';
     
-    /** @var int Количество фото на странице */
     public int $perPage = 5;
 
-    /** @var string URL для кнопки "Назад" (фикс потери истории при AJAX-запросах) */
     public string $backUrl = '';
 
-    /**
-     * Инициализация компонента.
-     * Запоминает URL "Назад" и обрабатывает умный поиск по ID.
-     */
     public function mount(): void
     {
-        // ФИКС: Запоминаем URL для кнопки "Назад" при первой загрузке
+        abort_unless(in_array(auth()->user()?->role, [User::ROLE_ADMIN, User::ROLE_MODERATOR]), 403);
+
         $previousUrl = url()->previous();
         $this->backUrl = ($previousUrl && $previousUrl !== url()->current()) 
             ? $previousUrl 
-            : route('admin.moderation.photo-comments');
+            : route('admin.dashboard');
 
-        // Если пришли по прямой ссылке с поиском (например, ?q=123)
         if (request()->has('q')) {
             $searchTerm = (string) request()->input('q');
-            
-            // ФИКС: Умный поиск. Если ищут по ID, переключаем вкладку на реальный статус коммента
             if (is_numeric($searchTerm)) {
-                $comment = PhotoComment::find((int) $searchTerm);
+                $comment = PhotoComment::withTrashed()->find((int) $searchTerm);
                 if ($comment) {
-                    $this->statusFilter = $comment->status;
+                    $this->search = $searchTerm;
+                    $this->statusFilter = $comment->trashed() ? 'karantine' : $comment->status;
                     return;
                 }
             }
-            // Если не число или коммент не найден — ищем по тексту во вкладке "Все"
+            $this->search = $searchTerm;
             $this->statusFilter = 'all';
-        } else {
-            // Восстанавливаем фильтры из сессии
-            $saved = session('moderate_photo_comments', []);
-            if (isset($saved['statusFilter'])) $this->statusFilter = $saved['statusFilter'];
-            if (isset($saved['search'])) $this->search = $saved['search'];
         }
     }
 
-    /**
-     * Хук Livewire: срабатывает при ручном вводе в строку поиска.
-     */
     public function updatedSearch(): void
     {
-        // ФИКС: Умная подсветка вкладки при ручном вводе ID
-        if (is_numeric($this->search) && !empty($this->search)) {
-            $comment = PhotoComment::find((int) $this->search);
-            if ($comment) {
-                $this->statusFilter = $comment->status;
-            }
-        } elseif (!empty($this->search) && $this->statusFilter !== 'all') {
-            // Если ввели текст (не число), переключаемся на "Все", чтобы найти
+        $this->resetPage();
+        $this->clearComputedCache();
+
+        $search = trim($this->search);
+        if (is_numeric($search) && !empty($search)) {
+            $comment = PhotoComment::withTrashed()->find((int) $search);
+            if ($comment) $this->statusFilter = $comment->trashed() ? 'karantine' : $comment->status;
+        } elseif (!empty($search) && $this->statusFilter !== 'all') {
             $this->statusFilter = 'all';
         }
-        
-        session(['moderate_photo_comments.search' => $this->search]);
-        $this->resetPage();
     }
 
-    /**
-     * Хук Livewire: срабатывает при ручной смене вкладки.
-     * Очищает поиск и сохраняет выбор в сессию.
-     */
     public function updatedStatusFilter(): void
     {
         $this->search = '';
-        // ФИКС: Чистим сессию поиска, чтобы он не всплывал при перезагрузке
-        session()->forget('moderate_photo_comments.search');
-        session(['moderate_photo_comments.statusFilter' => $this->statusFilter]);
         $this->resetPage();
+        $this->clearComputedCache();
     }
 
-    /**
-     * Программная установка вкладки (по клику на кнопки фильтров).
-     */
     public function setStatusFilter(string $status): void
     {
         $this->statusFilter = $status;
         $this->search = '';
-        session()->forget('moderate_photo_comments.search');
-        session(['moderate_photo_comments.statusFilter' => $status]);
         $this->resetPage();
+        $this->clearComputedCache();
     }
 
-    /**
-     * Полный сброс фильтров.
-     */
     public function resetFilters(): void
     {
         $this->reset(['search', 'statusFilter']);
         $this->statusFilter = 'pending';
-        session()->forget('moderate_photo_comments');
         $this->resetPage();
+        $this->clearComputedCache();
+    }
+
+    private function clearComputedCache(): void
+    {
+        unset($this->photos);
+        unset($this->counts);
     }
 
     // ============================================
-    // ДЕЙСТВИЯ (ДЕЛЕГИРУЕМ В ACTION)
+    // ДЕЙСТВИЯ
     // ============================================
 
-    /**
-     * Одобрить комментарий. Делегирует логику в Action-класс.
-     */
     public function approveComment(int $commentId, ModerateCommentAction $action): void
     {
         $comment = PhotoComment::with('parent')->find($commentId);
         if (!$comment) return;
 
         $success = $action->approve($comment, auth()->user());
-
         if (!$success) {
             $this->dispatch('show-toast', type: 'error', message: 'Нельзя одобрить ответ на неодобренный комментарий!');
             return;
         }
-
         $this->dispatch('show-toast', type: 'success', message: 'Комментарий одобрен');
+        $this->clearComputedCache();
     }
 
-    /**
-     * Отклонить комментарий с указанием причины.
-     */
     public function rejectComment(int $commentId, string $reason, ModerateCommentAction $action): void
     {
         $comment = PhotoComment::find($commentId);
         if (!$comment) return;
-
         $action->reject($comment, auth()->user(), $reason);
         $this->dispatch('show-toast', type: 'info', message: 'Комментарий отклонен');
+        $this->clearComputedCache();
     }
 
-    /**
-     * Пометить комментарий как спам.
-     */
     public function markSpam(int $commentId, ModerateCommentAction $action): void
     {
         $comment = PhotoComment::find($commentId);
         if (!$comment) return;
-
         $action->markSpam($comment, auth()->user());
         $this->dispatch('show-toast', type: 'error', message: 'Комментарий помечен как спам');
+        $this->clearComputedCache();
     }
 
-    /**
-     * Вернуть комментарий с модерации (восстановить).
-     */
     public function restoreComment(int $commentId, ModerateCommentAction $action): void
     {
         $comment = PhotoComment::find($commentId);
         if (!$comment) return;
-
         $action->restore($comment, auth()->user());
         $this->dispatch('show-toast', type: 'info', message: 'Комментарий возвращен на модерацию');
+        $this->clearComputedCache();
     }
 
-    /**
-     * Массовое одобрение всех ожидающих комментариев под конкретным фото.
-     */
     public function approveRemaining(int $photoId, ModerateCommentAction $action): void
     {
+        // EAGER LOAD 'parent' И 'user' ДЛЯ ИЗБЕЖАНИЯ N+1 В ACTION
         $pendingComments = PhotoComment::where('photo_id', $photoId)
             ->where('status', 'pending')
-           ->with(['parent', 'user' => fn($q) => $q->withTrashed()])
+            ->with(['parent', 'user'])
             ->get();
-
+            
         if ($pendingComments->isEmpty()) {
             $this->dispatch('show-toast', type: 'info', message: 'Нет комментариев для одобрения');
             return;
         }
-
         $count = $action->bulkApprove($pendingComments, auth()->user());
         $this->dispatch('show-toast', type: 'success', message: "Одобрено {$count} комментариев");
+        $this->clearComputedCache();
     }
 
-    /**
-     * Массовое отклонение всех ожидающих комментариев под конкретным фото.
-     */
     public function rejectRemaining(int $photoId, ModerateCommentAction $action): void
     {
+        // EAGER LOAD 'user' ДЛЯ ИЗБЕЖАНИЯ N+1 В ACTION
         $pendingComments = PhotoComment::where('photo_id', $photoId)
             ->where('status', 'pending')
-            ->with(['parent', 'user' => fn($q) => $q->withTrashed()])
+            ->with(['user'])
             ->get();
-
+            
         if ($pendingComments->isEmpty()) {
             $this->dispatch('show-toast', type: 'info', message: 'Нет комментариев для отклонения');
             return;
         }
-
         $count = $action->bulkReject($pendingComments, auth()->user(), 'mass_reject');
         $this->dispatch('show-toast', type: 'info', message: "Отклонено {$count} комментариев");
+        $this->clearComputedCache();
     }
 
-    /**
-     * Массовое одобрение ВСЕХ ожидающих комментариев на сайте.
-     */
     public function approveAllPending(ModerateCommentAction $action): void
     {
-        $pendingComments = PhotoComment::where('status', 'pending')->with(['parent', 'user' => fn($q) => $q->withTrashed()])->get();
-
-        if ($pendingComments->isEmpty()) {
-            $this->dispatch('show-toast', type: 'info', message: 'Нет комментариев для одобрения');
-            return;
-        }
-
-        $count = $action->bulkApprove($pendingComments, auth()->user());
-        $this->dispatch('show-toast', type: 'success', message: "Одобрено {$count} комментариев");
+        $count = 0;
+        PhotoComment::where('status', 'pending')
+            ->with(['parent', 'user']) // EAGER LOAD!
+            ->chunkById(200, function ($comments) use ($action, &$count) {
+                $count += $action->bulkApprove($comments, auth()->user());
+            });
+        $this->dispatch('show-toast', type: $count > 0 ? 'success' : 'info', message: $count > 0 ? "Одобрено {$count} комментариев" : 'Нет комментариев для одобрения');
+        $this->clearComputedCache();
     }
 
-    /**
-     * Массовое отклонение ВСЕХ ожидающих комментариев на сайте.
-     */
     public function rejectAllPending(ModerateCommentAction $action): void
     {
-        $pendingComments = PhotoComment::where('status', 'pending')->with(['parent', 'user' => fn($q) => $q->withTrashed()])->get();
-
-        if ($pendingComments->isEmpty()) {
-            $this->dispatch('show-toast', type: 'info', message: 'Нет комментариев для отклонения');
-            return;
-        }
-
-        $count = $action->bulkReject($pendingComments, auth()->user(), 'mass_reject');
-        $this->dispatch('show-toast', type: 'info', message: "Отклонено {$count} комментариев");
+        $count = 0;
+        PhotoComment::where('status', 'pending')
+            ->with(['user']) // EAGER LOAD!
+            ->chunkById(200, function ($comments) use ($action, &$count) {
+                $count += $action->bulkReject($comments, auth()->user(), 'mass_reject');
+            });
+        $this->dispatch('show-toast', type: $count > 0 ? 'info' : 'info', message: $count > 0 ? "Отклонено {$count} комментариев" : 'Нет комментариев для отклонения');
+        $this->clearComputedCache();
     }
 
-    /**
-     * Хелпер для получения бейджа статуса (используется в Blade).
-     */
     public function getStatusBadge(string $status): array
     {
         return match ($status) {
@@ -260,98 +208,140 @@ new #[Layout('layouts.admin')] class extends Component
     }
 
     // ============================================
-    // ВЫВОД ДАННЫХ (ОПТИМИЗИРОВАННЫЕ ЗАПРОСЫ)
+    // ПОСТРОЕНИЕ ЗАПРОСОВ ДЛЯ ДЕРЕВА
     // ============================================
 
-    /**
-     * Применение фильтров к запросу комментариев.
-     * Ищет по корневым комментариям, но захватывает ответы, если они соответствуют фильтру.
-     */
-        private function applyCommentFilters($query): void
+    private function buildCommentQuery($q): void
     {
-        $query->whereNull('parent_id'); 
-        
-        if ($this->statusFilter !== 'all') {
-            $query->where(function ($sub) {
-                $sub->where('status', $this->statusFilter)
-                    ->orWhereHas('replies', fn($r) => $r->where('status', $this->statusFilter));
+        $isKarantine = $this->statusFilter === 'karantine';
+        $status = $this->statusFilter;
+        $search = trim($this->search);
+        $operator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
+
+        $q->whereHas('user', fn($u) => $u->excludeStaff());
+        $q->whereNull('parent_id');
+
+        if ($isKarantine) {
+            $q->withTrashed()->where(function ($sub) {
+                $sub->whereNotNull('deleted_at')
+                     ->orWhereHas('allReplies', fn($r) => $r->withTrashed()->whereNotNull('deleted_at')->whereHas('user', fn($u) => $u->excludeStaff()));
+            });
+        } elseif ($status !== 'all') {
+            $q->where(function ($sub) use ($status) {
+                $sub->where('status', $status)
+                     ->orWhereHas('allReplies', fn($r) => $r->where('status', $status)->whereHas('user', fn($u) => $u->excludeStaff()));
             });
         }
 
-        if (!empty($this->search)) {
-            $operator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
-            $search = '%' . $this->search . '%';
-            $query->where(function ($sub) use ($search, $operator) {
-                $sub->where('content', $operator, $search)
-                    ->orWhereRaw("CAST(id AS TEXT) {$operator} ?", [$search])
-                    // ФИКС: withTrashed() для поиска по имени удаленного юзера
-                    ->orWhereHas('user', fn($user) => $user->withTrashed()->where('name', $operator, $search))
-                    ->orWhereHas('replies', function ($r) use ($search, $operator) {
-                        $r->where('content', $operator, $search)
-                          ->orWhereRaw("CAST(id AS TEXT) {$operator} ?", [$search])
-                          // ФИКС: withTrashed() для поиска по имени удаленного юзера в ответах
-                          ->orWhereHas('user', fn($user) => $user->withTrashed()->where('name', $operator, $search));
-                    });
+        if (!empty($search)) {
+            $q->where(function ($sub) use ($search, $operator) {
+                if (is_numeric($search)) {
+                    $sub->where('id', (int) $search)
+                         ->orWhereHas('allReplies', fn($r) => $r->where('id', (int) $search)->whereHas('user', fn($u) => $u->excludeStaff()));
+                } else {
+                    $sub->where('content', $operator, "%{$search}%")
+                         ->orWhereHas('user', fn($u) => $u->withTrashed()->where('name', $operator, "%{$search}%"))
+                         ->orWhereHas('allReplies', function($r) use ($search, $operator) {
+                             $r->where(function($rSub) use ($search, $operator) {
+                                 $rSub->where('content', $operator, "%{$search}%")
+                                      ->orWhereHas('user', fn($u) => $u->withTrashed()->where('name', $operator, "%{$search}%"));
+                             })->whereHas('user', fn($u) => $u->excludeStaff());
+                         });
+                }
             });
         }
     }
 
-    /**
-     * Получение списка фото с их комментариями (с жадной загрузкой).
-     */
-    #[Computed]
-    public function photos()
+    // ============================================
+    // СЧЕТЧИКИ (БЕЗ УЧЕТА КОНТЕКСТНЫХ РОДИТЕЛЕЙ) + КЭШ
+    // ============================================
+
+    private function countTabItems(string $status): int
     {
-        $userAvatarQuery = fn($q) => $q->withTrashed()->select('id', 'name', 'status', 'is_premium', 'premium_expires_at', 'is_verified', 'last_seen')
-            ->with(['photos' => fn($sq) => $sq->select('id', 'user_id', 'is_primary', 'status', 'path_thumb', 'path_medium', 'path_large', 'path_original')->orderByDesc('is_primary')->limit(1)]);
+        $isKarantine = $status === 'karantine';
 
-        $query = Photo::withTrashed()->whereHas('comments', fn($q) => $this->applyCommentFilters($q))
-        ->with([
-            'album:id,name',
-            'user' => fn($q) => $q->withTrashed()->select('id', 'name', 'status', 'is_premium', 'premium_expires_at', 'is_verified', 'last_seen'), 
-            'comments' => function ($q) use ($userAvatarQuery) {
-                $this->applyCommentFilters($q);
-                $q->with([
-                    'user' => $userAvatarQuery,
-                    'replies' => function ($q) use ($userAvatarQuery) {
-                        $q->with(['parent:id,status', 'user' => $userAvatarQuery])->latest();
-                    },
-                ])->latest();
-            },
-        ]);
+        $query = PhotoComment::whereHas('photo', fn($p) => $p->withTrashed())
+            ->whereHas('user', fn($u) => $u->excludeStaff());
 
-        return $query->latest()->paginate($this->perPage);
+        if ($isKarantine) {
+            return $query->withTrashed()->whereNotNull('deleted_at')->count();
+        }
+
+        return $query->whereNull('deleted_at')
+            ->when($status !== 'all', fn($q) => $q->where('status', $status))
+            ->where(function ($q) {
+                $q->whereNull('parent_id')
+                  ->orWhereHas('parent', fn($p) => $p->whereNull('deleted_at')->whereHas('user', fn($u) => $u->excludeStaff()));
+            })
+            ->count();
     }
 
-    /**
-     * Подсчет счетчиков для кнопок фильтров.
-     */
     #[Computed]
     public function counts()
     {
-        $stats = PhotoComment::whereHas('photo', fn($q) => $q->withTrashed())
-            ->where(function ($q) {
-                $q->whereNull('parent_id')
-                  ->orWhereHas('parent'); 
-            })
-            ->selectRaw("
-                SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
-                SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) as approved,
-                SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END) as rejected,
-                SUM(CASE WHEN status = 'spam' THEN 1 ELSE 0 END) as spam,
-                COUNT(*) as total
-            ")->first();
+        // Кэшируем на 1 минуту, сбрасывается автоматически в Action при любой модерации
+        return Cache::remember('admin_comment_counts', 60, function () {
+            return [
+                'pending'   => $this->countTabItems('pending'),
+                'approved'  => $this->countTabItems('approved'),
+                'rejected'  => $this->countTabItems('rejected'),
+                'spam'      => $this->countTabItems('spam'),
+                'karantine' => $this->countTabItems('karantine'),
+                'total'     => $this->countTabItems('all'),
+            ];
+        });
+    }
 
-        return [
-            'pending' => (int) ($stats->pending ?? 0),
-            'approved' => (int) ($stats->approved ?? 0),
-            'rejected' => (int) ($stats->rejected ?? 0),
-            'spam' => (int) ($stats->spam ?? 0),
-            'total' => (int) ($stats->total ?? 0),
-        ];
+    #[Computed]
+    public function photos()
+    {
+        $userAvatarQuery = fn($q) => $q->withTrashed()->select('id', 'name', 'status', 'premium_expires_at', 'vip_expires_at', 'is_verified', 'last_seen', 'deleted_at')
+            ->with(['photos' => fn($sq) => $sq->select('id', 'user_id', 'is_primary', 'status', 'path_thumb', 'path_medium', 'path_large', 'path_original')->orderByDesc('is_primary')->limit(1)]);
+
+        $isKarantine = $this->statusFilter === 'karantine';
+        $status = $this->statusFilter;
+        $search = trim($this->search);
+        $operator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
+
+        $query = Photo::withTrashed()
+            ->whereHas('comments', fn($q) => $this->buildCommentQuery($q))
+            ->with([
+                'album:id,name',
+                'user' => fn($q) => $q->withTrashed()->select('id', 'name', 'status', 'premium_expires_at', 'vip_expires_at', 'is_verified', 'last_seen', 'deleted_at'), 
+                'comments' => function ($q) use ($userAvatarQuery, $isKarantine, $status, $search, $operator) {
+                    $this->buildCommentQuery($q);
+                    $q->with([
+                        'user' => $userAvatarQuery,
+                        'allReplies' => function ($q) use ($userAvatarQuery, $isKarantine, $status, $search, $operator) {
+                            $q->whereHas('user', fn($u) => $u->excludeStaff());
+                            
+                            if ($isKarantine) {
+                                $q->withTrashed();
+                            } elseif ($status !== 'all') {
+                                $q->where('status', $status);
+                            }
+                            
+                            if (!empty($search)) {
+                                $q->where(function ($sub) use ($search, $operator) {
+                                    if (is_numeric($search)) {
+                                        $sub->where('id', (int) $search);
+                                    } else {
+                                        $sub->where('content', $operator, "%{$search}%")
+                                             ->orWhereHas('user', fn($u) => $u->withTrashed()->where('name', $operator, "%{$search}%"));
+                                    }
+                                });
+                            }
+                            $q->with(['user' => $userAvatarQuery])->latest();
+                        },
+                    ])->latest();
+                },
+            ]);
+
+        return $query->latest()->paginate($this->perPage);
     }
 }; 
 ?>
+
 
 <div class="space-y-6">
     <!-- Заголовок -->
@@ -368,7 +358,7 @@ new #[Layout('layouts.admin')] class extends Component
                         <x-ui.badge variant="destructive" size="sm">{{ $this->counts['pending'] }} новых</x-ui.badge>
                     @endif
                 </h1>
-                <p class="text-sm text-muted-foreground">Всего комментариев: {{ $this->counts['total'] }}</p>
+                <p class="text-sm text-muted-foreground">Всего комментариев: {{ $this->counts['total'] }} (в карантине: {{ $this->counts['karantine'] }})</p>
             </div>
          </div>
 
@@ -423,11 +413,12 @@ new #[Layout('layouts.admin')] class extends Component
     <!-- Фильтры -->
     <div class="flex flex-wrap items-center gap-3">
         <div class="flex flex-wrap gap-1.5">
-               <x-ui.button wire:click="setStatusFilter('all')" variant="{{ $statusFilter === 'all' ? 'default' : 'secondary' }}" size="sm">Все <x-ui.badge size="xs">{{ $this->counts['total'] }}</x-ui.badge></x-ui.button>
-            <x-ui.button wire:click="setStatusFilter('pending')" variant="{{ $statusFilter === 'pending' ? 'default' : 'secondary' }}" size="sm">Ожидают <x-ui.badge size="xs" variant="warning">{{ $this->counts['pending'] }}</x-ui.badge></x-ui.button>         
-            <x-ui.button wire:click="setStatusFilter('approved')" variant="{{ $statusFilter === 'approved' ? 'default' : 'secondary' }}" size="sm">Одобрены <x-ui.badge size="xs" variant="success">{{ $this->counts['approved'] }}</x-ui.badge></x-ui.button>
-            <x-ui.button wire:click="setStatusFilter('rejected')" variant="{{ $statusFilter === 'rejected' ? 'default' : 'secondary' }}" size="sm">Отклонены <x-ui.badge size="xs" variant="destructive">{{ $this->counts['rejected'] }}</x-ui.badge></x-ui.button>
-            <x-ui.button wire:click="setStatusFilter('spam')" variant="{{ $statusFilter === 'spam' ? 'default' : 'secondary' }}" size="sm">Спам <x-ui.badge size="xs" variant="destructive">{{ $this->counts['spam'] }}</x-ui.badge></x-ui.button>
+            <x-ui.button wire:click="setStatusFilter('all')" x-on:click="$wire.search = ''" variant="{{ $statusFilter === 'all' ? 'default' : 'secondary' }}" size="sm">Все <x-ui.badge size="xs">{{ $this->counts['total'] }}</x-ui.badge></x-ui.button>
+            <x-ui.button wire:click="setStatusFilter('pending')" x-on:click="$wire.search = ''" variant="{{ $statusFilter === 'pending' ? 'default' : 'secondary' }}" size="sm">Ожидают <x-ui.badge size="xs" variant="warning">{{ $this->counts['pending'] }}</x-ui.badge></x-ui.button>         
+            <x-ui.button wire:click="setStatusFilter('approved')" x-on:click="$wire.search = ''" variant="{{ $statusFilter === 'approved' ? 'default' : 'secondary' }}" size="sm">Одобрены <x-ui.badge size="xs" variant="success">{{ $this->counts['approved'] }}</x-ui.badge></x-ui.button>
+            <x-ui.button wire:click="setStatusFilter('rejected')" x-on:click="$wire.search = ''" variant="{{ $statusFilter === 'rejected' ? 'default' : 'secondary' }}" size="sm">Отклонены <x-ui.badge size="xs" variant="destructive">{{ $this->counts['rejected'] }}</x-ui.badge></x-ui.button>
+            <x-ui.button wire:click="setStatusFilter('spam')" x-on:click="$wire.search = ''" variant="{{ $statusFilter === 'spam' ? 'default' : 'secondary' }}" size="sm">Спам <x-ui.badge size="xs" variant="destructive">{{ $this->counts['spam'] }}</x-ui.badge></x-ui.button>
+            <x-ui.button wire:click="setStatusFilter('karantine')" x-on:click="$wire.search = ''" variant="{{ $statusFilter === 'karantine' ? 'default' : 'secondary' }}" size="sm">Карантин <x-ui.badge size="xs">{{ $this->counts['karantine'] }}</x-ui.badge></x-ui.button>
         </div>
         <div class="flex items-center gap-2 ml-auto">
             <div class="relative w-64">
@@ -459,7 +450,8 @@ new #[Layout('layouts.admin')] class extends Component
                 @php
                       $imgSrc = $photo->thumb_url ?: asset('images/no-image-placeholder.png');
                       $fullSrc = $photo->original_url ?: $imgSrc;
-                    $pendingCount = $photo->comments->where('status', 'pending')->count() + $photo->comments->flatMap->replies->where('status', 'pending')->count();
+                      $pendingCount = $photo->comments->where('status', 'pending')->count() + $photo->comments->flatMap->allReplies->where('status', 'pending')->count();
+                      $isKarantineTab = $this->statusFilter === 'karantine';
                 @endphp
 
                 <div class="bg-card border border-border rounded-lg overflow-hidden" wire:key="photo-{{ $photo->id }}">
@@ -495,7 +487,7 @@ new #[Layout('layouts.admin')] class extends Component
                         <div class="md:w-64 lg:w-80 shrink-0 border-r border-border bg-muted/10 p-4 flex items-center justify-center">
                            <div class="relative aspect-square bg-muted group overflow-hidden rounded-lg">
                                 <a href="{{ $fullSrc }}" data-fancybox="gallery-comments" data-caption="Фото #{{ $photo->id }}" class="block w-full max-w-[200px] aspect-square bg-muted rounded-lg overflow-hidden cursor-pointer hover:opacity-90 transition-opacity">
-                                    <img src="{{ $imgSrc }}" alt="Photo" class="w-full h-full object-cover">
+                                    <img src="{{ $imgSrc }}" alt="Photo" class="w-full h-full object-cover" loading="lazy">
                                 </a>
                                 
                                 <div class="absolute top-2 left-2 z-10 flex flex-col gap-1">
@@ -512,14 +504,14 @@ new #[Layout('layouts.admin')] class extends Component
                         <div class="flex-1 p-4 space-y-3 max-h-[500px] overflow-y-auto">
                             @foreach ($photo->comments as $comment)
                                 @php 
-                                    $commentDimmed = $this->statusFilter !== 'all' && $comment->status !== $this->statusFilter; 
+                                    $commentDimmed = $isKarantineTab ? !$comment->trashed() : ($this->statusFilter !== 'all' && $comment->status !== $this->statusFilter); 
                                     $rejectEnum = $comment->reject_reason ? \App\Enums\CommentRejectReason::tryFrom($comment->reject_reason) : null;
                                     $isHighlighted = is_numeric($this->search) && $comment->id == (int)$this->search;      
                                 @endphp
 
                                 <div 
                                     class="flex items-start gap-3 p-3 {{ $comment->status === 'pending' ? 'bg-yellow-500/5 border border-yellow-500/20' : 'bg-muted/10 border border-border' }} rounded-lg {{ $commentDimmed ? 'opacity-50' : '' }} {{ $isHighlighted ? 'ring-4 ring-primary/60 shadow-lg' : '' }}" 
-                                    wire:key="comment-{{ $comment->id }}-{{ $comment->status }}"
+                                    wire:key="comment-{{ $comment->id }}-{{ $comment->status }}-{{ $comment->trashed() ? '1' : '0' }}"
                                     @if($isHighlighted) x-data x-init="setTimeout(() => { $el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 100)" @endif
                                 >
                                     <x-avatar src="{{ $comment->user?->avatar_url }}" name="{{ $comment->user?->name ?? 'Удален' }}" size="sm" userId="{{ $comment->user?->id }}" showStatus="true" :isOnline="$comment->user?->is_online"/>
@@ -550,7 +542,6 @@ new #[Layout('layouts.admin')] class extends Component
                                     <div class="flex gap-1 shrink-0">
                                         @if ($comment->status === 'pending')
                                             <x-ui.button wire:click="approveComment({{ $comment->id }})" variant="ghost" size="icon-xs" title="Одобрить"><x-lucide-check class="w-4 h-4 text-green-500" /></x-ui.button>
-                                            
                                             <x-ui.dropdown-menu>
                                                 <x-ui.dropdown-menu-trigger>
                                                     <x-ui.button variant="ghost" size="icon-xs" title="Отклонить"><x-lucide-x class="w-4 h-4 text-yellow-500" /></x-ui.button>
@@ -563,7 +554,6 @@ new #[Layout('layouts.admin')] class extends Component
                                                     @endforeach
                                                 </x-ui.dropdown-menu-content>
                                             </x-ui.dropdown-menu>
-
                                             <x-ui.button wire:click="markSpam({{ $comment->id }})" variant="ghost" size="icon-xs" title="Пометить спамом"><x-lucide-alert-circle class="w-4 h-4 text-red-500" /></x-ui.button>
                                         @elseif($comment->status === 'approved')
                                             <x-ui.dropdown-menu>
@@ -585,17 +575,17 @@ new #[Layout('layouts.admin')] class extends Component
                                     </div>
                                 </div>
 
-                                @if ($comment->replies->count() > 0)
+                                @if ($comment->allReplies->count() > 0)
                                     <div class="pl-12 border-l-2 border-border space-y-2 -mt-2">
-                                        @foreach ($comment->replies as $reply)
+                                        @foreach ($comment->allReplies as $reply)
                                             @php 
-                                            $replyDimmed = $this->statusFilter !== 'all' && $reply->status !== $this->statusFilter;
+                                            $replyDimmed = $isKarantineTab ? !$reply->trashed() : ($this->statusFilter !== 'all' && $reply->status !== $this->statusFilter);
                                             $replyRejectEnum = $reply->reject_reason ? \App\Enums\CommentRejectReason::tryFrom($reply->reject_reason) : null;
                                             $isReplyHighlighted = is_numeric($this->search) && $reply->id == (int)$this->search;
                                             @endphp
                                             <div 
                                                 class="flex items-start gap-2 p-2 {{ $reply->status === 'pending' ? 'bg-yellow-500/5 border border-yellow-500/20' : 'bg-muted/5 border border-border' }} rounded-lg {{ $replyDimmed ? 'opacity-50' : '' }} {{ $isReplyHighlighted ? 'ring-4 ring-primary/60 shadow-lg' : '' }}" 
-                                                wire:key="reply-{{ $reply->id }}-{{ $reply->status }}"
+                                                wire:key="reply-{{ $reply->id }}-{{ $reply->status }}-{{ $reply->trashed() ? '1' : '0' }}"
                                                 @if($isReplyHighlighted) x-data x-init="setTimeout(() => { $el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 100)" @endif
                                             >
                                                 <x-avatar src="{{ $reply->user?->avatar_url }}" name="{{ $reply->user?->name ?? 'Удален' }}" size="xs" userId="{{ $reply->user?->id }}" showStatus="true" :isOnline="$reply->user?->is_online" />
@@ -625,7 +615,6 @@ new #[Layout('layouts.admin')] class extends Component
                                                 <div class="flex gap-1 shrink-0">
                                                     @if ($reply->status === 'pending')
                                                         <x-ui.button wire:click="approveComment({{ $reply->id }})" variant="ghost" size="icon-xs" title="Одобрить"><x-lucide-check class="w-4 h-4 text-green-500" /></x-ui.button>
-                                                        
                                                         <x-ui.dropdown-menu>
                                                             <x-ui.dropdown-menu-trigger>
                                                                 <x-ui.button variant="ghost" size="icon-xs" title="Отклонить"><x-lucide-x class="w-4 h-4 text-yellow-500" /></x-ui.button>
@@ -638,7 +627,6 @@ new #[Layout('layouts.admin')] class extends Component
                                                                 @endforeach
                                                             </x-ui.dropdown-menu-content>
                                                         </x-ui.dropdown-menu>
-
                                                         <x-ui.button wire:click="markSpam({{ $reply->id }})" variant="ghost" size="icon-xs" title="Пометить спамом"><x-lucide-alert-circle class="w-4 h-4 text-red-500" /></x-ui.button>
                                                     @elseif($reply->status === 'approved')
                                                         <x-ui.dropdown-menu>
@@ -671,6 +659,8 @@ new #[Layout('layouts.admin')] class extends Component
 
         <div class="mt-6">{{ $this->photos->links('partials.pagination') }}</div>
     @endif
+
+    <x-loading-overlay fixed="true" wire:loading.delay wire:key="overlay-loading-page"/>
 
     <script>
     document.addEventListener('livewire:navigated', () => {

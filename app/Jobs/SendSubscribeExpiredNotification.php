@@ -16,23 +16,35 @@ class SendSubscribeExpiredNotification implements ShouldQueue
 
     public $tries = 3;
 
+    // ФИКС: Передаем ТОЛЬКО ID юзера, чтобы в очереди не лежал "слепок" старой модели
     public function __construct(
-        protected User $user,
+        protected int $userId,
         protected string $planName = 'VIP',
-        protected string $tier = 'vip' // Добавили тип подписки
+        protected string $tier = 'vip'
     ) {}
 
     public function handle(): void
     {
-        // Защита от гонки: проверяем, не купил ли юзер ЗА НОВУЮ подписку этого же типа, пока джоба лежала в очереди
-        $hasActiveSub = $this->tier === 'premium' 
-            ? $this->user->has_active_premium 
-            : $this->user->has_active_vip;
-
-        if ($hasActiveSub) {
-            return; // Подписка обновлена, не шлем письмо об истечении
+        // ФИКС: Заново запрашиваем юзера из БД, чтобы получить АКТУАЛЬНЫЕ даты подписок
+        $user = User::withTrashed()->find($this->userId);
+        
+        if (!$user) {
+            return; // Юзер удален за время ожидания в очереди
         }
 
-        $this->user->notify(new SubscriptionExpiredNotification($this->planName));
+        // ФИКС: Проверяем АКТУАЛЬНЫЕ даты напрямую из БД (через свежий объект)
+        $hasActiveSub = false;
+        if ($this->tier === 'premium') {
+            $hasActiveSub = $user->premium_expires_at && $user->premium_expires_at->isFuture();
+        } else {
+            $hasActiveSub = $user->vip_expires_at && $user->vip_expires_at->isFuture();
+        }
+
+        // Если юзер успел купить новую подписку, пока Джоба лежала в очереди — отменяем отправку!
+        if ($hasActiveSub) {
+            return; 
+        }
+
+        $user->notify(new SubscriptionExpiredNotification($this->planName));
     }
 }

@@ -2,7 +2,6 @@
 
 namespace App\Notifications;
 
-use App\Models\PhotoComment;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Notifications\Notification;
@@ -10,45 +9,31 @@ use Illuminate\Notifications\Messages\MailMessage;
 use Illuminate\Notifications\Messages\BroadcastMessage;
 use Illuminate\Support\Facades\Log;
 
-// В кабинете	toDatabase()	Сохраняется в БД
-// Email    	toMail()    	Отправляется через SMTP (в будующем сейчас в логи)
-// Push	        toBroadcast()	Отправляется через WebSockets (в будующем сейчас в логи)
-
-// ТАБЛИЦА - КАК ОТСЫЛАЮТЬСЯ УВЕДОМЛЕНИЯ ?
-// Действие	    В кабинете БД   Email	      Push	       Почему
-// Одобрение	   ✅	       ✅        	✅	        Пользователь должен знать
-// Отклонение	   ✅	       ✅	        ✅	        Пользователь должен знать
-// Спам	           ✅           ❌        	❌	        Не спамим спамера
-// Удаление        ✅	       ✅        	❌        	Важно, но не критично
-// Восстановление  ✅	       ❌	        ❌	        Внутреннее действие
-
 class CommentModerated extends Notification implements ShouldQueue
 {
     use Queueable;
 
+    // ПЕРЕДАЕМ ТОЛЬКО ДАННЫЕ (СКАЛЯРЫ), А НЕ МОДЕЛЬ
     public function __construct(
-        protected PhotoComment $comment,
-        protected string $status // approved, rejected, spam, deleted, restored
+        protected int $commentId,
+        protected int $photoId,
+        protected string $commentContent, // Сохраняем текст на момент отправки
+        protected string $status
     ) {}
 
-    /**
-     *  Каналы доставки с учетом глобальных тумблеров и категорий
-     */
     public function via($notifiable): array
     {
-        // 1. В кабинет (БД) отправляем ВСЕГДА
         $channels = ['database'];
 
-        // 2. Email: проверяем глобальный тумблер И категорию "Новые события" (on_event).
-        // Не отправляем при "spam" и "restored" по нашей бизнес-логике.
+        // БЕЗОПАСНАЯ проверка
+        $emailSettings = $notifiable->email_settings ?? [];
+        
         if ($notifiable->email_enabled 
-            && ($notifiable->email_settings['on_event'] ?? true) 
+            && ($emailSettings['on_event'] ?? true) 
             && !in_array($this->status, ['spam', 'restored'])) {
             $channels[] = 'mail';
         }
 
-        // 3. Push (Broadcast): отправляем ТОЛЬКО при "approved" и "rejected", 
-        // И ЕСЛИ ВКЛЮЧЕН ГЛОБАЛЬНЫЙ ТУМБЛЕР push_enabled
         if ($notifiable->push_enabled && in_array($this->status, ['approved', 'rejected'])) {
             $channels[] = 'broadcast';
         }
@@ -64,7 +49,7 @@ class CommentModerated extends Notification implements ShouldQueue
             ->subject($messages['subject'])
             ->greeting("Здравствуйте, {$notifiable->name}!")
             ->line($messages['body'])
-            ->line("Комментарий: \"{$this->comment->content}\"")
+            ->line("Комментарий: \"{$this->commentContent}\"")
             ->when($this->status === 'approved', function ($message) {
                 return $message->line('Теперь он виден всем пользователям.');
             })
@@ -84,12 +69,12 @@ class CommentModerated extends Notification implements ShouldQueue
             'type' => 'comment_moderated',
             'title' => $messages['title'],
             'message' => $messages['message'],
-            'action_url' => url('/photos/' . $this->comment->photo_id),          
+            'action_url' => url('/photos/' . $this->photoId),          
             'data' => [
-                'comment_id' => $this->comment->id,
-                'photo_id' => $this->comment->photo_id,
+                'comment_id' => $this->commentId,
+                'photo_id' => $this->photoId,
                 'status' => $this->status,
-                'content' => $this->comment->content,
+                'content' => $this->commentContent,
             ]
         ];
     }
@@ -102,13 +87,13 @@ class CommentModerated extends Notification implements ShouldQueue
             'type' => 'comment_moderated',
             'title' => $messages['title'],
             'message' => $messages['message'],
-            'action_url' => url('/photos/' . $this->comment->photo_id),
+            'action_url' => url('/photos/' . $this->photoId),
             'timestamp' => now()->toDateTimeString(),
             'data' => [
-                'comment_id' => $this->comment->id,
-                'photo_id' => $this->comment->photo_id,
+                'comment_id' => $this->commentId,
+                'photo_id' => $this->photoId,
                 'status' => $this->status,
-                'content' => $this->comment->content,
+                'content' => $this->commentContent,
             ]
         ]);
     }
@@ -155,13 +140,11 @@ class CommentModerated extends Notification implements ShouldQueue
         };
     }
 
-    /**
-     * ЗАЩИТА ОЧЕРЕДИ:
-     * Если комментарий удалят из БД, пока письмо висит в очереди,
-     * воркер не упадет, а запишет лог.
+       /**
+     * ЗАЩИТА ОЧЕРЕДИ
      */
     public function failed(\Throwable $exception): void
     {
-        Log::error("Не удалось отправить CommentModerated (ID: {$this->comment->id}): " . $exception->getMessage());
+        Log::error("Не удалось отправить CommentModerated (ID: {$this->commentId}): " . $exception->getMessage());
     }
 }

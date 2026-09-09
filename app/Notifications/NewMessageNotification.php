@@ -1,17 +1,7 @@
-<?php 
-
-// Разбор архитектуры:
-
-// Str::limit: Если юзер напишет в сообщении "Войну и мир" целиком, в превью уведомления (на почте и в колокольчике) 
-// отобразится только первые 50 символов. Это защитит верстку письма и UI от расползания.
-// Оператор ?-> (Nullsafe): $this->message->sender?->name. Это критически важно для очередей! 
-// Если Вася отправил сообщение, и через 2 секунды удалил аккаунт, а воркер дошел до отправки письма только через минуту — 
-// связь sender вернет null. Без ?-> код упадет. С ?-> он аккуратно напишет "Удаленный пользователь".
-// Единый стандарт: Использованы те же проверки (email_enabled + on_message), failed() метод и DRY-подход для toBroadcast.
+<?php
 
 namespace App\Notifications;
 
-use App\Models\Message;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Notifications\Notification;
@@ -20,40 +10,52 @@ use Illuminate\Notifications\Messages\BroadcastMessage;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
+// Как использовать в вебе ?
+//  $receiver->notify(new NewMessageNotification(
+//     chatId: $message->chat_id,
+//     messageId: $message->id,
+//     senderId: $message->sender_id,
+//     // Заранее берем имя, чтобы воркер не делал N+1 запрос к базе
+//     senderName: $message->sender?->name, 
+//     messageType: $message->type,
+//     messageBody: $message->body
+// ));
+
 class NewMessageNotification extends Notification implements ShouldQueue
 {
     use Queueable;
 
+    // ФИКС: Передаем ТОЛЬКО скаляры! Никаких моделей в Redis.
     public function __construct(
-        protected Message $message
+        protected int $chatId,
+        protected int $messageId,
+        protected ?int $senderId,
+        protected ?string $senderName,
+        protected string $messageType,
+        protected ?string $messageBody
     ) {}
 
-    /**
-     *  Каналы доставки с учетом глобальных тумблеров и категорий
-     */
     public function via($notifiable): array
     {
         $channels = ['database']; // В базу (колокольчик) пишем ВСЕГДА
 
-        // Проверяем глобальный тумблер Push
+        // ФИКС: Безопасная проверка настроек (защита от TypeError)
+        $emailSettings = $notifiable->email_settings ?? [];
+
         if ($notifiable->push_enabled) {
             $channels[] = 'broadcast';
         }
 
-        // Проверяем глобальный тумблер Email И категорию "Новые сообщения" (on_message)
-        if ($notifiable->email_enabled && ($notifiable->email_settings['on_message'] ?? true)) {
+        if ($notifiable->email_enabled && ($emailSettings['on_message'] ?? true)) {
             $channels[] = 'mail';
         }
 
         return $channels;
     }
 
-    /**
-     *  Отправка Email
-     */
     public function toMail($notifiable): MailMessage
     {
-        $senderName = $this->message->sender?->name ?? 'Удаленный пользователь';
+        $senderName = $this->senderName ?? 'Удаленный пользователь';
         $preview = $this->getMessagePreview();
 
         return (new MailMessage)
@@ -61,34 +63,28 @@ class NewMessageNotification extends Notification implements ShouldQueue
             ->greeting("Здравствуйте, {$notifiable->name}!")
             ->line("Пользователь {$senderName} отправил вам сообщение:")
             ->line("\"{$preview}\"")
-            ->action('Прочитать в чате', url('/chats/' . $this->message->chat_id));
+            ->action('Прочитать в чате', url('/chats/' . $this->chatId));
     }
 
-    /**
-     *  Запись в БД (Колокольчик)
-     */
     public function toDatabase($notifiable): array
     {
-        $senderName = $this->message->sender?->name ?? 'Удаленный пользователь';
+        $senderName = $this->senderName ?? 'Удаленный пользователь';
         $preview = $this->getMessagePreview();
 
         return [
             'type' => 'new_message',
             'title' => '💬 Новое сообщение',
             'message' => "{$senderName}: {$preview}",
-            'action_url' => url('/chats/' . $this->message->chat_id),
+            'action_url' => url('/chats/' . $this->chatId),
             'data' => [
-                'chat_id' => $this->message->chat_id,
-                'message_id' => $this->message->id,
-                'sender_id' => $this->message->sender_id,
+                'chat_id' => $this->chatId,
+                'message_id' => $this->messageId,
+                'sender_id' => $this->senderId,
                 'sender_name' => $senderName,
             ]
         ];
     }
 
-    /**
-     *  Realtime push через WebSockets (DRY-подход)
-     */
     public function toBroadcast($notifiable): BroadcastMessage
     {
         $dbData = $this->toDatabase($notifiable);
@@ -98,29 +94,22 @@ class NewMessageNotification extends Notification implements ShouldQueue
         ]));
     }
 
-    /**
-     *  Хелпер для формирования превью сообщения (чтобы не дублировать код)
-     */
     private function getMessagePreview(): string
     {
-        // Если текст — обрезаем до 50 символов
-        if ($this->message->type === 'text') {
-            return Str::limit($this->message->body, 50);
+        if ($this->messageType === 'text') {
+            return Str::limit($this->messageBody, 50);
         }
         
-        // Если фото или подарок — возвращаем красивые заглушки
-        return match ($this->message->type) {
+        return match ($this->messageType) {
             'image' => '📷 Фотография',
             'gift'  => '🎁 Подарок',
             default => 'Новое сообщение',
         };
     }
 
-    /**
-     * ЗАЩИТА ОЧЕРЕДИ
-     */
     public function failed(\Throwable $exception): void
     {
-        Log::error("Не удалось отправить NewMessageNotification (Message ID: {$this->message->id}): " . $exception->getMessage());
+        // ФИКС: Логируем по ID, так как самой модели тут нет
+        Log::error("Не удалось отправить NewMessageNotification (Message ID: {$this->messageId}): " . $exception->getMessage());
     }
 }

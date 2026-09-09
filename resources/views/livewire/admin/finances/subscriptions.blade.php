@@ -2,6 +2,9 @@
 
 use App\Actions\Admin\ManageSubscriptionPlansAction;
 use App\Models\SubscriptionPlan;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Str;
+use Livewire\Attributes\Computed;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Url;
 use Livewire\Volt\Component;
@@ -94,14 +97,19 @@ new #[Layout('layouts.admin')] class extends Component
     {
         $validated = $this->validate([
             'name' => 'required|string|max:255',
-            'slug' => 'required|string|max:255|unique:subscription_plans,slug,' . $this->editingPlanId,
+            'slug' => ['required', 'string', 'max:255', 'regex:/^[a-z0-9\-_]+$/', \Illuminate\Validation\Rule::unique('subscription_plans', 'slug')->ignore($this->editingPlanId)],
             'price' => 'required|numeric|min:0',
             'old_price' => 'nullable|numeric|min:0',
             'duration_days' => 'required|integer|min:1',
             'sort_order' => 'required|integer|min:0',
             'apple_product_id' => 'nullable|string|max:255',
             'google_product_id' => 'nullable|string|max:255',
+            'is_active' => 'boolean', 
         ]);
+
+        if (empty($validated['old_price'])) {
+            $validated['old_price'] = null;
+        }
 
         if ($this->editingPlanId) {
             $plan = SubscriptionPlan::find($this->editingPlanId);
@@ -109,7 +117,6 @@ new #[Layout('layouts.admin')] class extends Component
             $this->dispatch('show-toast', type: 'success', message: 'Тариф обновлен');
         } else {
             $validated['tier'] = $this->activeTab;
-            $validated['is_active'] = $this->is_active;
             $action->createPlan($validated, auth()->user());
             $this->dispatch('show-toast', type: 'success', message: 'Тариф создан');
         }
@@ -126,19 +133,34 @@ new #[Layout('layouts.admin')] class extends Component
         $this->dispatch('show-toast', type: 'success', message: $isActive ? 'Тариф активирован' : 'Тариф скрыт');
     }
 
+    // ФИКС: Закэшировали счетчики
+    #[Computed]
+    public function counts(): array
+    {
+        return Cache::remember('admin_plan_counts', 60, function () {
+            return [
+                'premium' => SubscriptionPlan::where('tier', 'premium')->count(),
+                'vip' => SubscriptionPlan::where('tier', 'vip')->count(),
+            ];
+        });
+    }
+
     public function with(): array
     {
         $operator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
         $search = $this->search;
+        // ФИКС: ctype_digit
+        $isId = !empty($search) && ctype_digit($search);
 
         $plans = SubscriptionPlan::where('tier', $this->activeTab)
             ->ordered()
-            ->when($this->search, function ($query) use ($search, $operator) {
-                $query->where(function ($q) use ($search, $operator) {
+            ->when($search, function ($query) use ($search, $operator, $isId) {
+                $query->where(function ($q) use ($search, $operator, $isId) {
                     $q->where('name', $operator, "%{$search}%")
                       ->orWhere('slug', $operator, "%{$search}%");
-                    if (is_numeric($search)) {
-                        $q->orWhere('id', (int)$search);
+                      
+                    if ($isId) {
+                        $q->orWhere('id', (int) $search);
                     }
                 });
             })
@@ -146,8 +168,6 @@ new #[Layout('layouts.admin')] class extends Component
 
         return [
             'plans' => $plans,
-            'premiumCount' => SubscriptionPlan::where('tier', 'premium')->count(),
-            'vipCount' => SubscriptionPlan::where('tier', 'vip')->count(),
             'currentFeatures' => $this->activeTab === 'premium' ? $this->premiumFeatures : $this->vipFeatures,
         ];
     }
@@ -190,10 +210,10 @@ new #[Layout('layouts.admin')] class extends Component
     <div class="border-b border-border">
         <nav class="flex gap-x-4 flex-wrap">
             <button wire:click="setTab('premium')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {{ $activeTab === 'premium' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
-                Premium <span class="ml-1 text-xs text-muted-foreground">({{ $premiumCount }})</span>
+                Premium <span class="ml-1 text-xs text-muted-foreground">({{ $this->counts['premium'] }})</span>
             </button>
             <button wire:click="setTab('vip')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {{ $activeTab === 'vip' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
-                VIP (Буст выдачи) <span class="ml-1 text-xs text-muted-foreground">({{ $vipCount }})</span>
+                VIP <span class="ml-1 text-xs text-muted-foreground">({{ $this->counts['vip'] }})</span>
             </button>
         </nav>
     </div>
@@ -206,7 +226,8 @@ new #[Layout('layouts.admin')] class extends Component
         </h3>
         <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-4 gap-y-2">
             @foreach ($currentFeatures as $feat)
-                <div class="flex items-start gap-2 text-sm text-foreground">
+                <!-- ФИКС: Добавлен wire:key -->
+                <div wire:key="feat-{{ Str::slug($feat) }}" class="flex items-start gap-2 text-sm text-foreground">
                     <x-lucide-check class="w-4 h-4 text-green-500 mt-0.5 shrink-0" />
                     <span>{{ $feat }}</span>
                 </div>
@@ -218,7 +239,7 @@ new #[Layout('layouts.admin')] class extends Component
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         @foreach ($plans as $plan)
             @php 
-                $isHighlighted = is_numeric($this->search) && $plan->id == (int)$this->search;
+                 $isHighlighted = ctype_digit($this->search) && $plan->id == (int)$this->search;
             @endphp
             <div wire:key="plan-{{ $plan->id }}" 
                  class="bg-card border {{ $isHighlighted ? 'border-primary ring-2 ring-primary/50' : ($plan->is_active ? 'border-border' : 'border-destructive/30 opacity-70') }} rounded-xl overflow-hidden flex flex-col shadow-sm transition-all duration-200 transform {{ $isHighlighted ? 'scale-105 z-10' : '' }}">
@@ -266,7 +287,12 @@ new #[Layout('layouts.admin')] class extends Component
 
                 <div class="p-4 border-t border-border bg-muted/20 flex items-center justify-between">
                     <x-ui.button wire:click="toggleActive({{ $plan->id }})" variant="{{ $plan->is_active ? 'outline' : 'success' }}" size="sm" wire:loading.attr="disabled" wire:target="toggleActive({{ $plan->id }})">
-                        {{ $plan->is_active ? 'Скрыть' : 'Активировать' }}
+                        <span wire:loading.remove wire:target="toggleActive({{ $plan->id }})">
+                            {{ $plan->is_active ? 'Скрыть' : 'Активировать' }}
+                        </span>
+                        <span wire:loading wire:target="toggleActive({{ $plan->id }})">
+                            <x-lucide-loader-2 class="w-4 h-4 animate-spin inline" />
+                        </span>
                     </x-ui.button>
 
                     <x-ui.button wire:click="openPlanModal({{ $plan->id }})" variant="ghost" size="icon-sm" title="Редактировать">
@@ -299,12 +325,14 @@ new #[Layout('layouts.admin')] class extends Component
                     <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <div class="flex flex-col gap-2">
                             <x-ui.label class="text-sm font-medium">Название</x-ui.label>
-                            <x-ui.input wire:model="name" placeholder="Premium на 1 месяц" />
+                            <!-- ФИКС: Динамический плейсхолдер -->
+                            <x-ui.input wire:model="name" placeholder="{{ ucfirst($activeTab) }} на 1 месяц" />
                             @error('name') <p class="text-xs text-destructive">{{ $message }}</p> @enderror
                         </div>
                         <div class="flex flex-col gap-2">
                             <x-ui.label class="text-sm font-medium">Слаг (URL)</x-ui.label>
-                            <x-ui.input wire:model="slug" placeholder="premium_1_month" />
+                            <!-- ФИКС: Динамический плейсхолдер -->
+                            <x-ui.input wire:model="slug" placeholder="{{ $activeTab }}_1_month" />
                             @error('slug') <p class="text-xs text-destructive">{{ $message }}</p> @enderror
                         </div>
                     </div>
@@ -335,11 +363,13 @@ new #[Layout('layouts.admin')] class extends Component
                         </div>
                         <div class="flex flex-col gap-2">
                             <x-ui.label class="text-sm font-medium">Apple Product ID</x-ui.label>
-                            <x-ui.input wire:model="apple_product_id" placeholder="com.app.premium" />
+                            <!-- ФИКС: Динамический плейсхолдер -->
+                            <x-ui.input wire:model="apple_product_id" placeholder="com.app.{{ $activeTab }}" />
                         </div>
                         <div class="flex flex-col gap-2">
                             <x-ui.label class="text-sm font-medium">Google Product ID</x-ui.label>
-                            <x-ui.input wire:model="google_product_id" placeholder="premium_1_month" />
+                            <!-- ФИКС: Динамический плейсхолдер -->
+                            <x-ui.input wire:model="google_product_id" placeholder="{{ $activeTab }}_1_month" />
                         </div>
                     </div>
                 </div>

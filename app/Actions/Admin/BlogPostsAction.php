@@ -7,12 +7,10 @@ use App\Models\BlogPost;
 use App\Models\User;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Cache;
 
 class BlogPostsAction
 {
-    /**
-     * Дублировать пост.
-     */
     public function duplicate(BlogPost $post, User $admin): BlogPost
     {
         $new = $post->replicate();
@@ -35,14 +33,12 @@ class BlogPostsAction
         ];
 
         AdminLog::record('blog.create', $new, $admin, null, $after);
+        $this->clearCache();
         Log::info("Админ продублировал пост", ['source_post_id' => $post->id, 'new_post_id' => $new->id, 'admin_id' => $admin->id]);
 
         return $new;
     }
 
-    /**
-     * Создать пост
-     */
     public function createPost(array $data, User $admin): BlogPost
     {
         $data['user_id'] = $admin->id;
@@ -52,6 +48,10 @@ class BlogPostsAction
         }
 
         $post = BlogPost::create($data);
+        
+        if (!empty($data['is_featured']) && $data['is_featured'] === true) {
+            BlogPost::where('id', '!=', $post->id)->update(['is_featured' => false]);
+        }
         
         $after = [
             'status' => 'created', 
@@ -64,21 +64,18 @@ class BlogPostsAction
         ];
         
         AdminLog::record('blog.create', $post, $admin, null, $after);
+        $this->clearCache();
         Log::info('Админ создал пост блога', ['post_id' => $post->id, 'admin_id' => $admin->id]);
 
         return $post;
     }
 
-    /**
-     * Обновить пост
-     */
     public function updatePost(BlogPost $post, array $data, User $admin): BlogPost
     {
         if (class_exists(\Mews\Purifier\Facades\Purifier::class) && !empty($data['body'])) {
             $data['body'] = clean($data['body']);
         }
 
-        // ФИКС: Берем только нужные поля для диффа, чтобы не писать огромный HTML в базу логов
         $before = [
             'title' => $post->getOriginal('title'), 
             'slug' => $post->getOriginal('slug'), 
@@ -86,7 +83,10 @@ class BlogPostsAction
         ];
         
         $post->update($data);
-        $post->refresh();
+        
+        if (!empty($data['is_featured']) && $data['is_featured'] === true) {
+            BlogPost::where('id', '!=', $post->id)->update(['is_featured' => false]);
+        }
         
         $after = [
             'title' => $post->title, 
@@ -100,14 +100,12 @@ class BlogPostsAction
         ];
         
         AdminLog::record('blog.update', $post, $admin, $before, $after);
+        $this->clearCache();
         Log::info('Админ обновил пост блога', ['post_id' => $post->id, 'admin_id' => $admin->id]);
 
         return $post;
     }
-
-    /**
-     * Быстрый Toggle (Опубликовать / В черновики / Из архива в черновики)
-     */
+    
     public function toggle(BlogPost $post, User $admin): void
     {
         $oldStatus = $post->getOriginal('status');
@@ -131,11 +129,9 @@ class BlogPostsAction
                 ]
             ]
         );
+        $this->clearCache();
     }
 
-    /**
-     * Отправить в архив
-     */
     public function archive(BlogPost $post, User $admin): void
     {
         if ($post->status === 'archived') return;
@@ -154,11 +150,9 @@ class BlogPostsAction
                 ]
             ]
         );
+        $this->clearCache();
     }
 
-    /**
-     * Восстановить из архива
-     */
     public function restore(BlogPost $post, User $admin): void
     {
         if ($post->status !== 'archived') return;
@@ -176,11 +170,9 @@ class BlogPostsAction
                 ]
             ]
         );
+        $this->clearCache();
     }
 
-    /**
-     * Удалить навсегда
-     */
     public function delete(BlogPost $post, User $admin): void
     {
         $postId = $post->id;
@@ -196,24 +188,57 @@ class BlogPostsAction
         ];
 
         AdminLog::record('blog.delete', $post, $admin, null, $after);
-        $post->delete();
+        $post->forceDelete();
+        $this->clearCache();
     }
 
     /**
-     * Массовое применение действий
+     * МАССОВЫЕ ДЕЙСТВИЯ (HIGH-LOAD ОПТИМИЗАЦИЯ)
+     * Заменили цикл foreach на 1 Bulk-запрос к базе данных!
      */
     public function applyBulk(array $postIds, string $action, bool $isArchiveTab, User $admin): string
     {
-        $posts = BlogPost::whereIn('id', $postIds)->get();
+        if (empty($postIds)) return 'Нет выбранных постов';
 
-        foreach ($posts as $post) {
-            match($action) {
-                'delete'   => ($isArchiveTab) ? $this->delete($post, $admin) : null,
-                'publish'  => ($post->status !== 'published') ? $this->toggle($post, $admin) : null,
-                'draft'    => ($post->status !== 'draft') ? $this->toggle($post, $admin) : null,
-                'archive'  => ($post->status !== 'archived') ? $this->archive($post, $admin) : null,
-                default => null,
-            };
+        // 1. Обработка удаления
+        if ($action === 'delete') {
+            if (!$isArchiveTab) return 'Удалять можно только из архива!';
+            
+            // 1 Bulk DELETE запрос
+            $deletedCount = BlogPost::whereIn('id', $postIds)->forceDelete();
+            
+            if ($deletedCount > 0) {
+                AdminLog::record('blog.bulk_delete', null, $admin, null, [
+                    'count' => $deletedCount,
+                    'sample_ids' => array_slice($postIds, 0, 100)
+                ]);
+                $this->clearCache();
+            }
+            return 'Посты удалены';
+        }
+
+        // 2. Обработка смены статуса
+        $newStatus = match($action) {
+            'publish'  => 'published',
+            'draft'    => 'draft',
+            'archive'  => 'archived',
+            default    => null,
+        };
+
+        if ($newStatus) {
+            // 1 Bulk UPDATE запрос (меняем статус только тем, у кого он отличается)
+            $affected = BlogPost::whereIn('id', $postIds)
+                ->where('status', '!=', $newStatus)
+                ->update(['status' => $newStatus]);
+
+            if ($affected > 0) {
+                AdminLog::record('blog.bulk_update', null, $admin, null, [
+                    'action' => $action,
+                    'count' => $affected,
+                    'sample_ids' => array_slice($postIds, 0, 100)
+                ]);
+                $this->clearCache();
+            }
         }
 
         return match($action) {
@@ -223,5 +248,10 @@ class BlogPostsAction
             'archive'  => 'Посты перемещены в архив',
             default    => 'Действие применено',
         };
+    }
+
+    private function clearCache(): void
+    {
+        Cache::forget('admin_blog_counts');
     }
 }

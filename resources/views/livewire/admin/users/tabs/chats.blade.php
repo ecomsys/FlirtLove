@@ -31,20 +31,19 @@ new class extends Component
     // Хелпер для жадной загрузки аватарок собеседников
     private function getAvatarQuery(): \Closure
     {
-        return fn($q) => $q->withTrashed()->select('id', 'name', 'email', 'status', 'is_premium', 'premium_expires_at', 'last_seen')
+        // ФИКС: Убрали 'is_premium', добавили 'vip_expires_at'
+        return fn($q) => $q->withTrashed()->select('id', 'name', 'email', 'status', 'premium_expires_at', 'vip_expires_at', 'last_seen')
             ->with(['photos' => fn($sq) => $sq->select('id', 'user_id', 'is_primary', 'status', 'path_thumb')->orderByDesc('is_primary')->limit(1)]);
     }
 
-       #[Computed]
+    #[Computed]
     public function userChats()
     {
-        // Берем участие юзера в чатах, жадно грузим сам чат, других участников и последнее сообщение
         return ChatParticipant::where('user_id', $this->userId)
             ->with([
-                // ФИКС: Убрали withTrashed() у чата, так как чаты не удаляются (soft deletes)
                 'chat' => fn($q) => $q->select('id', 'type', 'last_message_at', 'is_locked'),
-                'chat.participants' => fn($q) => $q->select('id', 'chat_id', 'user_id'), 
-                // А вот юзеры могут быть удалены, тут withTrashed() остается!
+                // ФИКС: Добавлены поля статусов партнера, чтобы были доступны в памяти
+                'chat.participants' => fn($q) => $q->select('id', 'chat_id', 'user_id', 'is_blocked', 'is_muted', 'is_hidden'), 
                 'chat.participants.user' => $this->getAvatarQuery(),
                 'chat.messages' => fn($q) => $q->latest()->limit(1)->select('id', 'chat_id', 'sender_id', 'body', 'type')
             ])
@@ -90,7 +89,7 @@ new class extends Component
                         
                         $lastMsg = $chat->messages->first();
                     @endphp
-                    <x-ui.table-row wire:key="user-chat-{{ $participant->chat_id }}">
+                    <x-ui.table-row wire:key="user-chat-{{ $participant->id }}">
                         <x-ui.table-cell class="text-xs font-mono whitespace-nowrap">
                             @php 
                                 // ФИКС: Передаем параметр 'q' вместо 'chat', чтобы он попал в поле поиска!

@@ -60,7 +60,8 @@ class VerificationSeeder extends Seeder
         $rejectedCount = min(3, $unverifiedUsers->count());
 
         if ($rejectedCount > 0) {
-            $rejectReasons = ['Фото размыто', 'Не видно лицо', 'Монтаж/Фейк'];
+            // ФИКС: Используем английские слаги, которые разрешены в Enum миграции
+            $rejectReasons = ['blurry', 'fake', 'no_code'];
             
             foreach ($unverifiedUsers->random($rejectedCount) as $user) {
                 $photo = $user->photos()->inRandomOrder()->first();
