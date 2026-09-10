@@ -16,8 +16,9 @@ new #[Layout('layouts.admin')] class extends Component
     #[Url(as: 'tab', except: 'profile', history: true)]
     public string $activeTab = 'profile';
 
-    public function mount(int $user): void
+        public function mount(int $user): void
     {
+        // Переводим $user из маршрута в $userId для свойства компонента
         $this->userId = $user;
         
         if (!in_array($this->activeTab, $this->allowedTabs)) {
@@ -25,22 +26,18 @@ new #[Layout('layouts.admin')] class extends Component
         }
     }
 
-    #[Computed]
+   #[Computed]
     public function allowedTabs(): array
     {
         $currentAdmin = auth()->user();
-
-        // 1. Саппорт видит ТОЛЬКО анкету (чтобы идентифицировать юзера при обращении)
         $tabs = ['profile'];
 
-        // 2. Модераторы (и Админы) видят всё, связанное с безопасностью и контентом
         if (in_array($currentAdmin->role, ['moderator', 'admin'])) {
-            array_push($tabs, 'reports', 'blocks', 'bans', 'photos', 'photo-comments', 'diaries', 'diary-comments', 'dating', 'chats');
+            array_push($tabs, 'reports', 'blocks', 'bans', 'photos', 'photo-comments', 'diaries', 'diary-comments', 'dating', 'chats', 'events');
         }
 
-        // 3. Админы видят системные вкладки, деньги и логи
         if ($currentAdmin->role === 'admin') {
-            array_push($tabs, 'sessions', 'admin-logs', 'finances', 'gifts', 'broadcasts');
+            array_push($tabs, 'sessions', 'admin-logs', 'finances', 'gifts', 'broadcasts', 'cards', 'promocodes', 'auth-logs');
         }
 
         return $tabs;
@@ -51,11 +48,11 @@ new #[Layout('layouts.admin')] class extends Component
         return in_array($tab, $this->allowedTabs);
     }
 
-    #[Computed]
+    #[Computed]   
     public function user(): User
     {
         return User::withTrashed()
-            ->with(['profile', 'preferences'])
+            ->with(['profile.city.state', 'profile.country', 'preferences'])
             ->findOrFail($this->userId);
     }
 
@@ -117,9 +114,11 @@ new #[Layout('layouts.admin')] class extends Component
     }
 }; 
 ?>
+
 <div class="space-y-3">
     {{-- ШАПКА ПРОФИЛЯ --}}
-    <div class="flex items-center justify-between flex-wrap gap-4" wire:key="user-header-{{ $this->user->id }}-{{ $this->user->status }}-{{ $this->user->deleted_at }}">
+    <!-- ФИКС: Статичный wire:key на обертке, чтобы не моргала вся шапка -->
+    <div class="flex items-center justify-between flex-wrap gap-4" wire:key="user-header-{{ $this->user->id }}">
         <div class="flex items-center gap-4">
             @php
                 $previousUrl = url()->previous();
@@ -140,59 +139,77 @@ new #[Layout('layouts.admin')] class extends Component
                     <span class="text-xs text-muted-foreground font-normal">(ID: {{ $this->user->id }})</span>
                     @if($this->user->has_active_premium) <x-lucide-crown class="w-5 h-5 text-yellow-500" /> @endif                  
                 </h1>
-                <p class="text-sm text-muted-foreground">{{ $this->user->email }}</p>
+                <p class="text-sm text-muted-foreground flex items-center gap-1.5 flex-wrap">
+                    <span>{{ $this->user->email }}</span>
+                    @if($this->user->profile?->city?->name || $this->user->profile?->country?->name)
+                        <span class="text-border">•</span>
+                        <span class="flex items-center gap-1">
+                            <x-lucide-map-pin class="w-3 h-3" />
+                            @if($this->user->profile?->city?->name)
+                                {{ $this->user->profile->city->name }}
+                            @endif
+                            @if($this->user->profile?->city?->state?->name)
+                                , {{ $this->user->profile->city->state->name }}
+                            @endif
+                            @if($this->user->profile?->country?->name)
+                                , {{ $this->user->profile->country->name }}
+                            @endif
+                        </span>
+                    @endif
+                </p>
             </div>
         </div>
 
         <div class="flex items-center gap-2">
-            <x-ui.button variant="outline" onclick="window.location.href='mailto:{{ $this->user->email }}'">
+            <a href="mailto:{{ $this->user->email }}" class="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 border border-input bg-background hover:bg-accent hover:text-accent-foreground h-9 px-4 py-2">
                 <x-lucide-mail class="w-4 h-4" /> Email
-            </x-ui.button>
+            </a>
 
              @if(in_array(auth()->user()->role, ['admin', 'moderator']))
-            <x-ui.dropdown-menu>
-                <x-ui.dropdown-menu-trigger>
-                    <x-ui.button variant="outline" size="icon">
-                        <x-lucide-settings class="w-4 h-4" />
-                    </x-ui.button>
-                </x-ui.dropdown-menu-trigger>
-                <x-ui.dropdown-menu-content align="end">
-                    @if($this->user->deleted_at)
-                        <x-ui.dropdown-menu-label>Аккаунт удален</x-ui.dropdown-menu-label>
-                        <x-ui.dropdown-menu-separator />
-                        <x-ui.dropdown-menu-item wire:click="restoreUser" wire:confirm="Восстановить аккаунт пользователя?">
-                            <x-lucide-rotate-ccw class="w-4 h-4 text-green-500" /> Восстановить
-                        </x-ui.dropdown-menu-item>
-                        <x-ui.dropdown-menu-item href="{{ route('admin.users.index') }}" wire:navigate>
-                            <x-lucide-arrow-left class="w-4 h-4" /> Назад к списку
-                        </x-ui.dropdown-menu-item>
-                    @else
-                        <x-ui.dropdown-menu-label>Действия</x-ui.dropdown-menu-label>
-                        <x-ui.dropdown-menu-separator />
-
-                        @if($this->user->status === 'banned' || $this->user->status === 'shadowbanned')
-                            <x-ui.dropdown-menu-item wire:click="toggleBan" wire:confirm="Снять бан с пользователя?">
-                                <x-lucide-unlock class="w-4 h-4 text-green-500" /> Разбанить
+                <!-- ФИКС: Динамический wire:key ТОЛЬКО на дропдауне, чтобы сбрасывать Alpine -->
+                <x-ui.dropdown-menu wire:key="header-actions-{{ $this->user->id }}-{{ $this->user->status }}">
+                    <x-ui.dropdown-menu-trigger>
+                        <x-ui.button variant="outline" size="icon">
+                            <x-lucide-settings class="w-4 h-4" />
+                        </x-ui.button>
+                    </x-ui.dropdown-menu-trigger>
+                    <x-ui.dropdown-menu-content align="end">
+                        @if($this->user->deleted_at)
+                            <x-ui.dropdown-menu-label>Аккаунт удален</x-ui.dropdown-menu-label>
+                            <x-ui.dropdown-menu-separator />
+                            <x-ui.dropdown-menu-item wire:click="restoreUser" wire:confirm="Восстановить аккаунт пользователя?">
+                                <x-lucide-rotate-ccw class="w-4 h-4 text-green-500" /> Восстановить
+                            </x-ui.dropdown-menu-item>
+                            <x-ui.dropdown-menu-item href="{{ route('admin.users.index') }}" wire:navigate>
+                                <x-lucide-arrow-left class="w-4 h-4" /> Назад к списку
                             </x-ui.dropdown-menu-item>
                         @else
-                            <x-ui.dropdown-menu-item wire:click="openBanModal('shadow')">
-                                <x-lucide-eye-off class="w-4 h-4 text-purple-500" /> Теневой бан...
-                            </x-ui.dropdown-menu-item>
-                            <x-ui.dropdown-menu-item wire:click="openBanModal('temp')">
-                                <x-lucide-clock class="w-4 h-4 text-yellow-500" /> Бан на 3 дня...
-                            </x-ui.dropdown-menu-item>
-                            <x-ui.dropdown-menu-item wire:click="openBanModal('permanent')">
-                                <x-lucide-lock class="w-4 h-4 text-red-500" /> Вечный бан...
+                            <x-ui.dropdown-menu-label>Действия</x-ui.dropdown-menu-label>
+                            <x-ui.dropdown-menu-separator />
+
+                            @if($this->user->status === 'banned' || $this->user->status === 'shadowbanned')
+                                <x-ui.dropdown-menu-item wire:click="toggleBan" wire:confirm="Снять бан с пользователя?">
+                                    <x-lucide-unlock class="w-4 h-4 text-green-500" /> Разбанить
+                                </x-ui.dropdown-menu-item>
+                            @else
+                                <x-ui.dropdown-menu-item wire:click="openBanModal('shadow')">
+                                    <x-lucide-eye-off class="w-4 h-4 text-purple-500" /> Теневой бан...
+                                </x-ui.dropdown-menu-item>
+                                <x-ui.dropdown-menu-item wire:click="openBanModal('temp')">
+                                    <x-lucide-clock class="w-4 h-4 text-yellow-500" /> Бан на 3 дня...
+                                </x-ui.dropdown-menu-item>
+                                <x-ui.dropdown-menu-item wire:click="openBanModal('permanent')">
+                                    <x-lucide-lock class="w-4 h-4 text-red-500" /> Вечный бан...
+                                </x-ui.dropdown-menu-item>
+                            @endif
+
+                            <x-ui.dropdown-menu-separator />
+                            <x-ui.dropdown-menu-item wire:click="openDeleteModal" variant="destructive">
+                                <x-lucide-trash-2 class="w-4 h-4" /> Удалить...
                             </x-ui.dropdown-menu-item>
                         @endif
-
-                        <x-ui.dropdown-menu-separator />
-                        <x-ui.dropdown-menu-item wire:click="openDeleteModal" variant="destructive">
-                            <x-lucide-trash-2 class="w-4 h-4" /> Удалить...
-                        </x-ui.dropdown-menu-item>
-                    @endif
-                </x-ui.dropdown-menu-content>
-            </x-ui.dropdown-menu>
+                    </x-ui.dropdown-menu-content>
+                </x-ui.dropdown-menu>
             @endif
         </div>
     </div>
@@ -319,18 +336,38 @@ new #[Layout('layouts.admin')] class extends Component
                         <x-lucide-history class="w-4 h-4 inline mr-1" /> Логи админов
                     </button>
                 @endif
+
+                @if($this->canSeeTab('cards'))
+                    <button wire:click="setTab('cards')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {{ $activeTab === 'cards' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
+                        <x-lucide-credit-card class="w-4 h-4 inline mr-1" /> Карты
+                    </button>
+                @endif
+
+                @if($this->canSeeTab('promocodes'))
+                    <button wire:click="setTab('promocodes')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {{ $activeTab === 'promocodes' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
+                        <x-lucide-ticket class="w-4 h-4 inline mr-1" /> Промокоды
+                    </button>
+                @endif
+
+                @if($this->canSeeTab('events'))
+                    <button wire:click="setTab('events')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {{ $activeTab === 'events' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
+                        <x-lucide-rss class="w-4 h-4 inline mr-1" /> Лента событий
+                    </button>
+                @endif
+
+                @if($this->canSeeTab('auth-logs'))
+                    <button wire:click="setTab('auth-logs')" class="px-4 py-3 text-sm font-medium border-b-2 transition-colors {{ $activeTab === 'auth-logs' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground' }}">
+                        <x-lucide-shield-alert class="w-4 h-4 inline mr-1" /> История входов
+                    </button>
+                @endif
             </nav>
         </div>
 
-          {{-- КОНТЕНТ ТАБОВ --}}
+        {{-- КОНТЕНТ ТАБОВ --}}
         <div class="relative bg-card border border-border rounded-lg p-6 mt-4 min-h-[400px]">
             
-            {{-- Спиннер при переключении табов (ПУЛЕНЕПРОБИВАЕМЫЙ ВАРИАНТ) --}}
-            <div wire:loading.delay class="absolute inset-0 z-10 bg-card/70 backdrop-blur-sm rounded-lg">
-                <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
-                    <x-lucide-loader-circle class="w-8 h-8 animate-spin text-primary" />
-                </div>
-            </div>
+            {{-- НОВЫЙ КОМПОНЕНТ СПИННЕРА --}}
+            <x-loading-overlay fixed="true" wire:loading.delay wire:key="overlay-loading-page"/>
 
             @if($activeTab === 'profile')
                 <livewire:admin.users.tabs.profile :userId="$this->userId" :key="'profile-'.$this->userId" />
@@ -362,6 +399,14 @@ new #[Layout('layouts.admin')] class extends Component
                 <livewire:admin.users.tabs.broadcasts :userId="$this->userId" :key="'broadcasts-'.$this->userId" />
             @elseif($activeTab === 'admin-logs')
                 <livewire:admin.users.tabs.admin-logs :userId="$this->userId" :key="'admin-logs-'.$this->userId" />
+            @elseif($activeTab === 'cards')
+                <livewire:admin.users.tabs.cards :userId="$this->userId" :key="'cards-'.$this->userId" />
+            @elseif($activeTab === 'promocodes')
+                <livewire:admin.users.tabs.promocodes :userId="$this->userId" :key="'promocodes-'.$this->userId" />
+            @elseif($activeTab === 'events')
+                <livewire:admin.users.tabs.events :userId="$this->userId" :key="'events-'.$this->userId" />
+            @elseif($activeTab === 'auth-logs')
+                <livewire:admin.users.tabs.auth-logs :userId="$this->userId" :key="'auth-logs-'.$this->userId" />        
             @endif
         </div>
     </div>

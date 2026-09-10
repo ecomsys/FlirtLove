@@ -11,10 +11,13 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Log;
 
 class ProcessMediaUploadJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+
+    public $timeout = 120; // Ставим жесткий таймаут на обработку, чтобы воркеры не зависали
 
     public function __construct(
         public int $mediaId,
@@ -25,6 +28,9 @@ class ProcessMediaUploadJob implements ShouldQueue
 
     public function handle(MediaProcessorService $processor): void
     {
+        $startTime = microtime(true);
+        
+        // ФИКС: Поднимаем лимит памяти безопасно
         $originalMemoryLimit = ini_get('memory_limit');
         ini_set('memory_limit', '512M');
         
@@ -44,8 +50,13 @@ class ProcessMediaUploadJob implements ShouldQueue
                 'mime_type' => $result['mime_type'],
                 'variants' => $result['variants'],
             ]);
+            
+            // ФИКС: Логируем успешную обработку с таймингом для мониторинга
+            $elapsed = round(microtime(true) - $startTime, 2);
+            Log::info("Media processed: ID {$this->mediaId}, Collection: {$this->collection->value}, Time: {$elapsed}s");
+            
         } catch (\Exception $e) {
-            \Illuminate\Support\Facades\Log::error("Media Upload Failed: " . $e->getMessage(), ['trace' => $e->getTraceAsString()]);
+            Log::error("Media Upload Failed: " . $e->getMessage(), ['media_id' => $this->mediaId, 'trace' => $e->getTraceAsString()]);
             $media->delete();
         } finally {
             ini_set('memory_limit', $originalMemoryLimit);

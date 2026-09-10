@@ -13,33 +13,39 @@ use Illuminate\Support\Facades\DB;
 class StopWordsAction
 {
     /**
-     * Массовое создание стоп-слов.
+     * Массовое создание стоп-слов (HIGH-LOAD ОПТИМИЗАЦИЯ)
      */
     public function createBulk(string $wordsStr, StopWordCategory $category, StopWordAction $action, User $admin): int
     {
+        // Разбиваем строку по запятым, переносам строк, точкам с запятой
         $words = preg_split('/[\r\n,;]+/', $wordsStr);
-        $createdWords = [];
-        $createdCount = 0;
+        
+        $data = [];
+        $now = now();
+        
+        foreach ($words as $wordStr) {
+            $wordStr = trim($wordStr);
+            if ($wordStr === '') continue;
+            
+            // Защита от слишком длинных строк (ограничение БД 255)
+            $wordStr = substr($wordStr, 0, 255);
+            
+            $data[] = [
+                'word' => $wordStr,
+                'category' => $category->value,
+                'action' => $action->value,
+                'replacement' => '***', // Дефолт
+                'is_active' => true,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ];
+        }
 
-        DB::transaction(function () use ($words, $category, $action, &$createdWords, &$createdCount) {
-            foreach ($words as $wordStr) {
-                $wordStr = trim($wordStr);
-                if ($wordStr === '') continue;
+        if (empty($data)) return 0;
 
-                $word = StopWord::firstOrCreate(
-                    ['word' => $wordStr],
-                    [
-                        'category' => $category, 
-                        'action' => $action,     
-                    ]
-                );
-
-                if ($word->wasRecentlyCreated) {
-                    $createdWords[$word->id] = $wordStr;
-                    $createdCount++;
-                }
-            }
-        });
+        // ОДИН bulk-запрос. insertOrIgnore пропустит дубликаты (благодаря unique индексу на word)
+        // Возвращает количество реально вставленных строк!
+        $createdCount = StopWord::insertOrIgnore($data);
 
         if ($createdCount > 0) {
             $after = [
@@ -48,7 +54,7 @@ class StopWordsAction
                 'context' => [
                     'category' => $category->value,
                     'action' => $action->value,
-                    'examples' => array_slice(array_values($createdWords), 0, 5) // Сохраняем только первые 5 слов как пример
+                    'examples' => array_slice(array_column($data, 'word'), 0, 5)
                 ]
             ];
 
@@ -59,9 +65,6 @@ class StopWordsAction
         return $createdCount;
     }
 
-    /**
-     * Переключение активности стоп-слова.
-     */
     public function toggleActive(int $id, User $admin): void
     {
         $word = StopWord::find($id);
@@ -70,7 +73,6 @@ class StopWordsAction
         $before = ['is_active' => $word->getOriginal('is_active')];
         
         $word->update(['is_active' => !$word->is_active]);
-        $word->refresh();
         
         $after = [
             'is_active' => $word->is_active, 
@@ -84,9 +86,6 @@ class StopWordsAction
         $this->clearCache();
     }
 
-    /**
-     * Удаление одного стоп-слова.
-     */
     public function deleteWord(int $id, User $admin): void
     {
         $word = StopWord::find($id);
@@ -102,16 +101,12 @@ class StopWordsAction
             ]
         ];
         
-        // Пишем лог ДО удаления
         AdminLog::record('stop_words.delete', $word, $admin, $before, $after);
         
         $word->delete();
         $this->clearCache();
     }
 
-    /**
-     * Массовые действия со стоп-словами (activate, deactivate, delete).
-     */
     public function applyBulk(array $ids, string $action, User $admin): void
     {
         if (empty($ids)) return;
@@ -141,11 +136,9 @@ class StopWordsAction
         $this->clearCache();
     }
 
-    /**
-     * Сброс кэша (вызывается при любом изменении в БД).
-     */
     private function clearCache(): void
     {
         Cache::forget('stop_words_active');
+        Cache::forget('admin_stopword_counts');
     }
 }

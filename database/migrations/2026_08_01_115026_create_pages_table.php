@@ -10,17 +10,12 @@ return new class extends Migration
     {
         Schema::create('pages', function (Blueprint $table) {
             $table->id();
-            
-            // URL адрес страницы (например: privacy-policy, terms-of-service)
             $table->string('slug')->unique();
+            $table->string('title'); 
+            $table->longText('body')->nullable(); 
+            $table->text('meta_description')->nullable(); 
             
-            // SEO и контент
-            $table->string('title'); // Заголовок (H1 и Title)
-            $table->longText('body')->nullable(); // HTML контент из WYSIWYG редактора (Trix, TinyMCE)
-            $table->text('meta_description')->nullable(); // Для SEO
-            
-            // Управление
-            $table->boolean('is_active')->default(true); // Черновик или опубликовано
+            $table->boolean('is_active')->default(true)->index(); // НОВЫЙ: индекс для фильтрации
             
             $table->timestamps();
         });

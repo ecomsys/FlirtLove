@@ -10,36 +10,26 @@ return new class extends Migration
     {
         Schema::create('settings', function (Blueprint $table) {
             $table->id();
-            
-            // Уникальный ключ (например, 'general.site_name', 'limits.free_likes')
             $table->string('key')->unique();
-            
-            // Значение настройки. text, чтобы влезали длинные тексты (правила, договоры)
             $table->text('value')->nullable();
+            $table->string('group', 50)->default('general');
             
-            // Группа для вкладок в админке (general, limits, finance, seo)
-            $table->string('group')->default('general');
-            
-            // === ДЛЯ ГЕНЕРАЦИИ ФОРМЫ В АДМИНКЕ ===
-            // Человекочитаемое название (например, "Название сайта")
             $table->string('label')->nullable();
-            // Подсказка для админа (например, "Сколько лайков доступно бесплатно")
             $table->string('description')->nullable();
-            // Тип поля в UI: text, textarea, boolean, integer, select, json
-            $table->string('type')->default('text'); 
-            // Для типа 'select' храним варианты: {"0": "Нет", "1": "Да"}
-            $table->json('options')->nullable(); 
             
-            // Флаг, можно ли отдавать это значение на фронтенд (для API)
+            //  enum (защита от опечаток в коде, битые формы)
+            $table->enum('type', ['text', 'textarea', 'boolean', 'integer', 'select', 'json'])->default('text'); 
+            
+            // ИЗМЕНЕНО: json -> jsonb (для быстрого парсинга в PostgreSQL)
+            $table->jsonb('options')->nullable(); 
+            
             $table->boolean('is_public')->default(false);
             
             $table->timestamps();
 
             // === ИНДЕКСЫ ===
-            // Для вывода настроек по группам в админке
-            $table->index('group');
-            // Для быстрой выборки публичных настроек для API
-            $table->index('is_public');
+            // ИЗМЕНЕНО: Объединили в один составной (для API: WHERE is_public = true AND group = 'limits')
+            $table->index(['is_public', 'group']);
         });
     }
 
@@ -48,7 +38,6 @@ return new class extends Migration
         Schema::dropIfExists('settings');
     }
 };
-
 
 // Как это будет работать в Livewire (представь картину):
 

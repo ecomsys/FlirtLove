@@ -51,7 +51,7 @@ class ChatSeeder extends Seeder
             $user1Id = $match->user1_id;
             $user2Id = $match->user2_id;
 
-            // 1. Создаем или получаем чат (Передаем ID, а не объекты!)
+            // 1. Создаем или получаем чат
             $chat = Chat::getOrCreateBetween($user1Id, $user2Id);
             $createdChats++;
 
@@ -101,12 +101,12 @@ class ChatSeeder extends Seeder
 
     /**
      * Генерация реалистичной переписки с разными сценариями
-     * (Передаем ID юзеров для оптимизации памяти)
      */
     private function generateConversation(Chat $chat, int $user1Id, int $user2Id): int
     {
         $time = now()->subDays(rand(1, 10));
         $messagesCount = 0;
+        $lastMessageTime = $time->copy();
 
         $phrases = [
             'Привет! Как дела?', 'Привет! Отлично, а у тебя?', 'Чем занимаешься?',
@@ -128,8 +128,10 @@ class ChatSeeder extends Seeder
         $senderId = $isUser1Turn ? $user1Id : $user2Id;
         $recipientId = $isUser1Turn ? $user2Id : $user1Id;
 
-        // Проверяем, есть ли у кого-то премиум (через быстрый запрос)
-        $hasPremium = User::whereIn('id', [$user1Id, $user2Id])->where('is_premium', true)->exists();
+        // ФИКС: Проверяем активный премиум по дате, а не по удаленному полю is_premium
+        $hasPremium = User::whereIn('id', [$user1Id, $user2Id])
+            ->where('premium_expires_at', '>', now())
+            ->exists();
 
         // ============================================
         // СЦЕНАРИЙ 1: Премиум-чат (много сообщений)
@@ -147,13 +149,16 @@ class ChatSeeder extends Seeder
                     'sender_id' => $currentSenderId,
                     'type' => 'text',
                     'body' => $phrase,
-                    'status' => 'approved', // Явно указываем статус
+                    'status' => 'approved',
                     'created_at' => $currentTime,
                 ]);
 
+                $lastMessageTime = $currentTime;
                 $currentTime->addMinutes(rand(1, 10));
             }
 
+            // Обновляем время последнего сообщения в чате
+            $chat->update(['last_message_at' => $lastMessageTime]);
             return $messagesCount;
         }
 
@@ -175,10 +180,11 @@ class ChatSeeder extends Seeder
                 'sender_id' => $senderId,
                 'type' => 'text',
                 'body' => $phrase,
-                'status' => 'approved', // Явно указываем статус
+                'status' => 'approved',
                 'created_at' => $currentTime,
             ]);
             $messagesCount++;
+            $lastMessageTime = $currentTime;
             $currentTime->addMinutes(2);
 
             if (rand(0, 1) && $i < $scenario - 1) {
@@ -187,10 +193,11 @@ class ChatSeeder extends Seeder
                     'sender_id' => $recipientId,
                     'type' => 'text',
                     'body' => $replies[array_rand($replies)],
-                    'status' => 'approved', // Явно указываем статус
+                    'status' => 'approved',
                     'created_at' => $currentTime,
                 ]);
                 $messagesCount++;
+                $lastMessageTime = $currentTime;
                 $currentTime->addMinutes(2);
             }
         }
@@ -202,11 +209,15 @@ class ChatSeeder extends Seeder
                 'sender_id' => null, // Системные сообщения без отправителя
                 'type' => 'system',
                 'body' => '⚠️ Вы исчерпали лимит бесплатных сообщений. Для продолжения переписки необходима подписка Premium.',
-                'status' => 'approved', // Явно указываем статус
+                'status' => 'approved',
                 'created_at' => $currentTime,
             ]);
             $messagesCount++;
+            $lastMessageTime = $currentTime;
         }
+
+        // Обновляем время последнего сообщения в чате
+        $chat->update(['last_message_at' => $lastMessageTime]);
 
         return $messagesCount;
     }

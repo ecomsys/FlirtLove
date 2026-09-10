@@ -2,7 +2,6 @@
 
 namespace App\Notifications;
 
-use App\Models\UserSubscription;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Notifications\Notification;
@@ -14,19 +13,27 @@ class SubscriptionExpiringSoonNotification extends Notification implements Shoul
 {
     use Queueable;
 
+    // ФИКС: Передаем только скаляры, чтобы не сериализовать модель в Redis
     public function __construct(
-        protected UserSubscription $subscription
+        protected int $subscriptionId,
+        protected string $planName,
+        protected ?string $price, // Например: "999.00 RUB"
+        protected string $endsAt, // Например: "25.10.2023 12:00"
+        protected bool $isAutoRenew
     ) {}
 
     public function via($notifiable): array
     {
         $channels = ['database'];
 
+        // ФИКС: Безопасная проверка настроек (защита от TypeError)
+        $emailSettings = $notifiable->email_settings ?? [];
+
         if ($notifiable->push_enabled) {
             $channels[] = 'broadcast';
         }
 
-        if ($notifiable->email_enabled && ($notifiable->email_settings['on_event'] ?? true)) {
+        if ($notifiable->email_enabled && ($emailSettings['on_event'] ?? true)) {
             $channels[] = 'mail';
         }
 
@@ -35,16 +42,13 @@ class SubscriptionExpiringSoonNotification extends Notification implements Shoul
 
     public function toMail($notifiable): MailMessage
     {
-        $planName = $this->subscription->plan?->name ?? 'Подписка';
-        $price = $this->subscription->plan?->price ? number_format($this->subscription->plan->price, 2) . ' ' . $this->subscription->plan->currency : '';
-
         $mail = (new MailMessage)
             ->subject('Ваша подписка скоро истекает ⏳')
             ->greeting("Здравствуйте, {$notifiable->name}!")
-            ->line("Срок действия вашей подписки «{$planName}» истекает {$this->subscription->ends_at->format('d.m.Y H:i')}.");
+            ->line("Срок действия вашей подписки «{$this->planName}» истекает {$this->endsAt}.");
 
-        if ($this->subscription->is_auto_renew) {
-            $mail->line("Автопродление включено. В ближайшее время с вашего счета будет списано {$price} для продления подписки.")
+        if ($this->isAutoRenew) {
+            $mail->line("Автопродление включено. В ближайшее время с вашего счета будет списано {$this->price} для продления подписки.")
                  ->action('Управление подпиской', url('/settings/subscriptions'));
         } else {
             $mail->line("Автопродление отключено. Чтобы не потерять привилегии (безлимит лайков, приоритет в выдаче и др.), продлите подписку.")
@@ -56,14 +60,11 @@ class SubscriptionExpiringSoonNotification extends Notification implements Shoul
 
     public function toDatabase($notifiable): array
     {
-        $planName = $this->subscription->plan?->name ?? 'Подписка';
-        $endDate = $this->subscription->ends_at->format('d.m.y');
-
-        if ($this->subscription->is_auto_renew) {
-            $message = "Подписка «{$planName}» истекает {$endDate}. Списание произойдет автоматически.";
+        if ($this->isAutoRenew) {
+            $message = "Подписка «{$this->planName}» истекает {$this->endsAt}. Списание произойдет автоматически.";
             $actionUrl = url('/settings/subscriptions');
         } else {
-            $message = "Подписка «{$planName}» истекает {$endDate}. Не забудьте продлить!";
+            $message = "Подписка «{$this->planName}» истекает {$this->endsAt}. Не забудьте продлить!";
             $actionUrl = url('/pricing');
         }
 
@@ -73,10 +74,10 @@ class SubscriptionExpiringSoonNotification extends Notification implements Shoul
             'message' => $message,
             'action_url' => $actionUrl,
             'data' => [
-                'subscription_id' => $this->subscription->id,
-                'plan_name' => $planName,
-                'ends_at' => $this->subscription->ends_at->toDateTimeString(),
-                'is_auto_renew' => $this->subscription->is_auto_renew,
+                'subscription_id' => $this->subscriptionId,
+                'plan_name' => $this->planName,
+                'ends_at' => $this->endsAt,
+                'is_auto_renew' => $this->isAutoRenew,
             ]
         ];
     }
@@ -92,6 +93,6 @@ class SubscriptionExpiringSoonNotification extends Notification implements Shoul
 
     public function failed(\Throwable $exception): void
     {
-        Log::error("Не удалось отправить SubscriptionExpiringSoonNotification (Sub ID: {$this->subscription->id}): " . $exception->getMessage());
+        Log::error("Не удалось отправить SubscriptionExpiringSoonNotification (Sub ID: {$this->subscriptionId}): " . $exception->getMessage());
     }
 }

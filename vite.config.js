@@ -27,5 +27,20 @@ export default defineConfig({
             'prosemirror-commands': path.resolve(__dirname, 'node_modules/prosemirror-commands'),
             'prosemirror-keymap': path.resolve(__dirname, 'node_modules/prosemirror-keymap'),
         }
+    },
+
+    // запустить тунель выполни в терминале и отдай ссылку заказчику для просмотра
+    // ssh -p 443 -R0:localhost:5173 a.pinggy.io
+
+     server: {
+        allowedHosts: true,
+        
+        proxy: {
+            '^/(?!@vite|resources|node_modules).*$': {
+                target: 'http://127.0.0.1:8000',
+                // changeOrigin: true,
+                // ws: true,
+            },
+        },
     }
 });

@@ -8,35 +8,30 @@ use App\Models\Report;
 use App\Models\User;
 use App\Models\AdminLog;
 use App\Notifications\ReportModerated;
+use App\Enums\ReportResolution;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Layout;
 use Livewire\WithPagination;
 use Livewire\Volt\Component;
-use App\Enums\ReportResolution;
 use Livewire\Attributes\Url;
 
 new #[Layout('layouts.admin')] class extends Component 
 {
     use WithPagination;
 
-    /** @var string Поиск (ID, имя, причина) */
     #[Url(as: 'q', except: '')]
     public string $search = '';
 
-    /** @var string Фильтр статуса жалобы */
     #[Url(as: 'status', except: 'pending')]
     public string $statusFilter = 'pending';
 
-    /** @var string Фильтр типа жалобы (user, photo) */
     #[Url(as: 'type', except: 'all')]
     public string $typeFilter = 'all';
 
-    /** @var int Количество записей на странице */
     public int $perPage = 10;
 
-    /** @var string URL для кнопки "Назад" */
     public string $backUrl = '';
 
     private ToggleUserBanAction $toggleUserBanAction;
@@ -55,65 +50,68 @@ new #[Layout('layouts.admin')] class extends Component
 
     public function mount(): void
     {
-        // ФИКС: Запоминаем URL "Назад" только при первой загрузке
+        abort_unless(in_array(auth()->user()?->role, [User::ROLE_ADMIN, User::ROLE_MODERATOR]), 403);
+
         $previousUrl = url()->previous();
         $this->backUrl = ($previousUrl && $previousUrl !== url()->current()) 
             ? $previousUrl 
             : route('admin.dashboard');
 
-        // Умный поиск: если ищут по ID жалобы, автоматически переключаем фильтр на её реальный статус
-        if (!empty($this->search) && is_numeric($this->search)) {
-            $report = Report::find((int) $this->search);
+        if (!empty($this->search) && is_numeric(trim($this->search))) {
+            $report = Report::find((int) trim($this->search));
             $this->statusFilter = $report ? $report->status : 'all';
         } elseif (!empty($this->search)) {
             $this->statusFilter = 'all';
         }
     }
 
-        /**
-     * Хук Livewire: сброс пагинации и умная подсветка при поиске.
-     */
     public function updatedSearch(): void 
     { 
         $this->resetPage(); 
+        $this->clearComputedCache();
 
-        if (is_numeric($this->search) && !empty($this->search)) {
-            $report = Report::find((int) $this->search);
+        $search = trim($this->search);
+        if (is_numeric($search) && !empty($search)) {
+            $report = Report::find((int) $search);
             $this->statusFilter = $report ? $report->status : 'all';
-        } elseif (!empty($this->search)) {
+        } elseif (!empty($search)) {
             $this->statusFilter = 'all';
         }
     }
 
-    /**
-     * Установка фильтра статуса. ФИКС: Очищаем поиск.
-     */
     public function setStatusFilter(string $status): void
     {
         $this->statusFilter = $status;
         $this->search = '';
         $this->resetPage();
+        $this->clearComputedCache();
     }
 
-    /**
-     * Хук Livewire: сброс кэша при смене типа. ФИКС: Очищаем поиск.
-     */
     public function updatedTypeFilter(string $value): void 
     { 
         $this->search = '';
         $this->resetPage(); 
+        $this->clearComputedCache();
     }
 
-    /**
-     * Полный сброс фильтров.
-     */
     public function resetFilters(): void
     {
         $this->reset(['search', 'statusFilter', 'typeFilter']);
         $this->statusFilter = 'pending'; 
         $this->typeFilter = 'all';       
         $this->resetPage();
+        $this->clearComputedCache();
     }
+
+    private function clearComputedCache(): void
+    {
+        unset($this->reports);
+        unset($this->counts);
+    }
+
+    // ============================================
+    // ДЕЙСТВИЯ (ДЕЛЕГИРУЕМ В ACTION)
+    // ============================================
 
     public function resolve(int $reportId, string $resolution = 'warn'): void
     {
@@ -121,18 +119,12 @@ new #[Layout('layouts.admin')] class extends Component
         if (!$report || $report->status !== 'pending') return;
 
         $resolutionEnum = ReportResolution::tryFrom($resolution) ?? ReportResolution::Warn;
+        
+        // Делегируем ВСЮ логику в Action (он сам решит, кого уведомить и как сформировать текст)
         $this->moderateReportAction->resolve($report, auth()->user(), $resolutionEnum, 'Решено модератором');
 
-        if ($resolutionEnum === ReportResolution::Warn && $report->reported) {
-            $reasonText = 'Нарушение правил сервиса';
-            $reportReasonEnum = \App\Enums\ReportReason::tryFrom($report->reason ?? '');
-            if ($reportReasonEnum) {
-                $reasonText = $reportReasonEnum->label();
-            }
-            $report->reported->notify(new \App\Notifications\UserWarned($reasonText));
-        }
-
         $this->dispatch('show-toast', type: 'success', message: 'Жалоба решена. Нарушитель оповещен.');
+        $this->clearComputedCache();
     }
 
     public function toggleBan(int $userId, string $type = 'permanent', ?int $reportId = null): void
@@ -152,7 +144,7 @@ new #[Layout('layouts.admin')] class extends Component
             }
         }
 
-        $result = $this->toggleUserBanAction->execute($user, $reasonText, $type);
+        $result = $this->toggleUserBanAction->execute($user, auth()->user(), $reasonText, $type);
 
         if (!$result['success']) {
             $this->dispatch('show-toast', type: 'error', message: $result['message'] ?? 'Не удалось выполнить действие.');
@@ -160,21 +152,21 @@ new #[Layout('layouts.admin')] class extends Component
         }
 
         if ($result['is_banned']) {
-            $reports = Report::where('reported_id', $user->id)
-                ->where('status', 'pending')
-                ->with('reporter')
-                ->get();
-
             $resolution = match($type) {
                 'shadow' => ReportResolution::Shadowban,
                 'temp' => ReportResolution::TempBan,
                 default => ReportResolution::Ban
             };
 
-            $this->moderateReportAction->bulkResolveReports($reports, auth()->user(), $resolution);
+            Report::where('reported_id', $user->id)
+                ->where('status', 'pending')
+                ->chunkById(200, function ($reports) use ($resolution) {
+                    $this->moderateReportAction->bulkResolveReports($reports, auth()->user(), $resolution);
+                });
         }
         
         $this->dispatch('show-toast', type: 'success', message: $result['message']);
+        $this->clearComputedCache();
     }
 
     public function rejectPhoto(int $photoId): void
@@ -182,21 +174,19 @@ new #[Layout('layouts.admin')] class extends Component
         $photo = Photo::withTrashed()->find($photoId);
         if (!$photo) return;
 
-        DB::transaction(function () use ($photo) {
-            $reports = Report::where('reportable_type', Photo::class)
+        DB::Transaction(function () use ($photo) {
+            Report::where('reportable_type', Photo::class)
                 ->where('reportable_id', $photo->id)
                 ->where('status', 'pending')
-                ->with('reporter')
-                ->get();
-
-            if ($reports->isNotEmpty()) {
-                $this->moderateReportAction->bulkResolveReports($reports, auth()->user(), ReportResolution::PhotoDeleted);
-            }
+                ->chunkById(200, function ($reports) {
+                    $this->moderateReportAction->bulkResolveReports($reports, auth()->user(), ReportResolution::PhotoDeleted);
+                });
 
             $this->moderatePhotoAction->reject($photo, auth()->user(), 'report_violation');
         });
         
         $this->dispatch('show-toast', type: 'success', message: 'Фото отклонено. Жалобщики оповещены.');
+        $this->clearComputedCache();
     }
 
     public function reject(int $reportId): void
@@ -206,6 +196,7 @@ new #[Layout('layouts.admin')] class extends Component
 
         $this->moderateReportAction->reject($report, auth()->user(), 'Нет нарушения');
         $this->dispatch('show-toast', type: 'info', message: 'Жалоба отклонена');
+        $this->clearComputedCache();
     }   
     
     public function reopenReport(int $reportId): void
@@ -214,12 +205,20 @@ new #[Layout('layouts.admin')] class extends Component
         if (!$report || $report->status === 'pending') return;
 
         $before = $report->only(['status', 'resolution', 'admin_id', 'resolved_at']);
-        $report->reopen();
-        $after = $report->fresh()->only(['status', 'resolution', 'admin_id', 'resolved_at']);
-        AdminLog::record('report.reopen', $report, auth()->user(), $before, $after);
+        
+        DB::transaction(function () use ($report, $before) {
+            $report->reopen();
+            $after = $report->only(['status', 'resolution', 'admin_id', 'resolved_at']);
+            AdminLog::record('report.reopen', $report, auth()->user(), $before, $after);
+        });
         
         $this->dispatch('show-toast', type: 'info', message: 'Жалоба возвращена в очередь.');
+        $this->clearComputedCache();
     }
+
+    // ============================================
+    // ВЫВОД ДАННЫХ
+    // ============================================
 
     #[Computed]
     public function reports()
@@ -229,8 +228,8 @@ new #[Layout('layouts.admin')] class extends Component
 
         $reports = Report::query()
             ->with([
-                'reporter' => fn($q) => $q->withTrashed()->select('id', 'name', 'email', 'role', 'status', 'is_premium', 'premium_expires_at', 'last_seen', 'deleted_at')->with(['photos' => $avatarQuery]),
-                'reported' => fn($q) => $q->withTrashed()->select('id', 'name', 'email', 'role', 'status', 'is_premium', 'premium_expires_at', 'last_seen', 'deleted_at')->with(['photos' => $avatarQuery]),                
+                'reporter' => fn($q) => $q->withTrashed()->select('id', 'name', 'email', 'role', 'status', 'premium_expires_at', 'vip_expires_at', 'last_seen', 'deleted_at')->with(['photos' => $avatarQuery]),
+                'reported' => fn($q) => $q->withTrashed()->select('id', 'name', 'email', 'role', 'status', 'premium_expires_at', 'vip_expires_at', 'last_seen', 'deleted_at')->with(['photos' => $avatarQuery]),                
             ])
             ->where(function ($q) {
                 $q->whereNull('reporter_id')
@@ -241,19 +240,18 @@ new #[Layout('layouts.admin')] class extends Component
                   ->orWhereHas('reported', fn($q2) => $q2->withTrashed()->excludeStaff());
             })
             ->when($this->search, function ($query) use ($searchOperator) {
-                $search = $this->search;
+                $search = trim($this->search);
                 $query->where(function ($q) use ($search, $searchOperator) {
-                    $q->whereHas('reporter', function ($q2) use ($search, $searchOperator) {
-                        $q2->withTrashed()->where('name', $searchOperator, "%{$search}%")
-                           ->orWhere('email', $searchOperator, "%{$search}%");
-                    })
-                    ->orWhereHas('reported', function ($q2) use ($search, $searchOperator) {
-                        $q2->withTrashed()->where('name', $searchOperator, "%{$search}%")
-                           ->orWhere('email', $searchOperator, "%{$search}%");
-                    })
-                    ->orWhere('reason', $searchOperator, "%{$search}%")
-                    ->orWhere('description', $searchOperator, "%{$search}%")
-                    ->orWhereRaw("CAST(id AS TEXT) {$searchOperator} ?", ["%{$search}%"]);
+                    if (is_numeric($search)) {
+                        $q->where('id', (int) $search)
+                          ->orWhereHas('reporter', fn($q2) => $q2->withTrashed()->where('name', $searchOperator, "%{$search}%"))
+                          ->orWhereHas('reported', fn($q2) => $q2->withTrashed()->where('name', $searchOperator, "%{$search}%"));
+                    } else {
+                        $q->whereHas('reporter', fn($q2) => $q2->withTrashed()->where('name', $searchOperator, "%{$search}%")->orWhere('email', $searchOperator, "%{$search}%"))
+                          ->orWhereHas('reported', fn($q2) => $q2->withTrashed()->where('name', $searchOperator, "%{$search}%")->orWhere('email', $searchOperator, "%{$search}%"))
+                          ->orWhere('reason', $searchOperator, "%{$search}%")
+                          ->orWhere('description', $searchOperator, "%{$search}%");
+                    }
                 });
             })
             ->when($this->statusFilter !== 'all', fn($q) => $q->where('status', $this->statusFilter))
@@ -265,7 +263,6 @@ new #[Layout('layouts.admin')] class extends Component
             ->latest('id') 
             ->paginate($this->perPage);
 
-        // Ручная жадная загрузка полиморфной связи с поддержкой withTrashed
         $photoIds = $reports->where('reportable_type', Photo::class)->pluck('reportable_id')->filter();
         
         if ($photoIds->isNotEmpty()) {
@@ -288,6 +285,7 @@ new #[Layout('layouts.admin')] class extends Component
     #[Computed]
     public function counts(): array
     {
+        // УБРАЛИ КЭШ. Счетчики всегда будут 100% актуальны и реактивны.
         $baseQuery = Report::query()
             ->where(function ($q) {
                 $q->whereNull('reporter_id')
@@ -310,10 +308,10 @@ new #[Layout('layouts.admin')] class extends Component
         ")->first();
 
         return [
-            'pending' => (int) ($stats->pending ?? 0),
-            'resolved' => (int) ($stats->resolved ?? 0),
-            'rejected' => (int) ($stats->rejected ?? 0),
-            'total' => (int) ($stats->total ?? 0),
+            'pending' => (int) ($stats?->pending ?? 0),
+            'resolved' => (int) ($stats?->resolved ?? 0),
+            'rejected' => (int) ($stats?->rejected ?? 0),
+            'total' => (int) ($stats?->total ?? 0),
         ];
     }
 }; 
@@ -329,7 +327,7 @@ new #[Layout('layouts.admin')] class extends Component
         <h1 class="text-2xl font-semibold flex items-center gap-2">
             Жалобы и поддержка
             @if($this->counts['pending'] > 0)
-                <x-ui.badge variant="destructive" size="sm" wire:key="badge-pending">
+                <x-ui.badge variant="destructive" size="sm">
                     {{ $this->counts['pending'] }} новых
                 </x-ui.badge>
             @endif
@@ -339,41 +337,41 @@ new #[Layout('layouts.admin')] class extends Component
     <!-- Фильтры -->
     <div class="flex flex-wrap items-center gap-3">
         <div class="flex flex-wrap gap-1.5">
-              
-            <x-ui.button wire:click="setStatusFilter('all')" variant="{{ $statusFilter === 'all' ? 'default' : 'secondary' }}" size="sm" wire:key="filter-all">
+            <!-- ФИКС: Очищаем search через Alpine ДО отправки запроса на сервер -->
+            <x-ui.button wire:click="setStatusFilter('all')" x-on:click="$wire.search = ''" variant="{{ $statusFilter === 'all' ? 'default' : 'secondary' }}" size="sm">
                 Все <x-ui.badge size="xs">{{ $this->counts['total'] }}</x-ui.badge>
             </x-ui.button>
             
-            <x-ui.button wire:click="setStatusFilter('pending')" variant="{{ $statusFilter === 'pending' ? 'default' : 'secondary' }}" size="sm" wire:key="filter-pending">
+            <x-ui.button wire:click="setStatusFilter('pending')" x-on:click="$wire.search = ''" variant="{{ $statusFilter === 'pending' ? 'default' : 'secondary' }}" size="sm">
                 Ожидают <x-ui.badge size="xs" variant="destructive">{{ $this->counts['pending'] }}</x-ui.badge>
             </x-ui.button>
           
-            <x-ui.button wire:click="setStatusFilter('resolved')" variant="{{ $statusFilter === 'resolved' ? 'default' : 'secondary' }}" size="sm" wire:key="filter-resolved">
+            <x-ui.button wire:click="setStatusFilter('resolved')" x-on:click="$wire.search = ''" variant="{{ $statusFilter === 'resolved' ? 'default' : 'secondary' }}" size="sm">
                 Решены <x-ui.badge size="xs" variant="success">{{ $this->counts['resolved'] }}</x-ui.badge>
             </x-ui.button>
             
-            <x-ui.button wire:click="setStatusFilter('rejected')" variant="{{ $statusFilter === 'rejected' ? 'default' : 'secondary' }}" size="sm" wire:key="filter-rejected">
+            <x-ui.button wire:click="setStatusFilter('rejected')" x-on:click="$wire.search = ''" variant="{{ $statusFilter === 'rejected' ? 'default' : 'secondary' }}" size="sm">
                 Отклонены <x-ui.badge size="xs" variant="warning">{{ $this->counts['rejected'] }}</x-ui.badge>
             </x-ui.button>
         </div>
 
         <div class="flex items-center gap-2 ml-auto">
-            <x-ui.select wire:model.live="typeFilter" wire:key="select-type">
+            <x-ui.select wire:model.live="typeFilter" x-on:change="$wire.search = ''">
                 <x-ui.select-trigger class="w-40">
                     <x-ui.select-value placeholder="Тип жалобы" />
                 </x-ui.select-trigger>
                 <x-ui.select-content>
-                    <x-ui.select-item value="all" wire:key="type-all">Все типы</x-ui.select-item>
-                    <x-ui.select-item value="user" wire:key="type-user">На пользователя</x-ui.select-item>
-                    <x-ui.select-item value="photo" wire:key="type-photo">На фото</x-ui.select-item>
+                    <x-ui.select-item value="all">Все типы</x-ui.select-item>
+                    <x-ui.select-item value="user">На пользователя</x-ui.select-item>
+                    <x-ui.select-item value="photo">На фото</x-ui.select-item>
                 </x-ui.select-content>
             </x-ui.select>
 
-            <div class="relative w-64" wire:key="search-wrapper">
-                <x-ui.input wire:model.live.debounce.300ms="search" type="search" placeholder="Поиск по имени или причине..." class="pl-9 pr-8" wire:key="search-input" />
+            <div class="relative w-64">
+                <x-ui.input wire:model.live.debounce.300ms="search" type="search" placeholder="Поиск по имени или причине..." class="pl-9 pr-8" />
                 <x-lucide-search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                 @if(!empty($search))
-                    <button wire:click="$set('search', '')" class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground" wire:key="clear-search">
+                    <button wire:click="$set('search', '')" class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
                         <x-lucide-x class="w-4 h-4" />
                     </button>
                 @endif
@@ -382,7 +380,7 @@ new #[Layout('layouts.admin')] class extends Component
     </div>
 
     <!-- Таблица жалоб -->
-    <x-ui.table wire:key="reports-table">
+    <x-ui.table>
         <x-ui.table-header>
             <x-ui.table-row>
                 <x-ui.table-head class="w-12">ID</x-ui.table-head>
@@ -399,12 +397,11 @@ new #[Layout('layouts.admin')] class extends Component
         <x-ui.table-body>
             @forelse ($this->reports as $report)                
                 @php 
-                    // ФИКС: Проверяем, является ли эта жалоба искомой (по ID)
                     $isHighlighted = is_numeric($this->search) && $report->id == (int)$this->search; 
                 @endphp
 
                 <x-ui.table-row 
-                    wire:key="report-{{ $report->id }}-{{ $report->status }}-{{ $report->reported?->status }}"
+                    wire:key="report-{{ $report->reported?->id }}-{{ $report->reported?->status }}-{{ $report->id }}-{{ $report->status }}"
                     class="{{ $isHighlighted ? 'bg-blue-500/10 ring-2 ring-blue-500/50' : '' }}"
                     x-data="{ isHi: {{ $isHighlighted ? 'true' : 'false' }} }"
                     x-init="isHi && setTimeout(() => { $el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 200)"
@@ -531,7 +528,7 @@ new #[Layout('layouts.admin')] class extends Component
                    <!-- Действия -->
                     <x-ui.table-cell class="text-right">
                         @if($report->status === 'pending')
-                            <x-ui.dropdown-menu wire:key="dropdown-pending-{{ $report->id }}">
+                            <x-ui.dropdown-menu wire:key="dropdown-pending-{{ $report->reported?->id }}-{{ $report->reported?->status }}-{{ $report->id }}-{{ $report->status }}">
                                 <x-ui.dropdown-menu-trigger>
                                     <x-ui.button variant="ghost" size="icon-sm">
                                         <x-lucide-more-horizontal class="w-4 h-4" />
@@ -543,25 +540,25 @@ new #[Layout('layouts.admin')] class extends Component
                                     
                                     @if($report->reported && $report->reported->role === 'user')
                                         @if($report->reported->status === 'banned' || $report->reported->status === 'shadowbanned')
-                                            <x-ui.dropdown-menu-item wire:key="unban-{{ $report->id }}" wire:click="toggleBan({{ $report->reported->id }}, 'permanent', {{ $report->id }})" wire:confirm="Снять бан с пользователя?" wire:target="toggleBan({{ $report->reported->id }}, 'permanent', {{ $report->id }})" wire:loading.attr="disabled">
+                                            <x-ui.dropdown-menu-item wire:click="toggleBan({{ $report->reported->id }}, 'permanent', {{ $report->id }})" wire:confirm="Снять бан с пользователя?" wire:target="toggleBan({{ $report->reported->id }}, 'permanent', {{ $report->id }})" wire:loading.attr="disabled">
                                                 <x-lucide-unlock class="w-4 h-4 text-green-500" wire:loading.remove wire:target="toggleBan({{ $report->reported->id }}, 'permanent', {{ $report->id }})" />
                                                 <x-lucide-loader-2 class="w-4 h-4 animate-spin hidden text-green-500" wire:loading wire:target="toggleBan({{ $report->reported->id }}, 'permanent', {{ $report->id }})" />
                                                 Разбанить пользователя
                                             </x-ui.dropdown-menu-item>
                                         @else
-                                            <x-ui.dropdown-menu-item wire:key="ban-shadow-{{ $report->id }}" wire:click="toggleBan({{ $report->reported->id }}, 'shadow', {{ $report->id }})" wire:confirm="Применить теневой бан?" wire:target="toggleBan({{ $report->reported->id }}, 'shadow', {{ $report->id }})" wire:loading.attr="disabled">
+                                            <x-ui.dropdown-menu-item wire:click="toggleBan({{ $report->reported->id }}, 'shadow', {{ $report->id }})" wire:confirm="Применить теневой бан?" wire:target="toggleBan({{ $report->reported->id }}, 'shadow', {{ $report->id }})" wire:loading.attr="disabled">
                                                 <x-lucide-eye-off class="w-4 h-4 text-purple-500" wire:loading.remove wire:target="toggleBan({{ $report->reported->id }}, 'shadow', {{ $report->id }})" />
                                                 <x-lucide-loader-2 class="w-4 h-4 animate-spin hidden text-purple-500" wire:loading wire:target="toggleBan({{ $report->reported->id }}, 'shadow', {{ $report->id }})" />
                                                 Теневой бан
                                             </x-ui.dropdown-menu-item>
 
-                                            <x-ui.dropdown-menu-item wire:key="ban-temp-{{ $report->id }}" wire:click="toggleBan({{ $report->reported->id }}, 'temp', {{ $report->id }})" wire:confirm="Забанить на 3 дня?" wire:target="toggleBan({{ $report->reported->id }}, 'temp', {{ $report->id }})" wire:loading.attr="disabled">
+                                            <x-ui.dropdown-menu-item wire:click="toggleBan({{ $report->reported->id }}, 'temp', {{ $report->id }})" wire:confirm="Забанить на 3 дня?" wire:target="toggleBan({{ $report->reported->id }}, 'temp', {{ $report->id }})" wire:loading.attr="disabled">
                                                 <x-lucide-clock class="w-4 h-4 text-yellow-500" wire:loading.remove wire:target="toggleBan({{ $report->reported->id }}, 'temp', {{ $report->id }})" />
                                                 <x-lucide-loader-2 class="w-4 h-4 animate-spin hidden text-yellow-500" wire:loading wire:target="toggleBan({{ $report->reported->id }}, 'temp', {{ $report->id }})" />
                                                 Бан на 3 дня
                                             </x-ui.dropdown-menu-item>
 
-                                            <x-ui.dropdown-menu-item wire:key="ban-perm-{{ $report->id }}" wire:click="toggleBan({{ $report->reported->id }}, 'permanent', {{ $report->id }})" variant="destructive" wire:confirm="Забанить навсегда?" wire:target="toggleBan({{ $report->reported->id }}, 'permanent', {{ $report->id }})" wire:loading.attr="disabled">
+                                            <x-ui.dropdown-menu-item wire:click="toggleBan({{ $report->reported->id }}, 'permanent', {{ $report->id }})" variant="destructive" wire:confirm="Забанить навсегда?" wire:target="toggleBan({{ $report->reported->id }}, 'permanent', {{ $report->id }})" wire:loading.attr="disabled">
                                                 <x-lucide-lock class="w-4 h-4 text-red-500" wire:loading.remove wire:target="toggleBan({{ $report->reported->id }}, 'permanent', {{ $report->id }})" />
                                                 <x-lucide-loader-2 class="w-4 h-4 animate-spin hidden text-red-500" wire:loading wire:target="toggleBan({{ $report->reported->id }}, 'permanent', {{ $report->id }})" />
                                                 Вечный бан
@@ -570,14 +567,14 @@ new #[Layout('layouts.admin')] class extends Component
                                     @endif
                                     
                                     @if($report->reportable_type === \App\Models\Photo::class && $report->reportable)
-                                        <x-ui.dropdown-menu-item wire:key="reject-photo-{{ $report->id }}" wire:click="rejectPhoto({{ $report->reportable_id }})" variant="destructive" wire:confirm="Отклонить фото (отправить в карантин) и закрыть жалобу?" wire:target="rejectPhoto({{ $report->reportable_id }})" wire:loading.attr="disabled">
+                                        <x-ui.dropdown-menu-item wire:click="rejectPhoto({{ $report->reportable_id }})" variant="destructive" wire:confirm="Отклонить фото (отправить в карантин) и закрыть жалобу?" wire:target="rejectPhoto({{ $report->reportable_id }})" wire:loading.attr="disabled">
                                             <x-lucide-x-circle class="w-4 h-4" wire:loading.remove wire:target="rejectPhoto({{ $report->reportable_id }})" />
                                             <x-lucide-loader-2 class="w-4 h-4 animate-spin hidden" wire:loading wire:target="rejectPhoto({{ $report->reportable_id }})" />
                                             Отклонить фото
                                         </x-ui.dropdown-menu-item>
                                     @endif
 
-                                    <x-ui.dropdown-menu-item wire:key="warn-{{ $report->id }}" wire:click="resolve({{ $report->id }}, 'warn')" wire:target="resolve({{ $report->id }}, 'warn')" wire:loading.attr="disabled">
+                                    <x-ui.dropdown-menu-item wire:click="resolve({{ $report->id }}, 'warn')" wire:target="resolve({{ $report->id }}, 'warn')" wire:loading.attr="disabled">
                                         <x-lucide-alert-triangle class="w-4 h-4 text-yellow-500" wire:loading.remove wire:target="resolve({{ $report->id }}, 'warn')" />
                                         <x-lucide-loader-2 class="w-4 h-4 animate-spin hidden text-yellow-500" wire:loading wire:target="resolve({{ $report->id }}, 'warn')" />
                                         Вынести предупреждение
@@ -585,7 +582,7 @@ new #[Layout('layouts.admin')] class extends Component
 
                                     <x-ui.dropdown-menu-separator />
 
-                                    <x-ui.dropdown-menu-item wire:key="reject-{{ $report->id }}" wire:click="reject({{ $report->id }})" wire:target="reject({{ $report->id }})" wire:loading.attr="disabled">
+                                    <x-ui.dropdown-menu-item wire:click="reject({{ $report->id }})" wire:target="reject({{ $report->id }})" wire:loading.attr="disabled">
                                         <x-lucide-x-circle class="w-4 h-4 text-muted-foreground" wire:loading.remove wire:target="reject({{ $report->id }})" />
                                         <x-lucide-loader-2 class="w-4 h-4 animate-spin hidden text-muted-foreground" wire:loading wire:target="reject({{ $report->id }})" />
                                         Отклонить жалобу (всё ок)
@@ -602,13 +599,13 @@ new #[Layout('layouts.admin')] class extends Component
                     </x-ui.table-cell>
                 </x-ui.table-row>
            @empty
-            <x-ui.table-row wire:key="empty-state">
+            <x-ui.table-row wire:key="empty-state-reports">
                 <x-ui.table-cell colspan="8" class="py-12 text-center text-muted-foreground">
                     <div class="flex flex-col items-center gap-2">
                         <x-lucide-inbox class="w-12 h-12 opacity-30" />
                         <p>Нет жалоб</p>
                         @if(!empty($search) || $statusFilter !== 'pending' || $typeFilter !== 'all')
-                            <x-ui.button wire:click="resetFilters" variant="outline" size="sm" wire:key="reset-filters">
+                            <x-ui.button wire:click="resetFilters" variant="outline" size="sm">
                                 Сбросить фильтры
                             </x-ui.button>
                         @endif
@@ -619,8 +616,10 @@ new #[Layout('layouts.admin')] class extends Component
         </x-ui.table-body>
     </x-ui.table>
 
+    <x-loading-overlay fixed="true" wire:loading.delay wire:key="overlay-loading-page"/>
+
     <!-- Пагинация -->
-    <div class="flex items-center justify-between flex-wrap gap-2" wire:key="pagination-wrapper">
+    <div class="flex items-center justify-between flex-wrap gap-2">
         <div class="text-xs text-muted-foreground">
             Показано {{ $this->reports->firstItem() ?? 0 }} - {{ $this->reports->lastItem() ?? 0 }} из {{ $this->reports->total() }}
         </div>

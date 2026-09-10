@@ -14,12 +14,13 @@ class ToggleUserBanAction
      * Забанить или разбанить пользователя.
      *
      * @param User $user
+     * @param User $admin
      * @param string $reason
      * @param string $type
-     * @param bool $forceBan Если true — только банит (игнорирует разбан). Нужно для массовых действий.
+     * @param bool $forceBan
      * @return array
      */
-    public function execute(User $user, string $reason = 'Нарушение правил сервиса', string $type = 'permanent', bool $forceBan = false): array
+    public function execute(User $user, User $admin, string $reason = 'Нарушение правил сервиса', string $type = 'permanent', bool $forceBan = false): array
     {
         if ($user->isStaff()) {
             return ['success' => false, 'message' => 'Нельзя забанить сотрудника (админа/модератора)'];
@@ -28,19 +29,18 @@ class ToggleUserBanAction
         $isCurrentlyBanned = ($user->status === 'banned' || $user->status === 'shadowbanned');
 
         if ($forceBan) {
-            return $this->ban($user, $reason, $type);
+            return $this->ban($user, $admin, $reason, $type);
         }
 
         if ($isCurrentlyBanned) {
-            return $this->unban($user);
+            return $this->unban($user, $admin);
         }
 
-        return $this->ban($user, $reason, $type);
+        return $this->ban($user, $admin, $reason, $type);
     }
     
-    protected function ban(User $user, string $reason, string $type): array
+    protected function ban(User $user, User $admin, string $reason, string $type): array
     {
-        // ФИКС: Используем getOriginal для надежности
         $before = [
             'status' => $user->getOriginal('status'), 
             'ban_reason' => $user->getOriginal('ban_reason'), 
@@ -70,7 +70,7 @@ class ToggleUserBanAction
             $user->photos()->where('status', 'pending')->update(['status' => 'rejected', 'reject_reason' => 'user_banned']);
         });
 
-        $user->refresh();
+        // ФИКС: Убрали $user->refresh(), update() уже обновил атрибуты в памяти!
 
         $after = [
             'status' => $banData['status'],
@@ -78,21 +78,19 @@ class ToggleUserBanAction
             'banned_until' => $banData['banned_until']?->toDateTimeString(),
             'ban_type' => $type,
             'banned_at' => now()->toDateTimeString(),
-            // ФИКС: Добавлен context для истории
             'context' => [
                 'user_id' => $user->id,
                 'user_name' => $user->name,
-                'admin_id' => auth()->id(),
+                'admin_id' => $admin->id,
             ]
         ];
 
-        // ФИКС: Динамически меняем название экшена для теневого бана
         $actionName = $type === 'shadow' ? 'user.shadowban' : 'user.ban';
 
         AdminLog::record(
-            $actionName, // <--- Было жестко 'user.ban'
+            $actionName, 
             $user, 
-            auth()->user(), 
+            $admin, 
             $before, 
             $after, 
             participants: [$user->id]
@@ -100,7 +98,8 @@ class ToggleUserBanAction
         
         if ($type !== 'shadow') {
             try {
-                $user->notify(new UserBanned(true, "Ваш аккаунт заблокирован. Причина: {$reason}"));
+                // ФИКС: Передаем причину во второй аргумент уведомления
+                $user->notify(new UserBanned(true, $reason));
             } catch (\Exception $e) {
                 Log::error('Ошибка отправки уведомления о бане: ' . $e->getMessage());
             }
@@ -116,7 +115,7 @@ class ToggleUserBanAction
     }
 
     
-    protected function unban(User $user): array
+    protected function unban(User $user, User $admin): array
     {
         $before = [
             'status' => $user->getOriginal('status'), 
@@ -130,24 +129,23 @@ class ToggleUserBanAction
             'banned_until' => null,
         ]);
         
-        $user->refresh();
+        // ФИКС: Убрали $user->refresh()
         
         $after = [
             'status' => 'active',
             'unbanned_at' => now()->toDateTimeString(),
-            'unbanned_by' => auth()->id(),
-            // ФИКС: Добавлен context для истории
+            'unbanned_by' => $admin->id,
             'context' => [
                 'user_id' => $user->id,
                 'user_name' => $user->name,
-                'admin_id' => auth()->id(),
+                'admin_id' => $admin->id,
             ]
         ];
         
         AdminLog::record(
             'user.unban', 
             $user, 
-            auth()->user(), 
+            $admin, 
             $before, 
             $after, 
             participants: [$user->id]
@@ -155,6 +153,7 @@ class ToggleUserBanAction
         
         if ($before['status'] !== 'shadowbanned') {
             try {
+                // ФИКС: Передаем текст в уведомление
                 $user->notify(new UserBanned(false, "Ваш аккаунт разблокирован. Приносим извинения за неудобства."));
             } catch (\Exception $e) {
                 Log::error('Ошибка отправки уведомления о разбане: ' . $e->getMessage());

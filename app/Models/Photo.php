@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -10,20 +11,29 @@ use Illuminate\Support\Facades\Storage;
 
 class Photo extends Model
 {
-    use SoftDeletes; // Обязательно для сохранения улик!
+    use SoftDeletes; 
+
+    // КОНСТАНТЫ ТИПОВ
+    public const TYPE_PROFILE = 'profile';
+    public const TYPE_VERIFICATION = 'verification';
+
+    // КОНСТАНТЫ СТАТУСОВ
+    public const STATUS_PENDING = 'pending';
+    public const STATUS_APPROVED = 'approved';
+    public const STATUS_REJECTED = 'rejected';
 
     protected $fillable = [
         'user_id',
         'album_id', 
-        'type',              // Новое: profile или verification
+        'type',              
         'path_original',
-        'path_large',
+        'path_large', 
         'path_medium',
         'path_thumb',
-        'status',            // pending, approved, rejected
-        'reject_reason',     // Новое: причина отклонения
-        'moderated_by',      // Новое: ID админа
-        'moderated_at',      // Новое: Время проверки
+        'status',            
+        'reject_reason',     
+        'moderated_by',      
+        'moderated_at',      
         'phash',
         'is_primary',
         'is_intimate',
@@ -51,7 +61,6 @@ class Photo extends Model
         return $this->belongsTo(User::class);
     }
 
-    // Модератор, проверивший фото
     public function moderator(): BelongsTo
     {
         return $this->belongsTo(User::class, 'moderated_by');
@@ -64,35 +73,30 @@ class Photo extends Model
 
     public function approvedComments(): HasMany
     {
-        return $this->hasMany(PhotoComment::class)->where('status', 'approved');
+        return $this->hasMany(PhotoComment::class)->where('status', PhotoComment::STATUS_APPROVED);
     }
 
     public function pendingComments(): HasMany
     {
-        return $this->hasMany(PhotoComment::class)->where('status', 'pending');
+        return $this->hasMany(PhotoComment::class)->where('status', PhotoComment::STATUS_PENDING);
     }
 
     // ============================================
-    // ХЕЛПЕР ДЛЯ URL (Твой код - оставляем без изменений)
+    // ХЕЛПЕР ДЛЯ URL
     // ============================================
 
-    /**
-     *  Универсальный метод: возвращает URL или полную ссылку
-     */
     private function getUrl(?string $path, ?string $fallbackPath = null): string
     {
         if (!empty($path)) {
             return filter_var($path, FILTER_VALIDATE_URL) ? $path : Storage::url($path);
         }
         
-        // Если запрошенного размера нет, пробуем отдать фоллбэк (например, оригинал)
         if (!empty($fallbackPath)) {
             return filter_var($fallbackPath, FILTER_VALIDATE_URL) ? $fallbackPath : Storage::url($fallbackPath);
         }
         
-        return ''; // Или возвращай URL дефолтной заглушки (placeholder)
+        return ''; 
     }
-
 
     public function getUrlAttribute(): string
     {
@@ -111,13 +115,11 @@ class Photo extends Model
 
     public function getMediumUrlAttribute(): string
     {
-        // Если нет medium, отдаст original
         return $this->getUrl($this->path_medium, $this->path_original);
     }
 
     public function getThumbUrlAttribute(): string
     {
-        // Если нет thumb, отдаст medium, а если нет medium — original
         return $this->getUrl($this->path_thumb, $this->path_medium ?? $this->path_original);
     }
 
@@ -128,10 +130,8 @@ class Photo extends Model
     public static function generatePath(int $userId, string $fileId, string $type): string
     {
         // Берем 3 символа хэша (от 000 до fff = 4096 папок).
-        // Это идеальный баланс для масштабирования до миллионов юзеров без тормозов ФС.
         $hash = substr(md5($userId), 0, 3);
         
-        // Пример пути: photos/profile/a3f/105/large_12345.webp
         return "photos/{$type}/{$hash}/{$userId}/{$fileId}.webp";
     }
 
@@ -139,27 +139,27 @@ class Photo extends Model
     // СКОПЫ
     // ============================================
 
-    public function scopeApproved($query)
+    public function scopeApproved(Builder $query): Builder
     {
-        return $query->where('status', 'approved');
+        return $query->where('status', self::STATUS_APPROVED);
     }
 
-    public function scopePending($query)
+    public function scopePending(Builder $query): Builder
     {
-        return $query->where('status', 'pending');
+        return $query->where('status', self::STATUS_PENDING);
     }
 
-    public function scopePrimary($query)
+    public function scopePrimary(Builder $query): Builder
     {
         return $query->where('is_primary', true);
     }
 
-    public function scopePublic($query)
+    public function scopePublic(Builder $query): Builder
     {
         return $query->where('is_intimate', false);
     }
 
-    public function scopeOfType($query, string $type)
+    public function scopeOfType(Builder $query, string $type): Builder
     {
         return $query->where('type', $type);
     }
@@ -171,7 +171,7 @@ class Photo extends Model
     public function markAsApproved(int $adminId): bool
     {
         return $this->update([
-            'status' => 'approved',
+            'status' => self::STATUS_APPROVED,
             'moderated_by' => $adminId,
             'moderated_at' => now(),
             'reject_reason' => null,
@@ -181,7 +181,7 @@ class Photo extends Model
     public function markAsRejected(int $adminId, string $reason): bool
     {
         return $this->update([
-            'status' => 'rejected',
+            'status' => self::STATUS_REJECTED,
             'moderated_by' => $adminId,
             'moderated_at' => now(),
             'reject_reason' => $reason,
@@ -189,21 +189,16 @@ class Photo extends Model
     }
 
     // ============================================
-    // СОБЫТИЯ МОДЕЛИ (ИСПРАВЛЕНО ПОД SOFT DELETES)
+    // СОБЫТИЯ МОДЕЛИ
     // ============================================
 
     protected static function booted()
     {
-        // Файлы удаляем ТОЛЬКО при жестком удалении (forceDelete)!
-        // При мягком удалении (delete) файлы остаются на диске для СБ.
         static::forceDeleting(function ($photo) {
             $photo->deleteFiles();
         });      
     }
 
-    /**
-     * Удалить все файлы фото с диска (Твой код)
-     */
     public function deleteFiles(): bool
     {
         $paths = [

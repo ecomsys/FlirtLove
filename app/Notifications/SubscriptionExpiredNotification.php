@@ -21,11 +21,15 @@ class SubscriptionExpiredNotification extends Notification implements ShouldQueu
     {
         $channels = ['database'];
 
+        // ФИКС: Безопасная проверка настроек (защита от TypeError если email_settings = null)
+        // ФИКС: Убрали $notifiable->load('preferences'), т.к. аксессоры User сами безопасно отдают дефолт
+        $emailSettings = $notifiable->email_settings ?? [];
+
         if ($notifiable->push_enabled) {
             $channels[] = 'broadcast';
         }
 
-        if ($notifiable->email_enabled && ($notifiable->email_settings['on_event'] ?? true)) {
+        if ($notifiable->email_enabled && ($emailSettings['on_event'] ?? true)) {
             $channels[] = 'mail';
         }
 

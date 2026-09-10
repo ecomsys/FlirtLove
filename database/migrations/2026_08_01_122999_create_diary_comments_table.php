@@ -11,38 +11,39 @@ return new class extends Migration
         Schema::create('diary_comments', function (Blueprint $table) {
             $table->id();
             
-            // К какому посту привязан комментарий
+            // К какому посту привязан
             $table->foreignId('diary_id')->constrained()->cascadeOnDelete();
             
-            // Автор комментария (nullable для сохранения истории удаленных юзеров)
+            // Автор (nullable для сохранения истории удаленных юзеров)
             $table->foreignId('user_id')->nullable()->constrained('users')->nullOnDelete();
             
-            // Текст комментария
             $table->text('content');
             
-            // Для ответов (цитирований). Ссылается на эту же таблицу.
+            // Для ответов (цитирований)
             $table->foreignId('parent_id')->nullable()->constrained('diary_comments')->nullOnDelete();
             
-            // Статус модерации (в дейтинге премодерация текста часто не нужна, 
-            // но мы оставим структуру, чтобы можно было жаловаться и прятать мат)
+            // Модерация
             $table->enum('status', ['approved', 'pending', 'rejected', 'spam'])->default('approved');
             $table->string('reject_reason')->nullable();
             $table->foreignId('moderated_by')->nullable()->constrained('users')->nullOnDelete();
             $table->timestamp('moderated_at')->nullable();
             
-            // Денормализация для скорости
-            $table->unsignedInteger('likes_count')->default(0);
-            $table->unsignedInteger('replies_count')->default(0);
+            // Денормализация (BigInteger для защиты от переполнения)
+            $table->unsignedBigInteger('likes_count')->default(0);
+            $table->unsignedBigInteger('replies_count')->default(0);
             
             $table->timestamps();
-            $table->softDeletes(); // Для СБ!
+            $table->softDeletes();
             
             // === ИНДЕКСЫ ===
-            // Для вывода комментариев под постом
-            $table->index(['diary_id', 'status', 'parent_id']);
-            // Для истории юзера
+            
+            // 1. Вывод комментариев под постом (Добавили created_at для сортировки!)
+            $table->index(['diary_id', 'status', 'parent_id', 'created_at']);
+            
+            // 2. История юзера (его комментарии)
             $table->index(['user_id', 'created_at']);
-            // Для очереди модерации в админке
+            
+            // 3. Очередь модерации в админке (с сортировкой по дате)
             $table->index(['status', 'created_at']);
         });
     }

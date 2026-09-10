@@ -4,7 +4,6 @@ use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Pagination\Paginator;
-use Livewire\Attributes\Computed;
 use Livewire\Attributes\Layout;
 use Livewire\Volt\Component;
 use Livewire\WithPagination;
@@ -13,45 +12,30 @@ new #[Layout('layouts.admin')] class extends Component
 {
     use WithPagination;
 
-       public string $search = '';
+    public string $search = '';
     public string $levelFilter = 'all';
     public string $dateFilter = '';
     public int $perPage = 50;
 
-    /** @var string URL для кнопки "Назад" */
     public string $backUrl = '';
 
-    // Авторизация: только админы могут смотреть системные логи
     public function mount(): void
     {
         abort_unless(auth()->user()?->role === 'admin', 403);
 
-        // ФИКС: Запоминаем URL "Назад" только при первой загрузке
         $previousUrl = url()->previous();
         $this->backUrl = ($previousUrl && $previousUrl !== url()->current()) 
             ? $previousUrl 
             : route('admin.dashboard');
-
-        $this->levelFilter = session('admin_logs_level', 'all');
     }
 
-    public function updatedSearch(): void
-    {
-        $this->resetPage();
-        $this->clearComputedCache();
-    }
-
-    public function updatedDateFilter(): void
-    {
-        $this->resetPage();
-        $this->clearComputedCache();
-    }
+    public function updatedSearch(): void { $this->resetPage(); }
+    public function updatedDateFilter(): void { $this->resetPage(); }
 
     public function clearSearch(): void
     {
         $this->search = '';
         $this->resetPage();
-        $this->clearComputedCache();
     }
 
     public function clearFilters(): void
@@ -60,59 +44,74 @@ new #[Layout('layouts.admin')] class extends Component
         $this->levelFilter = 'all';
         $this->dateFilter = '';
         $this->resetPage();
-        $this->clearComputedCache();
     }
 
     public function refreshLogs(): void
     {
-        $this->clearComputedCache();
+        // Просто перерисовка, with() сделает всё сам
     }
 
-    private function clearComputedCache(): void
-    {
-        unset($this->logs);
-        unset($this->stats);
-        unset($this->logSize);
-    }
-
-    // Установка фильтра уровня (с сохранением в сессию)
     public function setLevelFilter(string $level): void
     {
         $this->levelFilter = $level;
-        session(['admin_logs_level' => $level]);
+        $this->search = '';
         $this->resetPage();
-        $this->clearComputedCache();
     }
 
-    // Очистка файла логов
     public function clearLogs(): void
     {
         $logPath = storage_path('logs/laravel.log');
         
         try {
             if (File::exists($logPath)) {
-                File::put($logPath, ''); // Очищаем файл, не удаляя его
+                File::put($logPath, '');
             }
             
             Log::info('Логи очищены администратором');
             $this->dispatch('show-toast', type: 'success', message: 'Логи очищены');
-            $this->clearComputedCache();
         } catch (\Exception $e) {
             $this->dispatch('show-toast', type: 'error', message: 'Не удалось очистить логи: ' . $e->getMessage());
         }
     }
 
     // ============================================
-    // ВЫВОД ДАННЫХ (Computed)
+    // ЕДИНЫЙ ВЫВОД ДАННЫХ (ФАЙЛ ЧИТАЕТСЯ 1 РАЗ!)
     // ============================================
-
-    #[Computed]
-    public function logs()
+    public function with(): array
     {
         $logPath = storage_path('logs/laravel.log');
-        
+        $stats = ['total_entries' => 0, 'levels' => []];
+        $allLogs = [];
+        $logSize = '0 B';
+
         if (!File::exists($logPath)) {
-            return new LengthAwarePaginator([], 0, $this->perPage, 1);
+            return [
+                'logs' => new LengthAwarePaginator([], 0, $this->perPage, 1),
+                'stats' => $stats,
+                'logLevels' => ['DEBUG', 'INFO', 'NOTICE', 'WARNING', 'ERROR', 'CRITICAL', 'ALERT', 'EMERGENCY'],
+                'logSize' => $logSize
+            ];
+        }
+
+        // ФИКС: Защита от OOM. Если файл больше 50МБ, не даем упасть серверу.
+        $sizeBytes = File::size($logPath);
+        $units = ['B', 'KB', 'MB', 'GB'];
+        $sizeVal = $sizeBytes;
+        $i = 0;
+        while ($sizeVal >= 1024 && $i < count($units) - 1) {
+            $sizeVal /= 1024;
+            $i++;
+        }
+        $logSize = round($sizeVal, 2) . ' ' . $units[$i];
+
+        if ($sizeBytes > 50 * 1024 * 1024) {
+            $this->dispatch('show-toast', type: 'error', message: 'Файл логов слишком большой (>50MB). Используйте rotate логов.');
+            return [
+                'logs' => new LengthAwarePaginator([], 0, $this->perPage, 1),
+                'stats' => $stats,
+                'logLevels' => ['DEBUG', 'INFO', 'NOTICE', 'WARNING', 'ERROR', 'CRITICAL', 'ALERT', 'EMERGENCY'],
+                'logSize' => $logSize
+            ];
         }
 
         $levelColors = [
@@ -126,19 +125,18 @@ new #[Layout('layouts.admin')] class extends Component
             'EMERGENCY'  => 'bg-red-900/10 text-red-900',
         ];
         
-        $logs = [];
         $currentEntry = null;
 
-        // ИСПОЛЬЗУЕМ ГЕНЕРАТОР File::lines() ДЛЯ ЭКОНОМИИ ПАМЯТИ!
-        // Читаем файл построчно, не грузя весь файл в ОЗУ.
         foreach (File::lines($logPath) as $line) {
-            // Если строка начинается с даты — это новая запись лога
             if (preg_match('/^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]\s+(\w+)\.(\w+):\s?(.*)/', $line, $matches)) {
                 if ($currentEntry) {
-                    $logs[] = $currentEntry;
+                    $allLogs[] = $currentEntry;
                 }
                 
                 $level = $matches[3];
+                $stats['total_entries']++;
+                $stats['levels'][$level] = ($stats['levels'][$level] ?? 0) + 1;
+
                 $currentEntry = [
                     'timestamp'   => $matches[1],
                     'environment' => $matches[2],
@@ -149,105 +147,63 @@ new #[Layout('layouts.admin')] class extends Component
                     'level_color' => $levelColors[$level] ?? 'bg-muted text-muted-foreground',
                 ];
             } elseif ($currentEntry) {
-                // Если строка не начинается с даты — это стек-трейс предыдущей записи
                 $currentEntry['trace'] .= $line . "\n";
                 $currentEntry['full'] .= "\n" . $line;
             }
         }
         
-        // Добавляем самую последнюю запись
         if ($currentEntry) {
-            $logs[] = $currentEntry;
+            $allLogs[] = $currentEntry;
         }
         
         // Сортируем от новых к старым
-        $logs = array_reverse($logs);
+        $allLogs = array_reverse($allLogs);
         
         // Применяем фильтры
+        $filteredLogs = $allLogs;
+
         if ($this->levelFilter !== 'all') {
-            $logs = array_filter($logs, fn($log) => $log['level'] === $this->levelFilter);
+            $filteredLogs = array_filter($filteredLogs, fn($log) => $log['level'] === $this->levelFilter);
         }
 
         if (!empty($this->search)) {
             $search = strtolower($this->search);
-            $logs = array_filter($logs, function ($log) use ($search) {
+            $filteredLogs = array_filter($filteredLogs, function ($log) use ($search) {
                 return str_contains(strtolower($log['message']), $search) ||
                        str_contains(strtolower($log['full']), $search);
             });
         }
 
         if (!empty($this->dateFilter)) {
-            $logs = array_filter($logs, fn($log) => str_starts_with($log['timestamp'], $this->dateFilter));
+            $filteredLogs = array_filter($filteredLogs, fn($log) => str_starts_with($log['timestamp'], $this->dateFilter));
         }
 
-        // ВАЖНО: Переиндексируем ключи массива после фильтрации!
-        // Иначе пагинация Laravel получит массив с дырами (0, 5, 14...) и сломается.
-        $logs = array_values($logs);
+        $filteredLogs = array_values($filteredLogs);
 
-        $total = count($logs);
+        $total = count($filteredLogs);
         $page = Paginator::resolveCurrentPage('page');
         
         $offset = ($page - 1) * $this->perPage;
-        $paginatedLogs = array_slice($logs, $offset, $this->perPage);
+        $paginatedLogs = array_slice($filteredLogs, $offset, $this->perPage);
 
-        return new LengthAwarePaginator(
+        $logs = new LengthAwarePaginator(
             $paginatedLogs,
             $total,
             $this->perPage,
             $page,
             ['path' => Paginator::resolveCurrentPath()]
         );
-    }
 
-    #[Computed]
-    public function stats(): array
-    {
-        $logPath = storage_path('logs/laravel.log');
-        $stats = ['total_entries' => 0, 'levels' => []];
-
-        if (!File::exists($logPath)) {
-            return $stats;
-        }
-
-        // Тоже используем генератор для безопасности памяти
-        foreach (File::lines($logPath) as $line) {
-            if (preg_match('/^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\]\s+\w+\.(\w+):/', $line, $matches)) {
-                $level = $matches[1];
-                $stats['total_entries']++;
-                $stats['levels'][$level] = ($stats['levels'][$level] ?? 0) + 1;
-            }
-        }
-
-        return $stats;
-    }
-
-    #[Computed]
-    public function logLevels(): array
-    {
-        return ['DEBUG', 'INFO', 'NOTICE', 'WARNING', 'ERROR', 'CRITICAL', 'ALERT', 'EMERGENCY'];
-    }
-
-    #[Computed]
-    public function logSize(): string
-    {
-        $logPath = storage_path('logs/laravel.log');
-        if (!File::exists($logPath)) {
-            return '0 B';
-        }
-
-        $size = File::size($logPath);
-        $units = ['B', 'KB', 'MB', 'GB'];
-        $i = 0;
-        
-        while ($size >= 1024 && $i < count($units) - 1) {
-            $size /= 1024;
-            $i++;
-        }
-
-        return round($size, 2) . ' ' . $units[$i];
+        return [
+            'logs' => $logs,
+            'stats' => $stats,
+            'logLevels' => ['DEBUG', 'INFO', 'NOTICE', 'WARNING', 'ERROR', 'CRITICAL', 'ALERT', 'EMERGENCY'],
+            'logSize' => $logSize
+        ];
     }
 }; 
 ?>
+
 
 <div class="space-y-6 pb-6">
     <!-- Header -->
@@ -262,7 +218,7 @@ new #[Layout('layouts.admin')] class extends Component
                     Системные логи
                 </h1>
                 <p class="text-sm text-muted-foreground">
-                    Размер файла: {{ $this->logSize }}
+                    Размер файла: {{ $logSize }}
                 </p>
             </div>
         </div>
@@ -300,7 +256,7 @@ new #[Layout('layouts.admin')] class extends Component
         </div>
     </div>
 
-    <!-- Filters -->
+      <!-- Filters -->
     <div class="flex flex-wrap items-center gap-2">
         <x-ui.button
             wire:click="setLevelFilter('all')"
@@ -309,15 +265,16 @@ new #[Layout('layouts.admin')] class extends Component
             class="flex items-center gap-1.5"
         >
             Все
-            <x-ui.badge size="xs">{{ $this->stats['total_entries'] }}</x-ui.badge>
+            <x-ui.badge size="xs">{{ $stats['total_entries'] }}</x-ui.badge>
         </x-ui.button>
         
-        @foreach($this->logLevels as $level)
+        @foreach($logLevels as $level)
             @php
-                $count = $this->stats['levels'][$level] ?? 0;
+                $count = $stats['levels'][$level] ?? 0;
             @endphp
             @if($count > 0)
                 <x-ui.button
+                    wire:key="log-level-{{ $level }}" 
                     wire:click="setLevelFilter('{{ $level }}')"
                     variant="{{ $levelFilter === $level ? 'default' : 'secondary' }}"
                     size="sm"
@@ -335,24 +292,15 @@ new #[Layout('layouts.admin')] class extends Component
                         @else text-muted-foreground
                         @endif
                     ">
-                        @if($level === 'ERROR')
-                            <x-lucide-circle-x class="w-4 h-4" />
-                        @elseif($level === 'WARNING')
-                            <x-lucide-triangle-alert class="w-4 h-4" />
-                        @elseif($level === 'INFO')
-                            <x-lucide-info class="w-4 h-4" />
-                        @elseif($level === 'DEBUG')
-                            <x-lucide-bug class="w-4 h-4" />
-                        @elseif($level === 'NOTICE')
-                            <x-lucide-megaphone class="w-4 h-4" />
-                        @elseif($level === 'CRITICAL')
-                            <x-lucide-skull class="w-4 h-4" />
-                        @elseif($level === 'ALERT')
-                            <x-lucide-bell class="w-4 h-4" />
-                        @elseif($level === 'EMERGENCY')
-                            <x-lucide-flame class="w-4 h-4" />
-                        @else
-                            <x-lucide-file-text class="w-4 h-4" />
+                        @if($level === 'ERROR') <x-lucide-circle-x class="w-4 h-4" />
+                        @elseif($level === 'WARNING') <x-lucide-triangle-alert class="w-4 h-4" />
+                        @elseif($level === 'INFO') <x-lucide-info class="w-4 h-4" />
+                        @elseif($level === 'DEBUG') <x-lucide-bug class="w-4 h-4" />
+                        @elseif($level === 'NOTICE') <x-lucide-megaphone class="w-4 h-4" />
+                        @elseif($level === 'CRITICAL') <x-lucide-skull class="w-4 h-4" />
+                        @elseif($level === 'ALERT') <x-lucide-bell class="w-4 h-4" />
+                        @elseif($level === 'EMERGENCY') <x-lucide-flame class="w-4 h-4" />
+                        @else <x-lucide-file-text class="w-4 h-4" />
                         @endif
                     </span>
                     {{ $level }}
@@ -362,25 +310,33 @@ new #[Layout('layouts.admin')] class extends Component
         @endforeach
 
         <div class="flex items-center gap-2 ml-auto">
-            <x-ui.date-picker wire:model.live="dateFilter" placeholder="Дата" width="w-[10rem]" wire:key="date-filter" />
+              <!-- ФИКС: Кнопка сброса всех фильтров (видна, если хоть один фильтр активен) -->
+            @if(!empty($search) || $levelFilter !== 'all' || !empty($dateFilter))
+                <x-ui.button wire:click="clearFilters" variant="outline" size="sm" class="text-muted-foreground">
+                    <x-lucide-x class="w-4 h-4" /> Сбросить
+                </x-ui.button>
+            @endif
+
+            <!-- ФИКС: Обернули в relative для крестика -->
+            <div class="relative">
+                <x-ui.date-picker wire:model.live="dateFilter" placeholder="Дата" width="w-[12rem]" wire:key="date-filter" />
+                @if(!empty($dateFilter))
+                    <button wire:click="$set('dateFilter', '')" class="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground z-10 p-1 bg-card rounded-full">
+                        <x-lucide-x class="w-3.5 h-3.5" />
+                    </button>
+                @endif
+            </div>
 
             <div class="relative w-64">
-                <x-ui.input
-                    wire:model.live.debounce.300ms="search"
-                    type="search"
-                    placeholder="Поиск по тексту..."
-                    class="pl-9 pr-8"
-                />
+                <x-ui.input wire:model.live.debounce.300ms="search" type="search" placeholder="Поиск по тексту..." class="pl-9 pr-8" />
                 <x-lucide-search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                 @if(!empty($search))
-                    <button
-                        wire:click="clearSearch"
-                        class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground z-10"
-                    >
+                    <button wire:click="clearSearch" class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground z-10">
                         <x-lucide-x class="w-4 h-4" />
                     </button>
                 @endif
             </div>
+          
         </div>
     </div>
 
@@ -395,7 +351,7 @@ new #[Layout('layouts.admin')] class extends Component
         </x-ui.table-header>
 
         <x-ui.table-body>
-            @forelse ($this->logs as $index => $log)
+            @forelse ($logs as $index => $log)
                 <!-- Сделали wire:key уникальным и стабильным -->
                 <x-ui.table-row wire:key="log-{{ $log['timestamp'] }}-{{ $index }}">
                     <x-ui.table-cell class="text-xs text-muted-foreground whitespace-nowrap">
@@ -444,13 +400,15 @@ new #[Layout('layouts.admin')] class extends Component
 
     <!-- Pagination -->
     <div class="mt-6">
-        {{ $this->logs->links('partials.pagination') }}
+        {{ $logs->links('partials.pagination') }}
     </div>
+
+    <x-loading-overlay fixed="true" wire:loading.delay wire:key="overlay-loading-page"/>
 
     <!-- Info -->
     <div class="flex items-center justify-between flex-wrap gap-2">
         <div class="text-xs text-muted-foreground">
-            Показано {{ $this->logs->count() }} из {{ $this->logs->total() }} записей
+            Показано {{ $logs->count() }} из {{ $logs->total() }} записей
             @if(!empty($search))
                 <span class="ml-2">(фильтр: "{{ $search }}")</span>
             @endif

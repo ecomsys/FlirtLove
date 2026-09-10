@@ -11,25 +11,15 @@ return new class extends Migration
         Schema::create('gifts', function (Blueprint $table) {
             $table->id();
             
-            // Название подарка (например, "Красная роза", "Крутой Мерседес")
             $table->string('name');
-            
-            // Слаг для URL или системных идентификаторов (например, 'red_rose')
             $table->string('slug')->unique();
-            
-            // Путь к картинке/анимации подарка в каталоге
             $table->string('image_url');
             
-            // Цена во внутренней валюте (кредитах). 
-            // Мы храним кредиты в user_preferences.credits
-            $table->unsignedInteger('price');
+            // ИЗМЕНЕНО: unsignedInteger -> unsignedBigInteger (для совпадения с user_balances)
+            $table->unsignedBigInteger('price');
             
-            // Категория для группировки в каталоге (romantic, cars, 18+, male, female)
-            $table->string('category')->nullable()->index();
-            
-            // Флаг активности. Админ может скрыть подарок из продажи, не удаляя его из БД 
-            // (чтобы старые отправленные подарки не ломались)
-            $table->boolean('is_active')->default(true);
+            $table->string('category', 50)->nullable()->index();
+            $table->boolean('is_active')->default(true)->index();
             
             $table->timestamps();
         });
@@ -40,6 +30,7 @@ return new class extends Migration
         Schema::dropIfExists('gifts');
     }
 };
+
 
 // Разбор архитектуры:
 

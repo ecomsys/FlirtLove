@@ -7,28 +7,31 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Notifications\Messages\MailMessage;
 use Illuminate\Notifications\Notification;
 use Illuminate\Notifications\Messages\BroadcastMessage;
+use Illuminate\Support\Facades\Log;
 
 class ProfileFieldCleared extends Notification implements ShouldQueue
 {
     use Queueable;
 
-    protected string $field;
-
-    public function __construct(string $field)
-    {
-        $this->field = $field;
-    }
+    public function __construct(
+        protected string $field
+    ) {}
 
     public function via($notifiable): array
     {
-        $channels = ['database']; // Пишем в колокольчик
-        if ($notifiable->email_enabled && ($notifiable->email_settings['on_event'] ?? true)) {
-            $channels[] = 'mail'; // Дублируем на почту, если юзер включил уведомления о событиях
+        $channels = ['database'];
+        
+        // ФИКС: Безопасная проверка настроек (защита от TypeError)
+        $emailSettings = $notifiable->email_settings ?? [];
+        
+        if ($notifiable->email_enabled && ($emailSettings['on_event'] ?? true)) {
+            $channels[] = 'mail';
         }
-         // Если включены пуши (WebSockets)
+        
         if ($notifiable->push_enabled) {
             $channels[] = 'broadcast';
         }
+        
         return $channels;
     }
 
@@ -46,6 +49,9 @@ class ProfileFieldCleared extends Notification implements ShouldQueue
             'title' => 'Анкета отредактирована модератором',
             'message' => "Ваше поле «{$fieldName}» было очищено модератором за нарушение правил сервиса. Пожалуйста, заполните его корректно.",
             'action_url' => url('/profile/edit'),
+            'data' => [
+                'field' => $this->field
+            ]
         ];
     }
 
@@ -53,6 +59,7 @@ class ProfileFieldCleared extends Notification implements ShouldQueue
     {
         return (new MailMessage)
             ->subject('Ваш профиль был отредактирован')
+            ->greeting("Здравствуйте, {$notifiable->name}!")
             ->line('Модератор очистил одно из полей вашей анкеты за нарушение правил.')
             ->line('Пожалуйста, заполните его корректно.')
             ->action('Редактировать анкету', url('/profile/edit'));
@@ -60,12 +67,19 @@ class ProfileFieldCleared extends Notification implements ShouldQueue
     
     public function toBroadcast($notifiable): BroadcastMessage
     {
-        return new BroadcastMessage([
-            'type' => 'moderation',
-            'title' => 'Анкета отредактирована модератором',
-            'message' => "Одно из полей вашей анкеты было очищено модератором.",
-            'action_url' => url('/profile/edit'),
+        // ФИКС: Переиспользуем toDatabase (DRY), чтобы не дублировать текст
+        $dbData = $this->toDatabase($notifiable);
+
+        return new BroadcastMessage(array_merge($dbData, [
             'timestamp' => now()->toDateTimeString(),
-        ]);
+        ]));
+    }
+
+    /**
+     * ЗАЩИТА ОЧЕРЕДИ
+     */
+    public function failed(\Throwable $exception): void
+    {
+        Log::error("Не удалось отправить ProfileFieldCleared (Field: {$this->field}): " . $exception->getMessage());
     }
 }

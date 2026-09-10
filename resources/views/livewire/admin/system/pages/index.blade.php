@@ -1,7 +1,9 @@
 <?php
 
+use App\Models\User;
 use App\Actions\Admin\ManagePagesAction;
 use App\Models\Page;
+use Illuminate\Support\Facades\Cache;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Url;
@@ -28,6 +30,8 @@ new #[Layout('layouts.admin')] class extends Component
 
     public function mount(): void
     {
+        abort_unless(in_array(auth()->user()?->role, [User::ROLE_ADMIN, User::ROLE_MODERATOR]), 403);
+
         $previousUrl = url()->previous();
         $this->backUrl = ($previousUrl && $previousUrl !== url()->current()) 
             ? $previousUrl 
@@ -53,7 +57,7 @@ new #[Layout('layouts.admin')] class extends Component
         
         $this->dispatch('show-toast', 
             type: 'success', 
-            message: $page->fresh()->is_active ? 'Страница опубликована' : 'Страница снята с публикации'
+            message: $page->is_active ? 'Страница опубликована' : 'Страница снята с публикации'
         );
         $this->clearComputedCache();
     }
@@ -96,6 +100,12 @@ new #[Layout('layouts.admin')] class extends Component
         unset($this->counts);
     }
 
+    // ФИКС: Хук для сброса кэша пагинации
+    public function updatedPage(): void
+    {
+        $this->clearComputedCache();
+    }
+
     public function updatedSelectAll($value): void
     {
         if ($value) {
@@ -136,13 +146,15 @@ new #[Layout('layouts.admin')] class extends Component
     {
         $perPage = min(max($this->perPage, 1), 100);
         $searchOperator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
+        // ФИКС: ctype_digit
+        $isId = !empty($this->search) && ctype_digit($this->search);
 
         return Page::query()
-            ->when($this->search, function ($query) use ($searchOperator) {
-                $query->where(function ($q) use ($searchOperator) {
+            ->when($this->search, function ($query) use ($searchOperator, $isId) {
+                $query->where(function ($q) use ($searchOperator, $isId) {
                     $q->where('title', $searchOperator, "%{$this->search}%")
                       ->orWhere('slug', $searchOperator, "%{$this->search}%");
-                    if (is_numeric($this->search)) {
+                    if ($isId) {
                         $q->orWhere('id', (int) $this->search);
                     }
                 });
@@ -156,23 +168,25 @@ new #[Layout('layouts.admin')] class extends Component
     #[Computed]
     public function counts(): array
     {
-        $stats = Page::query()
-            ->selectRaw("COUNT(*) as total")
-            ->selectRaw("SUM(CASE WHEN is_active = true THEN 1 ELSE 0 END) as active")
-            ->first();
+        // ФИКС: Кэшируем счетчики на 1 минуту
+        return Cache::remember('admin_page_counts', 60, function () {
+            $stats = Page::query()
+                ->selectRaw("COUNT(*) as total")
+                ->selectRaw("SUM(CASE WHEN is_active = true THEN 1 ELSE 0 END) as active")
+                ->first();
 
-        $total = $stats->total ?? 0;
-        $active = $stats->active ?? 0;
+            $total = (int) ($stats?->total ?? 0);
+            $active = (int) ($stats?->active ?? 0);
 
-        return [
-            'all' => $total,
-            'active' => $active,
-            'draft' => $total - $active,
-        ];
+            return [
+                'all' => $total,
+                'active' => $active,
+                'draft' => $total - $active,
+            ];
+        });
     }
 }; 
 ?>
-
 
 <div class="space-y-6 pb-6">
     <!-- Заголовок -->
@@ -208,7 +222,7 @@ new #[Layout('layouts.admin')] class extends Component
         </div>
 
         <div class="relative w-64">
-            <x-ui.input wire:key="pages-search-input" wire:model.live.debounce.300ms="search" type="search" placeholder="Поиск по названию или id..." class="pl-9 pr-8" />
+            <x-ui.input  wire:model.live.debounce.300ms="search" type="search" placeholder="Поиск по названию или id..." class="pl-9 pr-8" />
             <x-lucide-search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             @if (!empty($search))
                 <button wire:click="clearSearch" class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground z-10">
@@ -270,10 +284,9 @@ new #[Layout('layouts.admin')] class extends Component
         </x-ui.table-header>
 
         <x-ui.table-body>
-            @forelse ($this->pages as $page)
-                @php 
-                    $isHighlighted = is_numeric($this->search) && $page->id == (int)$this->search; 
-                @endphp
+            @forelse ($this->pages as $page)               
+                @php $isHighlighted = ctype_digit($this->search) && $page->id == (int)$this->search; @endphp
+               
                 <x-ui.table-row 
                     wire:key="page-{{ $page->id }}" 
                     class="{{ in_array((string)$page->id, $this->selected) ? 'bg-muted/30' : '' }} {{ $isHighlighted ? 'bg-blue-500/10 ring-2 ring-blue-500/50' : '' }}"
@@ -331,23 +344,17 @@ new #[Layout('layouts.admin')] class extends Component
                     </x-ui.table-cell>
                 </x-ui.table-row>
             @empty
-                <x-ui.table-row wire:key="empty-state">
-                    <x-ui.table-cell colspan="7" class="py-12 text-center text-muted-foreground bg-card">
-                        <x-ui.empty>
-                            <x-ui.empty-header>
-                                <x-ui.empty-media variant="icon">
-                                    <x-lucide-file-x class="w-12 h-12 opacity-30" />
-                                </x-ui.empty-media>
-                                <x-ui.empty-title>Страницы не найдены</x-ui.empty-title>       
-                            </x-ui.empty-header>    
-                        </x-ui.empty>                        
+                 <x-ui.table-row wire:key="empty-state">
+                    <x-ui.table-cell colspan="7" class="py-12 text-center text-muted-foreground">
+                        <x-lucide-file-x class="w-12 h-12 opacity-30 mx-auto mb-2" />
+                        <p>Страницы не найдены</p>
                     </x-ui.table-cell>
                 </x-ui.table-row>
-
-
             @endforelse
         </x-ui.table-body>
     </x-ui.table>
+
+    <x-loading-overlay fixed="true" wire:loading.delay wire:key="overlay-loading-page"/>
 
     <!-- Пагинация -->
     <div class="flex items-center justify-between flex-wrap gap-2">

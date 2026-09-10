@@ -4,7 +4,6 @@ use App\Actions\Admin\ManageMediaAction;
 use App\Models\Media;
 use Illuminate\Support\Facades\Storage;
 use Livewire\WithFileUploads;
-use Livewire\Attributes\Computed;
 use Livewire\Attributes\On;
 use Livewire\Volt\Component;
 use Livewire\WithPagination;
@@ -14,7 +13,7 @@ new class extends Component {
     use WithPagination;
 
     public bool $isVisible = false;
-    public \App\Enums\MediaCollection $collection = \App\Enums\MediaCollection::Default;
+    public string $collection = 'default'; // ФИКС: Используем string для стабильной реактивности Livewire
     public bool $isCollectionForced = false;
     public $files = [];
     public string $search = '';
@@ -24,7 +23,7 @@ new class extends Component {
     public function openModal(string $collection = 'default'): void
     {
         $this->isCollectionForced = $collection !== 'default';
-        $this->collection = \App\Enums\MediaCollection::tryFrom($collection) ?? \App\Enums\MediaCollection::Default;
+        $this->collection = $collection; 
         $this->isVisible = true;
         $this->search = '';
         $this->selectedMediaId = null;
@@ -42,18 +41,19 @@ new class extends Component {
     {
         if (empty($this->files)) return;
 
-        $maxSize = config("media.collections.{$this->collection->value}.max_file_size_kb", 5120);
+        $maxSize = config("media.collections.{$this->collection}.max_file_size_kb", 5120);
         $this->validate([
             'files.*' => "file|mimes:jpg,jpeg,png,webp,gif|max:{$maxSize}",
         ]);
 
-        $uploadedIds = []; // ФИКС: Собираем ID загруженных файлов
+        $uploadedIds = [];
+        $collectionEnum = \App\Enums\MediaCollection::tryFrom($this->collection) ?? \App\Enums\MediaCollection::Default;
 
         foreach ($this->files as $file) {
             try {
                 $tempPath = $file->store('media/temp', 'public');
                 $media = Media::create([
-                    'collection' => $this->collection->value,
+                    'collection' => $this->collection,
                     'file_name' => $file->getClientOriginalName(),
                     'disk_path' => $tempPath,
                     'url' => Storage::url($tempPath),
@@ -64,23 +64,21 @@ new class extends Component {
                     'variants' => null,
                 ]);
 
-                $uploadedIds[] = $media->id; // Сохраняем ID
+                $uploadedIds[] = $media->id;
 
-                \App\Jobs\ProcessMediaUploadJob::dispatch($media->id, $tempPath, $this->collection, $file->getClientOriginalName());
+                \App\Jobs\ProcessMediaUploadJob::dispatch($media->id, $tempPath, $collectionEnum, $file->getClientOriginalName());
             } catch (\Exception $e) {
                 $this->dispatch('show-toast', type: 'error', message: 'Ошибка загрузки: ' . $e->getMessage());
             }
         }
 
-        // ФИКС: Пишем единый лог о загрузке пачки файлов
         if (!empty($uploadedIds)) {
-            $action->logUpload($uploadedIds, $this->collection->value, auth()->user());
+            $action->logUpload($uploadedIds, $this->collection, auth()->user());
         }
 
         $this->reset('files');
         $this->dispatch('show-toast', type: 'success', message: 'Файлы загружены! Нарезка вариантов запущена в фоне.');
         $this->dispatch('media-updated');
-        unset($this->mediaItems);
     }
 
     public function selectMedia(int $id): void
@@ -99,11 +97,10 @@ new class extends Component {
             return;
         }
 
-        $this->dispatch('media-selected', mediaId: $media->id, diskPath: $media->disk_path, collection: $this->collection->value);
+        $this->dispatch('media-selected', mediaId: $media->id, diskPath: $media->disk_path, collection: $this->collection);
         $this->closeModal();
     }
 
-    // ФИКС: Делегируем удаление в Action, чтобы писались логи!
     public function deleteMedia(int $id, ManageMediaAction $action): void
     {
         $media = Media::find($id);
@@ -117,37 +114,45 @@ new class extends Component {
         
         $this->dispatch('show-toast', type: 'success', message: 'Файл удален');
         $this->dispatch('media-updated');
-        unset($this->mediaItems);
     }
 
     public function updatedCollection(): void
     {
         $this->search = '';
+        $this->selectedMediaId = null;
         $this->resetPage();
     }
 
-    #[Computed]
-    public function mediaItems()
+    public function updatedSearch(): void
     {
-        return Media::query()
+        $this->selectedMediaId = null;
+        $this->resetPage();
+    }
+
+    // ============================================
+    // ВЫВОД ДАННЫХ (Всегда свежие через with())
+    // ============================================
+    public function with(): array
+    {
+        $collectionEnum = \App\Enums\MediaCollection::tryFrom($this->collection) ?? \App\Enums\MediaCollection::Default;
+
+        $mediaItems = Media::query()
             ->where('type', 'image')
-            ->where('collection', $this->collection->value)
+            ->where('collection', $this->collection)
             ->when($this->search, function ($q) {
                 $operator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
                 $search = $this->search;
-                $q->where(function ($q) use ($search, $operator) {
+                // ФИКС: ctype_digit
+                $isId = !empty($search) && ctype_digit($search);
+                $q->where(function ($q) use ($search, $operator, $isId) {
                     $q->where('file_name', $operator, "%{$search}%");
-                    if (is_numeric($search)) $q->orWhere('id', (int) $search);
+                    if ($isId) $q->orWhere('id', (int) $search);
                 });
             })
             ->latest()
             ->paginate(24);
-    }
 
-    #[Computed]
-    public function cropRules(): array
-    {
-        $config = config("media.collections.{$this->collection->value}");
+        $config = config("media.collections.{$this->collection}");
         $variants = [];
         if (isset($config['variants'])) {
             foreach ($config['variants'] as $key => $variant) {
@@ -157,17 +162,24 @@ new class extends Component {
                 ];
             }
         }
-        return [
+        
+        $cropRules = [
             'keep_original' => $config['keep_original'] ?? false,
             'alpha' => $config['alpha'] ?? false,
             'max_size_mb' => round(($config['max_file_size_kb'] ?? 5120) / 1024, 1),
             'variants' => $variants,
         ];
+
+        return [
+            'mediaItems' => $mediaItems,
+            'cropRules' => $cropRules,
+            'collectionEnum' => $collectionEnum,
+        ];
     }
 }; 
 ?>
 
-<div> {{-- Убрали wire:key с корня, он мешает Livewire 3 --}}
+<div> 
     @if($isVisible)
     <div x-data @click.self="$wire.closeModal()" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
          
@@ -178,7 +190,7 @@ new class extends Component {
                 <h2 class="text-lg font-semibold flex items-center gap-2">
                     <x-lucide-image class="w-5 h-5" /> Медиа хранилище 
                     @if($isCollectionForced)
-                        <span class="text-muted-foreground font-normal">({{ $collection->label() }})</span>
+                        <span class="text-muted-foreground font-normal">({{ $collectionEnum->label() }})</span>
                     @else
                         <span class="text-muted-foreground font-normal">(выберите коллекцию)</span>
                     @endif            
@@ -186,188 +198,199 @@ new class extends Component {
                 <x-ui.button variant="ghost" size="icon-sm" wire:click="closeModal"><x-lucide-x class="w-5 h-5" /></x-ui.button>
             </div>
 
-            <div class="p-4 border-b border-border flex items-center gap-3 flex-wrap">                     
-                <div class="flex items-center gap-2">
-                    @if(!$isCollectionForced)
-                        <x-ui.select wire:model.live="collection">
-                            <x-ui.select-trigger class="w-46"><x-ui.select-value placeholder="Коллекция" /></x-ui.select-trigger>
-                            <x-ui.select-content>
-                                @foreach(\App\Enums\MediaCollection::cases() as $case)
-                                    <x-ui.select-item value="{{ $case->value }}">{{ $case->label() }}</x-ui.select-item>
-                                @endforeach
-                            </x-ui.select-content>
-                        </x-ui.select>
-                    @else
-                        <span class="text-xs text-muted-foreground font-normal px-2 py-1 rounded bg-muted border border-border">
-                            Коллекция: {{ $collection->label() }}
-                        </span>
-                    @endif
-
-                    <x-ui.hover-card>
-                        <x-ui.hover-card-trigger>
-                            <button class="text-xs text-blue-500 hover:underline flex items-center gap-1 cursor-pointer">
-                                <x-lucide-scissors class="w-3.5 h-3.5" /> показать правила кропа !
-                            </button>
-                        </x-ui.hover-card-trigger>
-                        <x-ui.hover-card-content class="w-80">
-                            <div class="space-y-2 p-2">
-                                <h4 class="text-sm font-semibold">Правила для «{{ $collection->label() }}»</h4>
-                                <div class="text-xs text-muted-foreground space-y-1">
-                                    <div class="flex justify-between"><span>Макс. размер:</span><span class="font-medium text-foreground">{{ $this->cropRules['max_size_mb'] }} MB</span></div>
-                                    <div class="flex justify-between"><span>Альфа-канал:</span><span class="font-medium text-foreground">{{ $this->cropRules['alpha'] ? 'Да' : 'Нет' }}</span></div>
-                                    <div class="flex justify-between"><span>Оригинал:</span><span class="font-medium text-foreground">{{ $this->cropRules['keep_original'] ? 'Да' : 'Нет' }}</span></div>
-                                    <div class="pt-2 mt-2 border-t border-border">
-                                        <p class="font-medium text-foreground mb-1">Варианты нарезки:</p>
-                                        <ul class="space-y-1">
-                                            @foreach($this->cropRules['variants'] as $variant)
-                                                <li class="flex justify-between gap-2">
-                                                    <span class="font-mono text-[10px] bg-muted px-1 rounded">{{ $variant['key'] }}</span>
-                                                    <span>{{ $variant['size'] }} ({{ $variant['fit'] }}, {{ $variant['format'] }} {{ $variant['quality'] }}%)</span>
-                                                </li>
-                                            @endforeach
-                                        </ul>
-                                    </div>
-                                </div>
-                            </div>
-                        </x-ui.hover-card-content>
-                    </x-ui.hover-card>
-                </div>
-
-                <div class="ml-auto inline-flex items-center gap-2">
-                    <div class="relative w-64">
-                        <x-ui.input wire:model.live.debounce.300ms="search" type="search" placeholder="По названию или id..." class="pl-9 pr-8" />
-                        <x-lucide-search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                    </div>
-                    <x-ui.button type="button" variant="default" size="sm" @click="$refs.fileInput.click()">
-                        <x-lucide-upload class="w-4 h-4" /> Загрузить
-                    </x-ui.button>
-                    <input x-ref="fileInput" type="file" wire:model="files" multiple class="hidden" accept="image/*">
-                </div>
-
-                <div wire:loading wire:target="files" class="text-xs text-primary flex items-center gap-2 w-full">
-                    <x-lucide-loader-2 class="w-3 h-3 animate-spin inline" /> Идет оптимизация и загрузка файлов...
-                </div>
-                @error('files.*')
-                    <div class="text-xs text-destructive bg-destructive/10 px-3 py-2 rounded-md w-full flex items-center gap-2">
-                        <x-lucide-alert-circle class="w-4 h-4" /><span>{{ $message }}</span>
-                    </div>
-                @enderror
-            </div>
-            
-            @php $hasProcessing = $this->mediaItems->contains(fn($m) => $m->type === 'image' && empty($m->variants)); @endphp
-            <div class="p-4 overflow-y-auto little-scroll min-h-[15rem] max-h-[calc(100vh-10rem)] flex-1 bg-muted/10" @if($hasProcessing) wire:poll.3s @endif>
+            <!-- ФИКС: wire:key пересоздает весь блок при смене коллекции, убирая баги Alpine и Livewire -->
+            <div wire:key="media-content-{{ $collection }}" class="flex flex-col flex-1 overflow-hidden">
                 
-                @php 
-                    // ФИКС: Вычисляем пропорции и адаптивную сетку
-                    $thumbConfig = collect($this->cropRules['variants'])->firstWhere('key', 'thumb');
-                    $thumbSize = $thumbConfig['size'] ?? '300x300';
-                    
-                    if (str_contains($thumbSize, 'w') && !str_contains($thumbSize, 'x')) {
-                        $ratioW = (int) rtrim($thumbSize, 'w');
-                        $ratioH = $ratioW;
-                    } else {
-                        $parts = explode('x', strtolower($thumbSize));
-                        $ratioW = (int) ($parts[0] ?? 300);
-                        $ratioH = (int) ($parts[1] ?? $ratioW);
-                    }
+                <div class="p-4 border-b border-border flex items-center gap-3 flex-wrap">                     
+                    <div class="flex items-center gap-2">
+                        @if(!$isCollectionForced)
+                            <x-ui.select wire:model.live="collection">
+                                <x-ui.select-trigger class="w-46"><x-ui.select-value placeholder="Коллекция" /></x-ui.select-trigger>
+                                <x-ui.select-content>
+                                    @foreach(\App\Enums\MediaCollection::cases() as $case)
+                                        <x-ui.select-item value="{{ $case->value }}">{{ $case->label() }}</x-ui.select-item>
+                                    @endforeach
+                                </x-ui.select-content>
+                            </x-ui.select>
+                        @else
+                            <span class="text-xs text-muted-foreground font-normal px-2 py-1 rounded bg-muted border border-border">
+                                Коллекция: {{ $collectionEnum->label() }}
+                            </span>
+                        @endif
 
-                    $wideCollections = ['post', 'notifications', 'banner_desktop'];
-                    $gridCols = in_array($this->collection->value, $wideCollections) 
-                        ? 'lg:grid-cols-3'  // Крупнее для прямоугольных
-                        : 'lg:grid-cols-6'; // Стандартно для квадратных
-                @endphp
-
-                @if($this->mediaItems->isEmpty())
-                    <div class="flex flex-col items-center justify-center py-12 text-muted-foreground">
-                        <x-lucide-image-off class="w-12 h-12 opacity-30 mb-2" />
-                        <p>Медиа-хранилище пусто. <br>Загрузите первый файл!</p>
-                    </div>
-                @else
-                    <div class="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 {{ $gridCols }} gap-3"
-                         x-data="{
-                            menuOpen: false,
-                            activeMediaId: null,
-                            activeMediaUrl: '',
-                            openMenu(e, id, url) {
-                                e.preventDefault();
-                                this.$refs.menu.style.left = e.pageX + 'px';
-                                this.$refs.menu.style.top = e.pageY + 'px';
-                                this.activeMediaId = id;
-                                this.activeMediaUrl = url;
-                                this.menuOpen = true;
-                            },
-                            init() {
-                                window.addEventListener('scroll', () => { this.menuOpen = false; }, { capture: true });
-                            }
-                         }">
-                        
-                        @foreach($this->mediaItems as $media)
-                           @php $isProcessing = ($media->type === 'image' && empty($media->variants)); @endphp
-                            
-                            <div wire:key="media-{{ $media->id }}" 
-                                 wire:click="{{ $isProcessing ? '' : 'selectMedia(' . $media->id . ')' }}"
-                                 @contextmenu="openMenu($event, {{ $media->id }}, '{{ asset($media->url) }}')"
-                                 class="relative group rounded-lg overflow-hidden transition-all {{ $isProcessing ? 'opacity-50 cursor-wait' : 'cursor-pointer ' . ($selectedMediaId === $media->id ? 'ring-2 ring-primary ring-offset-2 ring-offset-card border-transparent' : 'border border-border hover:border-primary/50') }} bg-background" 
-                                 style="aspect-ratio: {{ $ratioW }} / {{ $ratioH }};">                                        
-                                
-                                <div class="w-full h-full block" title="{{ $isProcessing ? 'Идет обработка...' : 'Выбрать: ' . $media->file_name }}">
-                                    <x-media-image src="{{ $media->getVariantUrl('thumb') }}" class="w-full h-full object-cover {{ $selectedMediaId === $media->id ? 'opacity-90' : 'group-hover:scale-110 transition-transform' }}"/>
-                                </div>
-                                
-                                @if($isProcessing)
-                                    <div class="absolute inset-0 flex items-center justify-center bg-black/30 pointer-events-none">
-                                        <x-lucide-loader-2 class="w-6 h-6 text-white animate-spin" />
-                                    </div>
-                                @endif
-
-                                <div class="absolute top-1 left-1 bg-black/60 text-white text-[10px] font-mono font-bold px-1.5 py-0.5 rounded backdrop-blur-sm">
-                                    #{{ $media->id }}
-                                </div>
-
-                                @if(!$isProcessing && $selectedMediaId === $media->id)
-                                    <div class="absolute inset-0 flex items-center justify-center bg-primary/20 pointer-events-none">
-                                        <div class="bg-primary text-primary-foreground rounded-full p-1.5">
-                                            <x-lucide-check class="w-5 h-5" />
+                        <x-ui.hover-card>
+                            <x-ui.hover-card-trigger>
+                                <button class="text-xs text-blue-500 hover:underline flex items-center gap-1 cursor-pointer">
+                                    <x-lucide-scissors class="w-3.5 h-3.5" /> показать правила кропа !
+                                </button>
+                            </x-ui.hover-card-trigger>
+                            <x-ui.hover-card-content class="w-80">
+                                <div class="space-y-2 p-2">
+                                    <h4 class="text-sm font-semibold">Правила для «{{ $collectionEnum->label() }}»</h4>
+                                    <div class="text-xs text-muted-foreground space-y-1">
+                                        <div class="flex justify-between"><span>Макс. размер:</span><span class="font-medium text-foreground">{{ $cropRules['max_size_mb'] }} MB</span></div>
+                                        <div class="flex justify-between"><span>Альфа-канал:</span><span class="font-medium text-foreground">{{ $cropRules['alpha'] ? 'Да' : 'Нет' }}</span></div>
+                                        <div class="flex justify-between"><span>Оригинал:</span><span class="font-medium text-foreground">{{ $cropRules['keep_original'] ? 'Да' : 'Нет' }}</span></div>
+                                        <div class="pt-2 mt-2 border-t border-border">
+                                            <p class="font-medium text-foreground mb-1">Варианты нарезки:</p>
+                                            <ul class="space-y-1">
+                                                @foreach($cropRules['variants'] as $variant)
+                                                    <li class="flex justify-between gap-2">
+                                                        <span class="font-mono text-[10px] bg-muted px-1 rounded">{{ $variant['key'] }}</span>
+                                                        <span>{{ $variant['size'] }} ({{ $variant['fit'] }}, {{ $variant['format'] }} {{ $variant['quality'] }}%)</span>
+                                                    </li>
+                                                @endforeach
+                                            </ul>
                                         </div>
                                     </div>
-                                @endif
+                                </div>
+                            </x-ui.hover-card-content>
+                        </x-ui.hover-card>
+                    </div>
 
-                                <div class="absolute bottom-0 left-0 right-0 bg-black/70 text-white text-[10px] px-1 py-0.5 truncate opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
-                                    {{ $media->file_name }}
+                    <div class="ml-auto inline-flex items-center gap-2">
+                        <div class="relative w-64">
+                            <x-ui.input wire:model.live.debounce.300ms="search" type="search" placeholder="По названию или id..." class="pl-9 pr-8" />
+                            <x-lucide-search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                            @if(!empty($search))
+                                <button wire:click="$set('search', '')" class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground z-10">
+                                    <x-lucide-x class="w-4 h-4" />
+                                </button>
+                            @endif
+                        </div>
+                        <x-ui.button type="button" variant="default" size="sm" @click="$refs.fileInput.click()">
+                            <x-lucide-upload class="w-4 h-4" /> Загрузить
+                        </x-ui.button>
+                        <input x-ref="fileInput" type="file" wire:model="files" multiple class="hidden" accept="image/*">
+                    </div>
+
+                    <div wire:loading wire:target="files" class="text-xs text-primary flex items-center gap-2 w-full">
+                        <x-lucide-loader-2 class="w-3 h-3 animate-spin inline" /> Идет оптимизация и загрузка файлов...
+                    </div>
+                    @error('files.*')
+                        <div class="text-xs text-destructive bg-destructive/10 px-3 py-2 rounded-md w-full flex items-center gap-2">
+                            <x-lucide-alert-circle class="w-4 h-4" /><span>{{ $message }}</span>
+                        </div>
+                    @enderror
+                </div>
+                
+                @php $hasProcessing = $mediaItems->contains(fn($m) => $m->type === 'image' && empty($m->variants)); @endphp
+                <div x-data @scroll="$dispatch('close-ctx-menu')" class="p-4 overflow-y-auto little-scroll min-h-[15rem] max-h-[calc(100vh-10rem)] flex-1 bg-muted/10" @if($hasProcessing) wire:poll.3s @endif>
+                    
+                    @php 
+                        $thumbConfig = collect($cropRules['variants'])->firstWhere('key', 'thumb');
+                        $thumbSize = $thumbConfig['size'] ?? '300x300';
+                        
+                        if (str_contains($thumbSize, 'w') && !str_contains($thumbSize, 'x')) {
+                            $ratioW = (int) rtrim($thumbSize, 'w');
+                            $ratioH = $ratioW;
+                        } else {
+                            $parts = explode('x', strtolower($thumbSize));
+                            $ratioW = (int) ($parts[0] ?? 300);
+                            $ratioH = (int) ($parts[1] ?? $ratioW);
+                        }
+
+                        $wideCollections = ['post', 'notifications', 'banner_desktop'];
+                        $gridCols = in_array($this->collection, $wideCollections) 
+                            ? 'lg:grid-cols-3' 
+                            : 'lg:grid-cols-6'; 
+                    @endphp
+
+                    @if($mediaItems->isEmpty())
+                        <div class="flex flex-col items-center justify-center py-12 text-muted-foreground">
+                            <x-lucide-image-off class="w-12 h-12 opacity-30 mb-2" />
+                            <p>Медиа-хранилище пусто. <br>Загрузите первый файл!</p>
+                        </div>
+                    @else
+                       <div class="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 {{ $gridCols }} gap-3"
+                            x-data="{
+                                menuOpen: false,
+                                activeMediaId: null,
+                                activeMediaUrl: '',
+                                openMenu(e, id, url) {
+                                    e.preventDefault();
+                                    this.$refs.menu.style.left = e.pageX + 'px';
+                                    this.$refs.menu.style.top = e.pageY + 'px';
+                                    this.activeMediaId = id;
+                                    this.activeMediaUrl = url;
+                                    this.menuOpen = true;
+                                }
+                            }"
+                            @close-ctx-menu.window="menuOpen = false"
+                            @scroll.window="menuOpen = false"
+                            @resize.window="menuOpen = false"
+                            @keydown.escape.window="menuOpen = false"
+                        >
+                            
+                            @foreach($mediaItems as $media)
+                               @php $isProcessing = ($media->type === 'image' && empty($media->variants)); @endphp
+                                
+                                <div wire:key="media-{{ $media->id }}" 
+                                     wire:click="{{ $isProcessing ? '' : 'selectMedia(' . $media->id . ')' }}"
+                                     @contextmenu="openMenu($event, {{ $media->id }}, '{{ $media->url }}')"
+                                     class="relative group rounded-lg overflow-hidden transition-all {{ $isProcessing ? 'opacity-50 cursor-wait' : 'cursor-pointer ' . ($selectedMediaId === $media->id ? 'ring-2 ring-primary ring-offset-2 ring-offset-card border-transparent' : 'border border-border hover:border-primary/50') }} bg-background" 
+                                     style="aspect-ratio: {{ $ratioW }} / {{ $ratioH }};">                                                                              
+                                    
+                                    <div class="w-full h-full block" title="{{ $isProcessing ? 'Идет обработка...' : 'Выбрать: ' . $media->file_name }}">
+                                        <x-media-image src="{{ $media->getVariantUrl('thumb') }}" class="w-full h-full object-cover {{ $selectedMediaId === $media->id ? 'opacity-90' : 'group-hover:scale-110 transition-transform' }}"/>
+                                    </div>
+                                    
+                                    @if($isProcessing)
+                                        <div class="absolute inset-0 flex items-center justify-center bg-black/30 pointer-events-none">
+                                            <x-lucide-loader-2 class="w-6 h-6 text-white animate-spin" />
+                                        </div>
+                                    @endif
+
+                                    <div class="absolute top-1 left-1 bg-black/60 text-white text-[10px] font-mono font-bold px-1.5 py-0.5 rounded backdrop-blur-sm">
+                                        #{{ $media->id }}
+                                    </div>
+
+                                    @if(!$isProcessing && $selectedMediaId === $media->id)
+                                        <div class="absolute inset-0 flex items-center justify-center bg-primary/20 pointer-events-none">
+                                            <div class="bg-primary text-primary-foreground rounded-full p-1.5">
+                                                <x-lucide-check class="w-5 h-5" />
+                                            </div>
+                                        </div>
+                                    @endif
+
+                                    <div class="absolute bottom-0 left-0 right-0 bg-black/70 text-white text-[10px] px-1 py-0.5 truncate opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+                                        {{ $media->file_name }}
+                                    </div>
+                                </div>
+                            @endforeach
+
+                            {{-- ЕДИНОЕ КОНТЕКСТНОЕ МЕНЮ ДЛЯ СЕТКИ МЕНЕДЖЕРА --}}
+                            <div x-show="menuOpen" x-cloak 
+                                 x-ref="menu"
+                                 @click.outside="menuOpen = false"
+                                 class="fixed z-[100] min-w-[200px] bg-card border border-border rounded-md shadow-xl py-1"
+                                 style="display: none;">
+                                
+                                <div @click="$wire.selectMedia(activeMediaId); menuOpen = false" class="flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent cursor-pointer">
+                                    <x-lucide-check class="w-4 h-4" /> Выбрать
+                                </div>
+                                
+                                <div @click="navigator.clipboard.writeText(activeMediaUrl); $wire.dispatch('show-toast', {type: 'success', message: 'URL скопирован'}); menuOpen = false" class="flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent cursor-pointer">
+                                    <x-lucide-link class="w-4 h-4" /> Копировать URL
+                                </div>
+
+                                <div class="h-px bg-border my-1"></div>
+
+                                <div @click="$wire.deleteMedia(activeMediaId); menuOpen = false" wire:confirm="Удалить файл навсегда?" class="flex items-center gap-2 px-3 py-2 text-sm text-destructive hover:bg-destructive/10 cursor-pointer">
+                                    <x-lucide-trash-2 class="w-4 h-4" /> Удалить
                                 </div>
                             </div>
-                        @endforeach
-
-                        {{-- ЕДИНОЕ КОНТЕКСТНОЕ МЕНЮ ДЛЯ СЕТКИ МЕНЕДЖЕРА --}}
-                        <div x-show="menuOpen" x-cloak 
-                             x-ref="menu"
-                             @click.outside="menuOpen = false"
-                             class="fixed z-[100] min-w-[200px] bg-card border border-border rounded-md shadow-xl py-1"
-                             style="display: none;">
-                            
-                            <div @click="$wire.selectMedia(activeMediaId); menuOpen = false" class="flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent cursor-pointer">
-                                <x-lucide-check class="w-4 h-4" /> Выбрать
-                            </div>
-                            
-                            <div @click="navigator.clipboard.writeText(activeMediaUrl); $wire.dispatch('show-toast', {type: 'success', message: 'URL скопирован'}); menuOpen = false" class="flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent cursor-pointer">
-                                <x-lucide-link class="w-4 h-4" /> Копировать URL
-                            </div>
-
-                            <div class="h-px bg-border my-1"></div>
-
-                            <div @click="$wire.deleteMedia(activeMediaId); menuOpen = false" wire:confirm="Удалить файл навсегда?" class="flex items-center gap-2 px-3 py-2 text-sm text-destructive hover:bg-destructive/10 cursor-pointer">
-                                <x-lucide-trash-2 class="w-4 h-4" /> Удалить
-                            </div>
                         </div>
+                    @endif
+                </div>
+
+                @if($mediaItems->hasPages())
+                    <div class="p-3 border-t border-border bg-card shrink-0">
+                        {{ $mediaItems->links('partials.pagination') }}
                     </div>
                 @endif
-            </div>
 
-            @if($this->mediaItems->hasPages())
-                <div class="p-3 border-t border-border bg-card shrink-0">
-                    {{ $this->mediaItems->links('partials.pagination') }}
-                </div>
-            @endif
+            </div> {{-- Конец блока с wire:key --}}
 
             <div class="p-4 border-t border-border bg-muted/20 flex items-center justify-end gap-2 shrink-0">
                 <x-ui.button variant="outline" size="sm" wire:click="closeModal">Отмена</x-ui.button>

@@ -12,30 +12,18 @@ return new class extends Migration
             $table->id();
             
             // === ТИП ЧАТА ===
-            // private (личный чат между юзерами), support (чат с техподдержкой)
-            $table->enum('type', ['private', 'support'])->default('private');
+            $table->enum('type', ['private', 'support'])->default('private')->index();
 
-            $table->string('participants_hash', 32)->nullable()->unique(); // MD5 хэш
+            // Хэш участников (например md5(min($a,$b) . '-' . max($a,$b)))
+            $table->string('participants_hash', 32)->nullable()->unique();
             
             // === КЭШ ПОСЛЕДНЕГО СООБЩЕНИЯ (Денормализация) ===
-            // Чтобы вывести список чатов юзера (сортировка по последнему сообщению),
-            // нам пришлось бы делать JOIN с таблицей messages и искать MAX(created_at).
-            // Это убьет базу на тысячах чатов. Поэтому мы храним время последнего сообщения тут.
-            // Это поле будет обновляться триггером или обсервером при каждом новом сообщении.
-            $table->timestamp('last_message_at')->nullable();
+            $table->timestamp('last_message_at')->nullable()->index();
 
-            //  Блокировка чата админом
+            // Блокировка чата админом
             $table->boolean('is_locked')->default(false)->index();
             
             $table->timestamps();
-
-            // === ИНДЕКСЫ ===
-            
-            // 1. Для админки: фильтрация чатов (например, показать только чаты с саппортом)
-            $table->index('type');
-            
-            // 2. Для сортировки списка чатов у юзера (самый свежий диалог всегда сверху)
-            $table->index('last_message_at');
         });
     }
 
@@ -44,6 +32,7 @@ return new class extends Migration
         Schema::dropIfExists('chats');
     }
 };
+
 
 // Разбор архитектуры:
 

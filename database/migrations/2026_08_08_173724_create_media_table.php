@@ -11,28 +11,22 @@ return new class extends Migration
         Schema::create('media', function (Blueprint $table) {
             $table->id();
             
-            // Категория (collection): 'gifts', 'blog', 'banners'. 
-            // Помогает фильтровать в админке.
             $table->string('collection')->default('default')->index();
-            
-            // Оригинальное имя файла (для отображения в админке)
             $table->string('file_name');
-            
-            // Путь в filesystem (storage/app/public/media/...)
             $table->string('disk_path');
 
-            // Храним пути к нарезанным вариантам (sm, lg, cover_sm и т.д.)
-            $table->json('variants')->nullable();
+            // ИЗМЕНЕНО: json -> jsonb (для быстрого парсинга вариантов в Postgres)
+            $table->jsonb('variants')->nullable();
             
-            // Полный URL для фронтенда (кэшируем, чтобы не генерировать каждый раз)
-            $table->string('url');
+            $table->string('url')->index(); // НОВЫЙ: Индекс для быстрого поиска по URL
             
-            // Тип файла: image, video, document
-            $table->string('type')->default('image');
+            // ИЗМЕНЕНО: string -> enum (защита от мусора и скорость)
+            $table->enum('type', ['image', 'video', 'document'])->default('image')->index();
             $table->string('mime_type')->nullable();
-            $table->unsignedInteger('size')->nullable(); // Размер в байтах
             
-            // Кто загрузил (nullable, т.к. мог загрузить система/воркер)
+            // ИЗМЕНЕНО: unsignedInteger -> unsignedBigInteger (для тяжелых видео)
+            $table->unsignedBigInteger('size')->nullable(); 
+            
             $table->foreignId('uploaded_by')->nullable()->constrained('users')->nullOnDelete();
             
             $table->timestamps();

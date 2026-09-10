@@ -12,10 +12,7 @@ use Illuminate\Support\Facades\Cache;
 
 class ModeratePhotoAction
 {
-    /**
-     * Одобрить единичное фото.
-     */
-    public function approve(Photo $photo, User $admin): Photo
+    public function approve(Photo $photo, User $admin, bool $notify = true): Photo
     {
         $before = [
             'status' => $photo->getOriginal('status'), 
@@ -29,15 +26,13 @@ class ModeratePhotoAction
             $photo->user->update(['is_verified' => true]);
         }
 
-        if ($photo->user) {
+        if ($notify && $photo->user) {
             $cacheKey = "photo_approved_notif_{$photo->user_id}";
             if (!Cache::has($cacheKey)) {
                 $photo->user->notify(new PhotoModerated($photo->id, $photo->user_id, 'approved', 1));
                 Cache::put($cacheKey, true, now()->addMinutes(5));
             }
         }
-
-        $photo->refresh();
 
         $after = [
             'status' => 'approved', 
@@ -46,21 +41,17 @@ class ModeratePhotoAction
             'context' => [
                 'photo_id' => $photo->id,
                 'user_id' => $photo->user_id,
-                'url' => $photo->getOriginal('path_original')
+                'url' => $photo->path_original
             ]
         ];
         
         AdminLog::record('photo.approve', $photo, $admin, $before, $after, participants: [$photo->user_id]);
-        Cache::forget('admin_sidebar_stats');
-        
+        $this->clearCaches();
 
         return $photo;
     }
 
-    /**
-     * Отклонить единичное фото (с мягким удалением и карантином файлов).
-     */
-    public function reject(Photo $photo, User $admin, string $reason = 'other'): void
+    public function reject(Photo $photo, User $admin, string $reason = 'other', bool $notify = true): void
     {
         $user = $photo->user;
         
@@ -74,17 +65,15 @@ class ModeratePhotoAction
         if ($photo->is_primary) {
             $photo->update(['is_primary' => false]);
             
-            $nextAvatar = $user?->photos()->approved()->where('id', '!=', $photo->id)->first();
+            $nextAvatar = $user?->photos()->approved()->where('id', '!=', $photo->id)->orderByDesc('is_primary')->oldest()->first();
             if ($nextAvatar) {
                 $nextAvatar->update(['is_primary' => true]);
             }
         }
 
-        if ($user) {
+        if ($notify && $user) {
             $user->notify(new PhotoModerated($photo->id, $photo->user_id, 'rejected', 1));
         }
-
-        $photo->refresh();
 
         $after = [
             'status' => 'rejected', 
@@ -95,23 +84,19 @@ class ModeratePhotoAction
             'context' => [
                 'photo_id' => $photo->id,
                 'user_id' => $photo->user_id,
-                'url' => $photo->getOriginal('path_original')
+                'url' => $photo->path_original
             ]
         ];
         
         AdminLog::record('photo.reject', $photo, $admin, $before, $after, participants: [$photo->user_id]);
-        Cache::forget('admin_sidebar_stats');
-        
+        $this->clearCaches();
     }
 
-    /**
-     * Физическое удаление фото (вместе с файлами на диске).
-     */
     public function destroy(Photo $photo, User $admin): void
     {
         $userId = $photo->user_id;
         $photoId = $photo->id;
-        $photoPath = $photo->getOriginal('path_original'); // Сохраняем путь до удаления
+        $photoPath = $photo->path_original;
         
         $before = [
             'status' => $photo->getOriginal('status'), 
@@ -129,16 +114,11 @@ class ModeratePhotoAction
             ]
         ];
 
-        // ВАЖНО: Пишем лог ДО физического удаления, чтобы связь не сломалась
         AdminLog::record('photo.destroy', $photo, $admin, $before, $after, participants: [$userId]);
-
-        // Модель Photo удалит файлы через слушатель forceDeleting
         $photo->forceDelete();
+        $this->clearCaches();
     }
 
-        /**
-     * Мягкое удаление (перемещение в карантин).
-     */
     public function softDelete(Photo $photo, User $admin): void
     {
         $before = [
@@ -155,16 +135,14 @@ class ModeratePhotoAction
             'context' => [
                 'photo_id' => $photo->id,
                 'user_id' => $photo->user_id,
-                'url' => $photo->getOriginal('path_original')
+                'url' => $photo->path_original
             ]
         ];
 
         AdminLog::record('photo.soft_delete', $photo, $admin, $before, $after, participants: [$photo->user_id]);
+        $this->clearCaches();
     }
 
-    /**
-     * Восстановление из карантина (возвращение в очередь на модерацию).
-     */
     public function restore(Photo $photo, User $admin): void
     {
         $before = [
@@ -182,8 +160,6 @@ class ModeratePhotoAction
             ]);
         });
 
-        $photo->refresh();
-
         $after = [
             'status' => 'pending', 
             'restored_at' => now()->toDateTimeString(), 
@@ -191,18 +167,14 @@ class ModeratePhotoAction
             'context' => [
                 'photo_id' => $photo->id,
                 'user_id' => $photo->user_id,
-                'url' => $photo->getOriginal('path_original')
+                'url' => $photo->path_original
             ]
         ];
 
         AdminLog::record('photo.restore', $photo, $admin, $before, $after, participants: [$photo->user_id]);
-        Cache::forget('admin_sidebar_stats');
-        
+        $this->clearCaches();
     }
    
-    /**
-     * Сделать фото главным (аватаркой).
-     */
     public function setPrimary(Photo $photo, User $admin): void
     {
         $before = [
@@ -214,8 +186,6 @@ class ModeratePhotoAction
             Photo::where('user_id', $photo->user_id)->update(['is_primary' => false]);
             $photo->update(['is_primary' => true]);
         });
-
-        $photo->refresh();
         
         $after = [
             'is_primary' => true, 
@@ -223,16 +193,14 @@ class ModeratePhotoAction
             'context' => [
                 'photo_id' => $photo->id,
                 'user_id' => $photo->user_id,
-                'url' => $photo->getOriginal('path_original')
+                'url' => $photo->path_original
             ]
         ];
         
         AdminLog::record('photo.set_primary', $photo, $admin, $before, $after, participants: [$photo->user_id]);
+        $this->clearCaches();
     }
 
-    /**
-     * ОДОБРИТЬ ВСЕ фото конкретного юзера разом.
-     */
     public function approveAllForUser(User $user, User $admin): int
     {
         $photoIds = $user->photos()->where('status', 'pending')->pluck('id');
@@ -262,57 +230,73 @@ class ModeratePhotoAction
 
         $user->notify(new PhotoModerated($photoIds->first(), $user->id, 'approved', $count));
 
+        // Ограничиваем лог, чтобы не раздувать базу
+        $logIds = $photoIds->take(100)->toArray();
+        
         $after = [
             'status' => 'approved', 
             'count' => $count, 
-            'photo_ids' => $photoIds->toArray(), 
+            'sample_ids' => $logIds, 
             'moderated_by' => $admin->id,
-            'context' => [
-                'user_id' => $user->id
-            ]
+            'context' => ['user_id' => $user->id]
         ];
         
         AdminLog::record('photo.mass_approve', $user, $admin, $before, $after, participants: [$user->id]);
-        Cache::forget('admin_sidebar_stats');
-        
+        $this->clearCaches();
 
         return $count;
     }
 
-    /**
-     * ОТКЛОНИТЬ ВСЕ фото конкретного юзера разом (с карантином файлов).
-     */
     public function rejectAllForUser(User $user, User $admin): int
     {
-        $photos = $user->photos()->where('status', 'pending')->get();
+        // Берем только нужные поля для логики, чтобы не жрать память
+        $photos = $user->photos()->where('status', 'pending')->select(['id', 'is_primary', 'user_id'])->get();
         if ($photos->isEmpty()) return 0;
 
         $photoIds = $photos->pluck('id');
         $count = $photos->count();
         $before = ['status' => 'pending', 'count' => $count];
 
-        DB::transaction(function () use ($photos, $admin) {
-            foreach ($photos as $photo) {
-                $this->reject($photo, $admin, 'mass_reject');
+        $avatarRejected = $photos->contains(fn($p) => $p->is_primary);
+
+        DB::transaction(function () use ($photoIds, $admin, $user, $avatarRejected) {
+            Photo::whereIn('id', $photoIds)->update([
+                'status' => 'rejected',
+                'moderated_by' => $admin->id,
+                'moderated_at' => now(),
+                'reject_reason' => 'mass_reject',
+                'is_primary' => false,
+            ]);
+
+            if ($avatarRejected) {
+                $nextAvatar = $user->photos()->approved()->orderByDesc('is_primary')->oldest()->first();
+                if ($nextAvatar) {
+                    $nextAvatar->update(['is_primary' => true]);
+                }
             }
         });
 
         $user->notify(new PhotoModerated($photoIds->first(), $user->id, 'rejected', $count));
         
+        $logIds = $photoIds->take(100)->toArray();
+        
         $after = [
             'status' => 'rejected', 
             'count' => $count, 
-            'photo_ids' => $photoIds->toArray(), 
+            'sample_ids' => $logIds, 
             'reject_reason' => 'mass_reject',
-            'context' => [
-                'user_id' => $user->id
-            ]
+            'context' => ['user_id' => $user->id]
         ];
         
         AdminLog::record('photo.mass_reject', $user, $admin, $before, $after, participants: [$user->id]);
-        Cache::forget('admin_sidebar_stats');
-        
+        $this->clearCaches();
 
         return $count;
+    }
+
+    private function clearCaches(): void
+    {
+        Cache::forget('admin_sidebar_stats');
+        Cache::forget('admin_photo_counts');
     }
 }

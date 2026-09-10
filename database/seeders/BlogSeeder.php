@@ -40,7 +40,7 @@ class BlogSeeder extends Seeder
             // 10 ОПУБЛИКОВАННЫХ
             ['title' => 'Как составить идеальную анкету: 5 золотых правил', 'cat' => 'dating-tips', 'status' => 'published', 'featured' => true],
             ['title' => 'Почему мы выбираем не тех людей? Ошибка пьедестала', 'cat' => 'psychology', 'status' => 'published', 'featured' => false],
-            ['title' => 'Обновление: Видеозвонки и новые стикеры уже здесь!', 'cat' => 'updates', 'status' => 'published', 'featured' => true],
+            ['title' => 'Обновление: Видеозвонки и новые стикеры уже здесь!', 'cat' => 'updates', 'status' => 'published', 'featured' => false],
             ['title' => 'От первого свайпа до свадьбы: история Анны и Игоря', 'cat' => 'success-stories', 'status' => 'published', 'featured' => false],
             ['title' => 'Первое сообщение: как заинтриговать и не быть банальным', 'cat' => 'dating-tips', 'status' => 'published', 'featured' => false],
             ['title' => 'Тревожная привязанность в отношениях: как не разрушить любовь', 'cat' => 'psychology', 'status' => 'published', 'featured' => false],

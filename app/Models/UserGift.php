@@ -1,25 +1,5 @@
 <?php
 
-// UserGift — это лог транзакций между юзерами. Как мы помним из миграции, здесь заложен паттерн "Снапшот" 
-// (сохранение имени, картинки и цены на момент отправки), чтобы история не ломалась при изменении каталога админом.
-
-// Также мы добавили SoftDeletes, чтобы юзер мог убрать подарок со своей страницы (если ему прислали что-то пошлое), 
-// но в админке он остался для фин. отчетности.
-
-// Я использовал тот же гениальный паттерн с filter_var для картинки снапшота, чтобы мы могли безопасно отдавать 
-// её на фронт.
-
-// Разбор архитектуры:
-
-// Приоритет Снапшота: В аксессоре getImageUrlAttribute мы отдаем snapshot_image_url. 
-// Если админ через год поменяет картинку у "Мишки" в каталоге, то у всех юзеров, которым его дарили раньше, 
-// останется старая картинка. Это правильное поведение монетизации.
-// SoftDeletes: Если юзеру подарили оскорбительный подарок, он может нажать "Удалить". 
-// Подарок исчезнет с его страницы, но связь с sender_id и snapshot_price останется в БД (в корзине), 
-// чтобы саппорт мог разобраться, если юзер будет жаловаться на мошенничество.
-// markAsRead(): Используем микро-оптимизацию с проверкой if (!$this->is_read), как мы делали в ChatParticipant, 
-// чтобы не гонять лишние UPDATE запросы в БД, когда юзер просто открывает страницу подарков.
-
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
@@ -29,7 +9,7 @@ use Illuminate\Support\Facades\Storage;
 
 class UserGift extends Model
 {
-    use SoftDeletes; // Чтобы юзер мог "удалить" подарок со страницы, не ломая фин.логи
+    use SoftDeletes; 
 
     protected $fillable = [
         'sender_id',
@@ -55,14 +35,16 @@ class UserGift extends Model
     // СВЯЗИ
     // ============================================
 
+    // withTrashed() КРИТИЧЕСКИ ВАЖНО: Если отправитель удалит аккаунт, 
+    // получатель все равно должен видеть подарок в своей истории!
     public function sender(): BelongsTo
     {
-        return $this->belongsTo(User::class, 'sender_id');
+        return $this->belongsTo(User::class, 'sender_id')->withTrashed();
     }
 
     public function receiver(): BelongsTo
     {
-        return $this->belongsTo(User::class, 'receiver_id');
+        return $this->belongsTo(User::class, 'receiver_id')->withTrashed();
     }
 
     public function gift(): BelongsTo
@@ -74,43 +56,38 @@ class UserGift extends Model
     // СКОПЫ
     // ============================================
 
-    /**
-     * Только публичные подарки (для вывода в анкете юзера).
-     */
     public function scopePublic($query)
     {
         return $query->where('is_private', false);
     }
 
-    /**
-     * Только приватные подарки (видят только отправитель и получатель).
-     */
     public function scopePrivate($query)
     {
         return $query->where('is_private', true);
     }
 
-    /**
-     * Только непрочитанные подарки (для счетчика "Новые подарки").
-     */
     public function scopeUnread($query)
     {
         return $query->where('is_read', false);
+    }
+
+    public function scopeReceivedBy($query, int $userId)
+    {
+        return $query->where('receiver_id', $userId);
+    }
+
+    public function scopeSentBy($query, int $userId)
+    {
+        return $query->where('sender_id', $userId);
     }
 
     // ============================================
     // АКСЕССОРЫ
     // ============================================
 
-    /**
-     * URL картинки подарка.
-     * Всегда берем из СНЭПШОТА, чтобы история не ломалась при изменении каталога.
-     * Паттерн с filter_var работает так же, как в Photo и Gift.
-     */
     public function getImageUrlAttribute(): string
     {
         if (empty($this->snapshot_image_url)) {
-            // Фолбэк: если снапшота вдруг нет (что не должно случиться), берем из каталога
             return $this->gift?->image_url ?? '';
         }
 
@@ -125,17 +102,20 @@ class UserGift extends Model
     // ХЕЛПЕРЫ
     // ============================================
 
-    /**
-     * Пометить подарок как прочитанный.
-     * Оптимизация: обновляем БД только если он еще не прочитан.
-     */
-    public function markAsRead(): void
+      public function markAsRead(): void
     {
-        if (!$this->is_read) {
-            $this->update([
+        // ФИКС: Атомарный апдейт. Если 2 процесса кликнут, база обработает только 1.
+        $updated = $this->newQuery()
+            ->where('id', $this->id)
+            ->where('is_read', false)
+            ->update([
                 'is_read' => true,
                 'read_at' => now(),
             ]);
+
+        if ($updated) {
+            $this->is_read = true;
+            $this->read_at = now();
         }
     }
 }

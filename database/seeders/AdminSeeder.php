@@ -9,12 +9,19 @@ use App\Models\UserBalance;
 use App\Models\Album;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\DB;
 
 class AdminSeeder extends Seeder
 {
     public function run(): void
     {
         $this->command->info('👑 Создаем Владельцев проекта (Суперадминов)...');
+
+        $russia = DB::table('countries')->where('iso2', 'RU')->first();
+        $moscow = DB::table('cities')
+            ->where('country_id', $russia->id ?? 0)
+            ->whereIn('name', ['Moscow', 'Moskva', 'Москва'])
+            ->first();
 
         $founders = [
             [
@@ -32,116 +39,118 @@ class AdminSeeder extends Seeder
         $founderIds = [];
 
         foreach ($founders as $founderData) {
-            $admin = User::updateOrCreate(
-                ['email' => $founderData['email']],
-                [
-                    'name' => $founderData['name'],
-                    'password' => Hash::make($founderData['password']),
-                    'role' => 'admin', 
-                    'status' => 'active', 
-                    'is_premium' => true, 
-                    'premium_expires_at' => now()->addYears(10),
-                    'is_verified' => true,
-                    'has_completed_onboarding' => true,
-                    'last_login_at' => now(),
-                    'last_login_ip' => '127.0.0.1',
-                    'last_seen' => now(),
-                    'email_verified_at' => now(),
-                ]
-            );
+            
+            // Используем withoutEvents, чтобы избежать вызова User::booted() 
+            // и автоматического создания пустых профилей, которые могут вызывать ошибку с 'age'
+            $admin = User::withoutEvents(function () use ($founderData) {
+                return User::updateOrCreate(
+                    ['email' => $founderData['email']],
+                    [
+                        'name' => $founderData['name'],
+                        'password' => Hash::make($founderData['password']),
+                        'role' => User::ROLE_ADMIN,
+                        'status' => User::STATUS_ACTIVE,
+                        'premium_expires_at' => now()->addYears(10),
+                        'vip_expires_at' => now()->addYears(10),
+                        'is_verified' => true,
+                        'has_completed_onboarding' => true,
+                        'last_login_at' => now(),
+                        'last_login_ip' => '127.0.0.1',
+                        'last_seen' => now(),
+                        'email_verified_at' => now(),
+                    ]
+                );
+            });
+
+            // Теперь вручную и безопасно создаем все связи в транзакции
+            DB::transaction(function () use ($admin, $founderData, $russia, $moscow) {
+                
+                UserProfile::updateOrCreate(
+                    ['user_id' => $admin->id],
+                    [
+                        'gender' => 'male',
+                        'birth_date' => '1990-01-01', // Возраст вычислится сам через аксессор
+                        'dating_goal' => 'friends',
+                        'city_id' => $moscow->id ?? null, 
+                        'country_id' => $russia->id ?? null, 
+                        'headline' => $founderData['name'] . ' сайта',
+                        'bio' => 'Я тут главный! Если есть вопросы - пишите в поддержку. 😎',
+                        'looking_for' => 'Помогаем пользователям находить любовь ❤️',
+                        'interests' => ['разработка', 'управление', 'поддержка', 'путешествия'],
+                        'body_type' => 2,
+                        'eye_color' => 1,
+                        'hair_color' => 1,
+                        'height' => 180,
+                        'weight' => 80,
+                        'relationship_status' => 1,
+                        'children_status' => 1,
+                        'pets' => 1,
+                        'housing' => 1,
+                        'has_car' => 1,
+                        'smoking' => 1,
+                        'alcohol' => 1,
+                        'zodiac_sign' => 10, 
+                        'languages' => [1, 2], 
+                        'sports' => [1, 2],
+                        'education' => 'Высшее',                   
+                        'institution' => 'МГУ',
+                        'institution_year' => 2012,
+                        'activity' => 'IT',
+                        'position' => 'CEO',
+                    ]
+                );
+
+                UserPreference::updateOrCreate(
+                    ['user_id' => $admin->id],
+                    [
+                        'locale' => 'ru',
+                        'theme' => 'dark',
+                        'preferred_age_min' => 18,
+                        'preferred_age_max' => 99,
+                        'preferred_gender' => 'any',
+                        'preferred_distance_km' => 10000,
+                        'chat_filter_enabled' => false,
+                        'is_invisible' => false,
+                        'hide_intimate' => false,
+                        'disable_photo_comments' => false,
+                        'hide_from_search' => true, 
+                        'push_enabled' => true,
+                        'email_enabled' => true,
+                        'visibility_gender' => 'any',
+                        'visibility_age_min' => 18,
+                        'visibility_age_max' => 99,
+                        'push_auto_recommendations' => false,
+                        'email_auto_recommendations' => false,
+                        'allow_auto_messages' => false,
+                        'chat_widget_enabled' => true,
+                        'chat_sound_enabled' => true,
+                    ]
+                );
+
+                UserBalance::updateOrCreate(
+                    ['user_id' => $admin->id],
+                    [
+                        'credits' => 999999,
+                        'superlikes_remaining' => 999,
+                        'superlikes_reset_at' => now()->addDays(365),
+                    ]
+                );
+
+                Album::updateOrCreate(
+                    [
+                        'user_id' => $admin->id,
+                        'is_default' => true,
+                    ],
+                    [
+                        'name' => 'Фото владельца',
+                        'description' => 'Скрытые фотографии',
+                        'is_private' => false,
+                        'photos_count' => 0, 
+                    ]
+                );
+            });
 
             $founderIds[] = $admin->id;
-
-            UserProfile::updateOrCreate(
-                ['user_id' => $admin->id],
-                [
-                    'gender' => 'male',
-                    'birth_date' => '1990-01-01',
-                    'dating_goal' => 'friends',
-                    'city' => 'Москва',
-                    'country' => 'Россия',
-                    'headline' => $founderData['name'] . ' сайта',
-                    'bio' => 'Я тут главный! Если есть вопросы - пишите в поддержку. 😎',
-                    'looking_for' => 'Помогаем пользователям находить любовь ❤️',
-                    'interests' => ['разработка', 'управление', 'поддержка', 'путешествия'],
-                    'self_portrait' => null, 
-                    'body_type' => 2,
-                    'eye_color' => 1,
-                    'hair_color' => 1,
-                    'height' => 180,
-                    'weight' => 80,
-                    'relationship_status' => 1,
-                    'children_status' => 1,
-                    'pets' => 1,
-                    'housing' => 1,
-                    'has_car' => 1,
-                    'smoking' => 1,
-                    'alcohol' => 1,
-                    'zodiac_sign' => 10, 
-                    'body_decorations' => [],
-                    'languages' => [1, 2], 
-                    'sports' => [1, 2],
-                    'education' => 'Высшее',                   
-                    'institution' => 'МГУ',
-                    'institution_year' => 2012,
-                    'activity' => 'IT',
-                    'position' => 'CEO',
-                ]
-            );
-
-            UserPreference::updateOrCreate(
-                ['user_id' => $admin->id],
-                [
-                    'locale' => 'ru',
-                    'theme' => 'dark',
-                    'preferred_age_min' => 18,
-                    'preferred_age_max' => 99,
-                    'preferred_gender' => 'any',
-                    'preferred_distance_km' => 10000,
-                    'search_filters' => null, 
-                    'chat_filter_enabled' => false,
-                    'chat_filter_settings' => null,
-                    'is_invisible' => false,
-                    'hide_intimate' => false,
-                    'disable_photo_comments' => false,
-                    'hide_from_search' => true, 
-                    'push_enabled' => true,
-                    'email_enabled' => true,
-                    'email_settings' => [
-                        'on_message'    => true,
-                        'on_like'       => true,
-                        'on_view'       => true,
-                        'on_gift'       => true,
-                        'on_event'      => true, 
-                        'on_broadcast'  => true,
-                        'sub_new_faces' => false,
-                        'sub_popular'   => false,
-                    ],
-                ]
-            );
-
-            // ФИКС: Убраны boosts_remaining и boosts_reset_at
-            UserBalance::updateOrCreate(
-                ['user_id' => $admin->id],
-                [
-                    'credits' => 999999,
-                    'superlikes_remaining' => 999,
-                    'superlikes_reset_at' => now()->addDays(365),
-                ]
-            );
-
-            Album::updateOrCreate(
-                [
-                    'user_id' => $admin->id,
-                    'is_default' => true,
-                ],
-                [
-                    'name' => 'Фото владельца',
-                    'description' => 'Скрытые фотографии',
-                    'is_private' => false,
-                    'photos_count' => 0, 
-                ]
-            );
 
             $this->command->info("   ✅ Владелец создан:");
             $this->command->info("      📧 Email: {$founderData['email']}");

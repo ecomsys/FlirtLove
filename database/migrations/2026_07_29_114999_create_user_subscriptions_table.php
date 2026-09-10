@@ -12,23 +12,33 @@ return new class extends Migration {
             $table->foreignId('plan_id')->nullable()->constrained('subscription_plans')->nullOnDelete();
             $table->foreignId('transaction_id')->nullable()->constrained('transactions')->nullOnDelete();
 
-            // Кэшируем tier, чтобы знать, за что платил юзер, даже если тариф удалят
-            $table->enum('tier', ['premium', 'vip']); 
+            // Кэшируем tier (premium/vip). У юзера может быть 2 независимые записи.
+            $table->enum('tier', ['premium', 'vip'])->index(); 
             
             $table->timestamp('starts_at');
             $table->timestamp('ends_at');
             
-            // Логика автопродления (пока не используем, но поля есть)
+            // Логика автопродления
             $table->boolean('is_auto_renew')->default(false);
             $table->string('provider_subscription_id')->nullable()->index();
             
-            $table->string('status')->default('active')->index(); // active, canceled, expired, failed
+            // Перевели string в enum для скорости индексов и экономии места
+            $table->enum('status', ['active', 'canceled', 'expired', 'failed'])->default('active')->index();
             $table->timestamp('canceled_at')->nullable();
+            $table->timestamp('expires_notified_at')->nullable()->index(); 
             $table->timestamps();
             
-            $table->index(['user_id', 'status', 'ends_at']);
+            // === ИНДЕКСЫ ===
+            // Для моментальной проверки в middleware: 
+            // WHERE user_id = ? AND tier = 'vip' AND status = 'active' AND ends_at > now()
+            $table->index(['user_id', 'tier', 'status', 'ends_at']);
+            
+            // Для крона (сбор просроченных подписок):
+            // WHERE status = 'active' AND ends_at < now()
             $table->index(['status', 'ends_at']);
         });
     }
-    public function down(): void { Schema::dropIfExists('user_subscriptions'); }
+    public function down(): void { 
+        Schema::dropIfExists('user_subscriptions'); 
+    }
 };

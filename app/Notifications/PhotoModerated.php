@@ -9,38 +9,30 @@ use Illuminate\Notifications\Messages\MailMessage;
 use Illuminate\Notifications\Messages\BroadcastMessage;
 use Illuminate\Support\Facades\Log;
 
-// ТАБЛИЦА - КАК ОТСЫЛАЮТЬСЯ УВЕДОМЛЕНИЯ ?
-// Действие	    В кабинете БД   Email	      Push	       Почему
-// Одобрение	   ✅	       ✅        	✅	        Пользователь должен знать
-// Отклонение	   ✅	       ✅	        ✅	        Пользователь должен знать
-// Удаление        ✅	       ✅        	❌        	Важно, но не критично
-
 class PhotoModerated extends Notification implements ShouldQueue
 {
     use Queueable;
 
     public function __construct(
-        protected ?int $photoId,      // <-- Только ID (или null)
-        protected ?int $userId,       // <-- ID пользователя (для надежности)
+        protected ?int $photoId,
+        protected ?int $userId,
         protected string $status,
         protected int $count = 1
     ) {}
 
-    /**
-     *  Каналы доставки с учетом глобальных тумблеров и категорий
-     */
     public function via($notifiable): array
     {
-        $channels = ['database']; // В базу (колокольчик) пишем ВСЕГДА
+        $channels = ['database']; 
 
-        // Проверяем глобальный тумблер Email И категорию "Новые события" (on_event)
+        // БЕЗОПАСНАЯ проверка: если email_settings = null, используем пустой массив
+        $emailSettings = $notifiable->email_settings ?? [];
+        
         if ($notifiable->email_enabled 
-            && ($notifiable->email_settings['on_event'] ?? true) 
+            && ($emailSettings['on_event'] ?? true) 
             && in_array($this->status, ['approved', 'rejected', 'deleted'])) {
             $channels[] = 'mail';
         }
 
-        // Проверяем глобальный тумблер Push (только для approved/rejected)
         if ($notifiable->push_enabled && in_array($this->status, ['approved', 'rejected'])) {
             $channels[] = 'broadcast';
         }
@@ -135,9 +127,6 @@ class PhotoModerated extends Notification implements ShouldQueue
         };
     }
 
-    /**
-     * ЗАЩИТА ОЧЕРЕДИ
-     */
     public function failed(\Throwable $exception): void
     {
         Log::error("Не удалось отправить PhotoModerated (User: {$this->userId}, Photo: {$this->photoId}): " . $exception->getMessage());

@@ -34,7 +34,8 @@ new class extends Component
 
     private function getAvatarQuery(): \Closure
     {
-        return fn($q) => $q->withTrashed()->select('id', 'name', 'email', 'status', 'is_premium', 'premium_expires_at', 'last_seen')
+        // ФИКС: Убрали 'is_premium', добавили 'vip_expires_at'
+        return fn($q) => $q->withTrashed()->select('id', 'name', 'email', 'status', 'premium_expires_at', 'vip_expires_at', 'last_seen')
             ->with(['photos' => fn($sq) => $sq->select('id', 'user_id', 'is_primary', 'status', 'path_thumb')->orderByDesc('is_primary')->limit(1)]);
     }
 

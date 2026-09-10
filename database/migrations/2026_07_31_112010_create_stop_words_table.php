@@ -3,6 +3,7 @@
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\DB;
 
 return new class extends Migration
 {
@@ -11,33 +12,22 @@ return new class extends Migration
         Schema::create('stop_words', function (Blueprint $table) {
             $table->id();
             
-            // === САМО СЛОВО ИЛИ ФРАЗА ===
-            // Уникальное значение. Может быть как матерным словом, так и целой фразой ("пиши в тг")
-            // или регулярным выражением (например, для поиска номеров телефонов)
-            $table->string('word')->unique();
+            // Ограничил 255 символами для защиты от спама в БД, regex тоже влезет
+            $table->string('word', 255)->unique();
             
-            // === КАТЕГОРИЯ (Для группировки в админке) ===
-            // mat (мат), scam (мошенничество), prostitution (проституция), drugs (наркотики), contacts (контакты/тг)
-            $table->string('category')->default('mat')->index();
+            $table->string('category', 50)->default('mat')->index();
             
-            // === ДЕЙСТВИЕ СИСТЕМЫ (Что делать при нахождении) ===
-            // mask - заменить звездочками (для мата в чате)
-            // reject - отклонить текст целиком (при заполнении анкеты/имени)
-            // alert - пропустить, но кинуть алерт в fraud_alerts (для отслеживания мошенников)
             $table->enum('action', ['mask', 'reject', 'alert'])->default('mask');
-            
-            // На что заменять (если action = 'mask'). По умолчанию три звездочки
             $table->string('replacement', 10)->default('***');
             
-            // Флаг активности. Админ может временно выключить фильтр, не удаляя слова
             $table->boolean('is_active')->default(true);
             
             $table->timestamps();
-            
-            // === ИНДЕКСЫ ===
-            // Для вывода слов по категориям в админке
-            $table->index(['category', 'is_active']);
         });
+
+        // Киллер-фича: Partial Index.
+        // Воркер будет запрашивать только активные слова для кэша. Этот индекс будет весить копейки и работать мгновенно.
+        DB::statement("CREATE INDEX stop_words_active_category_index ON stop_words (category) WHERE is_active = true");
     }
 
     public function down(): void
@@ -45,7 +35,6 @@ return new class extends Migration
         Schema::dropIfExists('stop_words');
     }
 };
-
 
 // Стоп-слова — это базовый, но критически важный фильтр. В дейтинге 80% спамеров и мошенников используют 
 // стандартные фразы, номера телефонов и ссылки на мессенджеры.

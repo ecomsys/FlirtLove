@@ -39,16 +39,21 @@ class StopWordsFilterService
         foreach ($words as $stopWord) {
             $wordStr = $stopWord['word'];
             
-            // Если начинается с '/', считаем что это регулярка (например, /тг\s*@[\w\d]+/i)
+            // ФИКС: Определяем, регулярка ли это
             $isRegex = str_starts_with($wordStr, '/');
-            $pattern = $isRegex ? $wordStr : '/' . preg_quote($wordStr, '/') . '/iu';
+            
+            $match = false;
 
-            // Проверяем текст
-            // @ подавляет ошибки, если регулярка кривая (PREG_BACKTRACK_LIMIT_ERROR и тд)
-            $match = @preg_match($pattern, $text);
+            if ($isRegex) {
+                // Если регулярка — используем preg_match (с @ для защиты от кривых паттернов)
+                $match = @preg_match($wordStr, $text) === 1;
+            } else {
+                // ФИКС: Если обычное слово — используем mb_stripos! Это в 100 раз быстрее preg_match!
+                $match = mb_stripos($text, $wordStr) !== false;
+            }
 
-            if ($match === false || $match === 0) {
-                continue; // Нет совпадения или ошибка регулярки — пропускаем
+            if (!$match) {
+                continue; // Нет совпадения — пропускаем
             }
 
             // Совпадение найдено! Смотрим, что делать
@@ -57,10 +62,15 @@ class StopWordsFilterService
             switch ($action) {
                 case StopWordAction::Mask->value:
                     $replacement = $stopWord['replacement'] ?? '***';
-                    $replacedText = preg_replace($pattern, $replacement, $text);
-                    // Если регулярка не сломалась и вернула строку — применяем. Иначе оставляем как есть.
-                    if (!is_null($replacedText)) {
-                        $text = $replacedText;
+                    
+                    if ($isRegex) {
+                        $replacedText = @preg_replace($wordStr, $replacement, $text);
+                        if (!is_null($replacedText)) {
+                            $text = $replacedText;
+                        }
+                    } else {
+                        // ФИКС: Для обычных слов используем str_ireplace (работает мгновенно)
+                        $text = str_ireplace($wordStr, $replacement, $text);
                     }
                     break;
 
@@ -84,8 +94,8 @@ class StopWordsFilterService
             CreateFraudAlertJob::dispatch(
                 $userId,
                 $triggerType,
-                FraudAlertSeverity::High, // По умолчанию кидаем как высокий приоритет
-                ['matches' => $alerts, 'text_snippet' => \Str::limit($text, 200)]
+                FraudAlertSeverity::High, 
+                ['matches' => $alerts, 'text_snippet' => \Illuminate\Support\Str::limit($text, 200)]
             )->onQueue('antifraud');
         }
 

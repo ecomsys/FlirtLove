@@ -24,20 +24,25 @@ new #[Layout('layouts.admin')] class extends Component
 
     public bool $showBlockersModal = false;
     
-    /** @var int|null ID юзера, чьи блокировки смотрим в модалке */
     #[Url(as: 'view', except: '')]
     public ?int $viewingUserId = null;
 
-    /** @var string URL для кнопки "Назад" */
     public string $backUrl = '';
 
     public function mount(): void
     {
-        // ФИКС: Запоминаем URL "Назад" только при первой загрузке
+        abort_unless(in_array(auth()->user()?->role, [User::ROLE_ADMIN, User::ROLE_MODERATOR]), 403);
+
         $previousUrl = url()->previous();
         $this->backUrl = ($previousUrl && $previousUrl !== url()->current()) 
             ? $previousUrl 
             : route('admin.dashboard');
+    }
+
+    public function updatedThreshold(): void
+    {
+        $this->resetPage();
+        $this->clearComputedCache();
     }
 
     #[Computed]
@@ -45,21 +50,40 @@ new #[Layout('layouts.admin')] class extends Component
     {
         $avatarQuery = fn($q) => $q->select(['id', 'user_id', 'is_primary', 'status', 'path_thumb', 'path_medium', 'path_large', 'path_original'])->orderByDesc('is_primary')->limit(1);
 
-        return User::query()
-            ->withTrashed() 
-            ->where('role', 'user')
-            ->with(['photos' => $avatarQuery])
-            ->leftJoin('user_blocks', function ($join) {
-                $join->on('users.id', '=', 'user_blocks.blocked_id');
-            })
-            ->select('users.*')
-            ->selectRaw('COUNT(user_blocks.id) as total_blocks_count')
-            ->selectRaw('COUNT(CASE WHEN user_blocks.created_at >= ? THEN 1 END) as recent_blocks_count', [now()->subDays(7)])
-            ->groupBy('users.id')
-            ->havingRaw('COUNT(user_blocks.id) >= ?', [(int) $this->threshold])
+        // ШАГ 1: Группируем ТОЛЬКО таблицу user_blocks (по индексу). Это летает в PostgreSQL!
+        $blocksQuery = UserBlock::select('blocked_id')
+            ->selectRaw('COUNT(*) as total_blocks_count')
+            ->selectRaw('SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END) as recent_blocks_count', [now()->subDays(7)])
+            ->groupBy('blocked_id')
+            ->havingRaw('COUNT(*) >= ?', [(int) $this->threshold])
             ->orderByRaw('recent_blocks_count DESC')
-            ->orderByRaw('total_blocks_count DESC')
-            ->paginate(min(max($this->perPage, 10), 100));
+            ->orderByRaw('total_blocks_count DESC');
+
+        $paginatedBlocks = $blocksQuery->paginate(min(max($this->perPage, 10), 100));
+        
+        // ШАГ 2: Достаем ID юзеров из текущей страницы
+        $userIds = $paginatedBlocks->getCollection()->pluck('blocked_id')->filter()->toArray();
+        
+        // ШАГ 3: Загружаем юзеров (whereIn не грузит лишние строки)
+        $users = User::withTrashed()
+            ->where('role', User::ROLE_USER)
+            ->whereIn('id', $userIds)
+            ->with(['photos' => $avatarQuery])
+            ->get()
+            ->keyBy('id');
+
+        // ШАГ 4: Склеиваем юзеров со счетчиками блокировок
+        $paginatedBlocks->getCollection()->transform(function ($item) use ($users) {
+            $user = $users->get($item->blocked_id);
+            if ($user) {
+                $user->total_blocks_count = $item->total_blocks_count;
+                $user->recent_blocks_count = $item->recent_blocks_count;
+                return $user;
+            }
+            return null;
+        })->filter(); // Удаляем null (на случай, если юзер был физически удален из базы)
+
+        return $paginatedBlocks;
     }
 
     #[Computed]
@@ -69,12 +93,14 @@ new #[Layout('layouts.admin')] class extends Component
 
         $avatarQuery = fn($q) => $q->select(['id', 'user_id', 'is_primary', 'status', 'path_thumb', 'path_medium', 'path_large', 'path_original'])->orderByDesc('is_primary')->limit(1);
 
+        // ФИКС: ->limit(50) вместо ->get(), чтобы не вытащить 10000 строк в память, если юзера заблокировала толпа
         return UserBlock::where('blocked_id', $this->viewingUserId)
             ->with(['blocker' => fn($q) => $q->withTrashed()
-                ->select('id', 'name', 'email', 'status', 'is_premium', 'premium_expires_at', 'last_seen', 'deleted_at')
+                ->select('id', 'name', 'email', 'status', 'premium_expires_at', 'vip_expires_at', 'last_seen', 'deleted_at')
                 ->with(['photos' => $avatarQuery])
             ])
             ->latest()
+            ->limit(50)
             ->get();
     }
 
@@ -95,12 +121,17 @@ new #[Layout('layouts.admin')] class extends Component
         $user = User::withTrashed()->findOrFail($id);
         $action = app(ToggleUserBanAction::class);
         
-        // ФИКС: Формируем информативную причину с цифрами для истории
         $reason = "Сигнал блокировок: Всего {$totalBlocks}, За 7 дней: {$recentBlocks}";
         
-        $result = $action->execute($user, $reason, $type, true);
+        $result = $action->execute($user, auth()->user(), $reason, $type, true);
 
         $this->dispatch('show-toast', type: $result['success'] ? 'success' : 'error', message: $result['message']);
+        $this->clearComputedCache();
+    }
+
+    private function clearComputedCache(): void
+    {
+        unset($this->suspiciousUsers);
     }
 }; 
 ?>
@@ -256,12 +287,18 @@ new #[Layout('layouts.admin')] class extends Component
         {{ $this->suspiciousUsers->links('partials.pagination') }}
     </div>
 
+    <x-loading-overlay fixed="true" wire:loading.delay wire:key="overlay-loading-page"/>
+
     <!-- МОДАЛКА ПРОСМОТРА БЛОКИРОВОК -->
-    <div wire:key="blockers-modal-{{ $viewingUserId }}" x-data="{ open: false }" x-init="open = $wire.showBlockersModal" x-show="open" x-cloak
+    <div wire:key="blockers-modal-{{ $viewingUserId }}" 
+         x-data 
+         x-show="$wire.showBlockersModal" 
+         x-cloak
          x-transition:enter="ease-out duration-200"
          x-transition:enter-start="opacity-0 scale-95"
          x-transition:enter-end="opacity-100 scale-100"
          @click.self="$wire.closeBlockersModal()"
+         @keydown.escape.window="$wire.closeBlockersModal()"
          class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
         
         <div class="relative bg-card border border-border rounded-lg shadow-2xl max-w-lg w-full mx-4 overflow-hidden flex flex-col max-h-[80vh]">

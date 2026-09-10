@@ -4,6 +4,45 @@ use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
 
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::create('user_matches', function (Blueprint $table) {
+            $table->id();
+            
+            // === ГЛАВНОЕ ПРАВИЛО МЭТЧЕЙ ===
+            // user1_id ВСЕГДА меньше user2_id. Защита от дубликатов (5-10 и 10-5).
+            $table->foreignId('user1_id')->nullable()->constrained('users')->nullOnDelete();
+            $table->foreignId('user2_id')->nullable()->constrained('users')->nullOnDelete();
+            
+            // === СТАТУС МЭТЧЕЙ ===
+            $table->enum('status', ['active', 'unmatched'])->default('active')->index();
+            
+            // Кто инициировал разрыв (аналитика, саппорт)
+            $table->foreignId('unmatched_by')->nullable()->constrained('users')->nullOnDelete();
+            $table->timestamp('unmatched_at')->nullable();
+
+            $table->timestamps();
+
+            // === ИНДЕКСЫ ===
+
+            // 1. Защита от дубликатов пар (с учетом правила user1 < user2)
+            $table->unique(['user1_id', 'user2_id']);
+
+            // 2. КРИТИЧЕСКИ ВАЖНЫЕ ИНДЕКСЫ ДЛЯ ЛЕНТЫ МЭТЧЕЙ
+            // Запрос: WHERE user1_id = ? AND status = 'active' ORDER BY created_at DESC
+            // Добавили created_at, чтобы пагинация летала без сортировки в памяти (filesort)
+            $table->index(['user1_id', 'status', 'created_at']);
+            $table->index(['user2_id', 'status', 'created_at']);
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('user_matches');
+    }
+};
 
 // В будущем MatchService для кнопки "Лайк" !
 // try {
@@ -17,55 +56,6 @@ use Illuminate\Support\Facades\Schema;
 //         throw $e;
 //     }
 // }
-
-
-return new class extends Migration
-{
-    public function up(): void
-    {
-        Schema::create('user_matches', function (Blueprint $table) {
-            $table->id();
-            
-            // === ГЛАВНОЕ ПРАВИЛО МЭТЧЕЙ ===
-            // user1_id ВСЕГДА должен быть меньше user2_id (по ID в базе).
-            // Вася (ID 10) лайкнул Машу (ID 5). В БД пишем: user1_id = 5 (Маша), user2_id = 10 (Вася).
-            // Зачем? Чтобы не было дубликатов (запись 5-10 и 10-5). 
-            // Это правило мы будем жестко enforced в коде (в сервис-классе MatchService).
-            $table->foreignId('user1_id')->constrained('users')->nullable()->nullOnDelete();
-            $table->foreignId('user2_id')->constrained('users')->nullable()->nullOnDelete();
-            
-            // === СТАТУС МЭТЧЕЙ (Разрыв связи) ===
-            // active (мэтч активен, можно писать), unmatched (кто-то нажал "Разматчить")
-            $table->enum('status', ['active', 'unmatched'])->default('active');
-            
-            // Кто инициировал разрыв мэтча (для аналитики и саппорта, если кто-то пожалуется)
-            $table->foreignId('unmatched_by')->nullable()->constrained('users')->nullOnDelete();
-            $table->timestamp('unmatched_at')->nullable();
-
-            $table->timestamps();
-
-            // === ИНДЕКСЫ ===
-
-            // 1. Защита от дубликатов с учетом правила (user1 < user2).
-            // Это гарантирует, что пара юзеров будет иметь только одну запись о мэтче на всю историю.
-            $table->unique(['user1_id', 'user2_id']);
-
-            // 2. КРИТИЧЕСКИ ВАЖНО: Для быстрого поиска "Мои мэтчи"
-            // Когда юзер открывает экран "Мэтчи", запрос выглядит так:
-            // SELECT * FROM user_matches WHERE (user1_id = ? OR user2_id = ?) AND status = 'active'
-            // Без этих двух индексов база будет сканировать всю таблицу (Full Table Scan).
-            // Заменяем три одиночных индекса на два составных + один по статусу для админки
-            $table->index(['user1_id', 'status']);
-            $table->index(['user2_id', 'status']);
-        });
-    }
-
-    public function down(): void
-    {
-        Schema::dropIfExists('user_matches');
-    }
-};
-
 
 
 // Главные фишки этой структуры:

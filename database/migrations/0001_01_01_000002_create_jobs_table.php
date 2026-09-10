@@ -6,9 +6,6 @@ use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
-    /**
-     * Run the migrations.
-     */
     public function up(): void
     {
         Schema::create('jobs', function (Blueprint $table) {
@@ -19,6 +16,10 @@ return new class extends Migration
             $table->unsignedInteger('reserved_at')->nullable();
             $table->unsignedInteger('available_at');
             $table->unsignedInteger('created_at');
+
+            // КРИТИЧЕСКИ ВАЖНЫЙ ИНДЕКС ДЛЯ HIGH-LOAD!
+            // Воркер ищет: WHERE queue = X AND reserved_at IS NULL AND available_at <= Y
+            $table->index(['queue', 'reserved_at', 'available_at']);
         });
 
         Schema::create('job_batches', function (Blueprint $table) {
@@ -47,9 +48,6 @@ return new class extends Migration
         });
     }
 
-    /**
-     * Reverse the migrations.
-     */
     public function down(): void
     {
         Schema::dropIfExists('jobs');

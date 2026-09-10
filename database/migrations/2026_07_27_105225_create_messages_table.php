@@ -11,56 +11,35 @@ return new class extends Migration
         Schema::create('messages', function (Blueprint $table) {
             $table->id();
             
-            // === СВЯЗИ ===
-            // Ссылка на чат. Если чат удаляется, сообщения тоже летят в мусорку (cascade).
             $table->foreignId('chat_id')->constrained('chats')->cascadeOnDelete();
-            
-            // Кто отправил. nullable, потому что система может слать служебные сообщения 
-            // (например, "Вам мэтч!" или "Пользователь заблокировал вас"). 
-            // Без cascade! Если отправитель удалит аккаунт, переписка должна остаться у получателя.
             $table->foreignId('sender_id')->nullable()->constrained('users')->nullOnDelete(); 
             
-            // === КОНТЕНТ СООБЩЕНИЯ ===
-            // Тип: text, image (фото, пока скрыто на фронте), system (служебное), gift (подарок)
+            // === КОНТЕНТ ===
             $table->enum('type', ['text', 'image', 'system', 'gift'])->default('text');
-            
-            // Текст сообщения (или текст-пожелание к подарку). 
-            // Для image и gift может быть пустым.
             $table->text('body')->nullable();
-            
-            // Ссылка на вложение (картинка юзера ИЛИ URL подарка из каталога)
             $table->string('attachment_url')->nullable();
             
-            // Если это подарок (type=gift), ссылка на ID подарка в таблице gifts.
-            // nullOnDelete, чтобы если админ удалит подарок из каталога, сообщение не упало, а просто осталось без картинки.
             $table->foreignId('gift_id')->nullable()->constrained('gifts')->nullOnDelete(); 
 
-            // === МОДЕРАЦИЯ ВЛОЖЕНИЙ (Фоток в чате) ===
-            // Текстовые сообщения по умолчанию approved (чтобы чат не тормозил). 
-            // Если type=image, в сервис-классе мы принудительно ставим 'pending' и отдаем на проверку ИИ/админу.
+            // === МОДЕРАЦИЯ ===
             $table->enum('status', ['pending', 'approved', 'rejected'])->default('approved');
-            $table->string('reject_reason')->nullable(); // porn, scam, minor, ad
-            $table->foreignId('moderated_by')->nullable()->constrained('users')->nullOnDelete(); // Какой модератор заблокировал фотку
+            $table->string('reject_reason')->nullable(); 
+            $table->foreignId('moderated_by')->nullable()->constrained('users')->nullOnDelete(); 
             $table->timestamp('moderated_at')->nullable();
             
             $table->timestamps();
-            
-            // МЯГКОЕ УДАЛЕНИЕ КРИТИЧЕСКИ ВАЖНО! 
-            // Юзер жмет "Удалить сообщение у себя", мы ставим deleted_at. 
-            // Для службы безопасности и МВД сообщение остается в БД навсегда.
-            $table->softDeletes();
+            $table->softDeletes(); // Критически важно для СБ!
 
             // === ИНДЕКСЫ ===
 
-            // 1. Для пагинации переписки (самый важный индекс!). 
-            // Запрос: WHERE chat_id = ? ORDER BY created_at DESC
+            // 1. Для пагинации переписки
             $table->index(['chat_id', 'created_at']);
             
-            // 2. Для поиска всех сообщений конкретного юзера (если нужно посмотреть, что он вообще шлет)
-            $table->index('sender_id');
+            // 2. Для поиска сообщений юзера (с сортировкой по дате)
+            $table->index(['sender_id', 'created_at']);
             
-            // 3. Для очереди модерации в админке: найти все сообщения с картинками, ожидающие проверки
-            $table->index(['status', 'type']);
+            // 3. Для очереди модерации в админке (добавили created_at для сортировки)
+            $table->index(['status', 'type', 'created_at']);
         });
     }
 
@@ -69,7 +48,6 @@ return new class extends Migration
         Schema::dropIfExists('messages');
     }
 };
-
 // Разбор архитектуры (Полная безопасность):
 
 // Связь с подарками: Обрати внимание на gift_id. Если юзер шлет подарок, он падает сюда со type = 'gift'. 

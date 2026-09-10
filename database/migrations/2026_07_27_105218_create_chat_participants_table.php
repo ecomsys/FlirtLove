@@ -11,39 +11,27 @@ return new class extends Migration
         Schema::create('chat_participants', function (Blueprint $table) {
             $table->id();
             
-            // === СВЯЗИ ===
-            // Ссылка на чат. Если чат удаляется из БД, то и связи участников летят в мусорку (cascade).
             $table->foreignId('chat_id')->constrained('chats')->cascadeOnDelete();
-            
-            // Ссылка на юзера. Убрали cascade! Если юзер удаляет аккаунт, мы не должны 
-            // удалять чат для второго собеседника (чтобы он мог прочитать старую переписку).
-            $table->foreignId('user_id')->constrained('users')->nullable()->nullOnDelete();
+            $table->foreignId('user_id')->nullable()->constrained('users')->nullOnDelete();
 
-            // === СЧЕТЧИКИ И ВРЕМЯ (Денормализация) ===
-            // Сколько непрочитанных сообщений в этом чате у конкретно этого юзера.
-            // Считать через COUNT(*) WHERE read_at IS NULL при каждом открытии списка чатов — смерть для БД.
-            $table->unsignedInteger('unread_count')->default(0);
+            // BigInteger для защиты от переполнения счетчика
+            $table->unsignedBigInteger('unread_count')->default(0);
             
-            // Когда юзер последний раз открывал этот чат (чтобы пометить сообщения как прочитанные)
             $table->timestamp('last_read_at')->nullable();
 
-            // === НАСТРОЙКИ КОНКРЕТНОГО ДИАЛОГА ===
-            // Юзер нажал "Скрыть чат" (архивировать). Чат пропадает из списка, но не удаляется.
             $table->boolean('is_hidden')->default(false)->index(); 
-            // Юзер замьютил чат (отключил пуши от этого собеседника)
             $table->boolean('is_muted')->default(false);
-            // Юзер заблокировал собеседника в этом чате (не может писать, но история видна)
             $table->boolean('is_blocked')->default(false);
 
             $table->timestamps();
 
             // === ИНДЕКСЫ ===
 
-            // 1. Один юзер может быть участником одного чата только один раз (защита от дубликатов)
+            // 1. Защита от дубликатов
             $table->unique(['chat_id', 'user_id']);
             
-            // 2. Для вывода списка всех чатов конкретного юзера (экран "Мои диалоги")
-            $table->index('user_id');
+            // 2. Для вывода списка "Мои диалоги"
+            $table->index(['user_id', 'is_hidden']);
         });
     }
 
@@ -52,7 +40,6 @@ return new class extends Migration
         Schema::dropIfExists('chat_participants');
     }
 };
-
 
 // Разбор архитектуры:
 

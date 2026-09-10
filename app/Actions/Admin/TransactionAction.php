@@ -8,16 +8,19 @@ use App\Models\AdminLog;
 use App\Models\SubscriptionPlan;
 use App\Models\Transaction;
 use App\Models\UserSubscription;
+use App\Notifications\PaymentSuccessful;
+use App\Notifications\PaymentFailed;
 use App\Services\Payments\MockAcquiringService;
 use Illuminate\Support\Facades\Auth;
 
 class TransactionAction
 {
-    /**
-     * Ручная синхронизация статуса платежа с банком (для pending транзакций).
-     */
     public function syncWithBank(Transaction $transaction, MockAcquiringService $bank): array
     {
+        if (!$transaction->relationLoaded('user')) {
+            $transaction->load('user');
+        }
+
         $bankResponse = $bank->checkStatus($transaction);
 
         if ($bankResponse['status'] === 'success') {
@@ -35,10 +38,16 @@ class TransactionAction
                 elseif ($transaction->type === 'subscription' && isset($transaction->meta['plan_id'])) {
                     $plan = SubscriptionPlan::find($transaction->meta['plan_id']);
                     if ($plan) {
-                        $endsAt = now()->addDays($plan->duration_days);
+                        $user = $transaction->user;
+                        
+                        $expiresField = $plan->tier === 'premium' ? 'premium_expires_at' : 'vip_expires_at';
+                        $currentExpiry = $user->{$expiresField};
+                        
+                        $startFrom = ($currentExpiry && $currentExpiry->isFuture()) ? $currentExpiry : now();
+                        $endsAt = $startFrom->copy()->addDays($plan->duration_days);
                         
                         UserSubscription::create([
-                            'user_id' => $transaction->user->id,
+                            'user_id' => $user->id,
                             'plan_id' => $plan->id,
                             'transaction_id' => $transaction->id,
                             'tier' => $plan->tier,
@@ -47,13 +56,12 @@ class TransactionAction
                             'status' => 'active',
                         ]);
 
-                        if ($plan->tier === 'premium') {
-                            $transaction->user->update(['is_premium' => true, 'premium_expires_at' => $endsAt]);
-                        } elseif ($plan->tier === 'vip') {
-                            $transaction->user->update(['is_vip' => true, 'vip_expires_at' => $endsAt]);
-                        }
+                        $user->update([$expiresField => $endsAt]);
                     }
                 }
+
+                // ОТПРАВКА УВЕДОМЛЕНИЯ: Успешный платеж
+                $transaction->user->notify(new PaymentSuccessful($transaction->id, (float)$transaction->amount, $transaction->type));
             }
 
             $before = ['status' => $transaction->getOriginal('status')];
@@ -76,6 +84,11 @@ class TransactionAction
 
         $transaction->markAsFailed($bankResponse['message']);
         
+        // ОТПРАВКА УВЕДОМЛЕНИЯ: Ошибка платежа
+        if ($transaction->user) {
+            $transaction->user->notify(new PaymentFailed($transaction->id, (float)$transaction->amount, $bankResponse['message']));
+        }
+
         $before = ['status' => $transaction->getOriginal('status')];
         $after = [
             'status' => 'failed', 
@@ -93,9 +106,6 @@ class TransactionAction
         return ['success' => false, 'message' => 'Банк отклонил платеж: ' . $bankResponse['message']];
     }
 
-    /**
-     * Обработка возврата (Refund) - отправка в очередь.
-     */
     public function processRefund(Transaction $transaction, RefundReason $reason, ?string $comment = null): void
     {
         $before = ['status' => $transaction->getOriginal('status')];
@@ -123,6 +133,7 @@ class TransactionAction
 
         AdminLog::record('transaction.refund', $transaction, Auth::user(), $before, $after, participants: [$transaction->user_id]);
 
+        // Уведомление отсюда убрано! Оно вызовется в ProcessRefundJob, когда банк подтвердит возврат.
         ProcessRefundJob::dispatch($transaction->id);
     }
 }

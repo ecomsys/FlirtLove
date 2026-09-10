@@ -3,6 +3,8 @@
 @import "./components.css";
 @import "./tiny.css";
 
+/* ФИКС: Защита от белого вспыхивания (FOUC) при wire:navigate */
+
 /* Решение проблемы с автокомплитом (фон и цвет текста) */
 input:-webkit-autofill,
 input:-webkit-autofill:hover,

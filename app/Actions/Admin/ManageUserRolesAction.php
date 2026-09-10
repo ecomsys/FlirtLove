@@ -9,22 +9,21 @@ use Illuminate\Support\Facades\Log;
 
 class ManageUserRolesAction
 {
-    /**
-     * Повысить юзера до сотрудника.
-     */
     public function promote(User $user, string $newRole, User $admin): bool
     {
-        if (!in_array($newRole, ['admin', 'moderator', 'support'])) {
+        $validRoles = [User::ROLE_ADMIN, User::ROLE_MODERATOR, User::ROLE_SUPPORT];
+        if (!in_array($newRole, $validRoles)) {
             return false;
         }
 
         if ($user->isStaff()) {
-            return false; // Уже сотрудник
+            return false; 
         }
 
         $oldRole = $user->getOriginal('role');
+        
+        // ФИКС: Убрали refresh(), update() уже обновляет модель в памяти
         $user->update(['role' => $newRole]);
-        $user->refresh();
 
         $after = [
             'role' => $newRole, 
@@ -45,9 +44,6 @@ class ManageUserRolesAction
         return true;
     }
 
-    /**
-     * Понизить сотрудника до обычного юзера (с мгновенным логаутом).
-     */
     public function demote(User $user, User $admin): bool
     {
         if (!$user->isStaff()) {
@@ -55,19 +51,18 @@ class ManageUserRolesAction
         }
 
         $oldRole = $user->getOriginal('role');
-        $user->update(['role' => 'user']);
+        $user->update(['role' => User::ROLE_USER]);
 
-        // Моментальный логаут (убиваем все сессии)
         $sessionsKilled = DB::table('sessions')->where('user_id', $user->id)->delete();
 
         $after = [
-            'role' => 'user', 
+            'role' => User::ROLE_USER, 
             'demoted_by' => $admin->id,
             'context' => [
                 'user_id' => $user->id,
                 'user_name' => $user->name,
                 'old_role' => $oldRole,
-                'new_role' => 'user',
+                'new_role' => User::ROLE_USER,
                 'admin_id' => $admin->id,
                 'sessions_killed' => $sessionsKilled
             ]
@@ -80,22 +75,19 @@ class ManageUserRolesAction
         return true;
     }
 
-    /**
-     * Пакетное обновление ролей.
-     */
     public function batchUpdate(array $selectedRoles, User $admin, array $founderIds): int
     {
         $updatedCount = 0;
         $changedUserIds = [];
+        $validRoles = [User::ROLE_ADMIN, User::ROLE_MODERATOR, User::ROLE_SUPPORT];
 
-        DB::transaction(function () use ($selectedRoles, $admin, $founderIds, &$updatedCount, &$changedUserIds) {
+        DB::transaction(function () use ($selectedRoles, $admin, $founderIds, $validRoles, &$updatedCount, &$changedUserIds) {
             foreach ($selectedRoles as $userId => $newRole) {
-                if (!in_array($newRole, ['admin', 'moderator', 'support'])) continue;
+                if (!in_array($newRole, $validRoles)) continue;
 
                 $user = User::find($userId);
                 if (!$user || !$user->isStaff()) continue;
 
-                // Иммунитет для владельцев и себя
                 if (in_array($user->id, $founderIds) || $user->id === $admin->id) continue;
 
                 if ($user->role === $newRole) continue;
@@ -122,7 +114,6 @@ class ManageUserRolesAction
             }
         });
 
-        // Убиваем сессии у тех, чьи роли изменились
         if (!empty($changedUserIds)) {
             DB::table('sessions')->whereIn('user_id', $changedUserIds)->delete();
             Log::info("Массовое обновление ролей", ['admin_id' => $admin->id, 'affected_users' => $changedUserIds]);

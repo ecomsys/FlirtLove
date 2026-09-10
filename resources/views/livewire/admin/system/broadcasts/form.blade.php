@@ -54,7 +54,7 @@ new #[Layout('layouts.admin')] class extends Component
      * @param Broadcast|null $broadcast
      * @return void
      */
-    public function mount(?Broadcast $broadcast = null): void
+      public function mount(?Broadcast $broadcast = null): void
     {
         $previousUrl = url()->previous();
         $currentUrl = url()->current();
@@ -67,10 +67,9 @@ new #[Layout('layouts.admin')] class extends Component
             $this->editingId = $this->broadcast->id;
             $this->title = $this->broadcast->title;
             $this->type = $this->broadcast->type;
-            $this->message = $this->broadcast->message;
+            $this->message = $this->broadcast->message ?? '';
             $this->emailBody = $this->broadcast->email_body ?? '';
             
-            // Безопасное извлечение URL из JSON поля data
             $data = $this->broadcast->data ?? [];
             $this->actionUrl = $data['action_url'] ?? '';
             
@@ -80,12 +79,54 @@ new #[Layout('layouts.admin')] class extends Component
 
             if (isset($target['user_id'])) {
                 $this->selectedUserId = $target['user_id'];
-                // Ищем даже удаленных (withTrashed), чтобы получить имя
                 $this->selectedUserName = $target['user_name'] ?? User::withTrashed()->find($this->selectedUserId)?->name ?? 'Удаленный юзер';
             } else {
                 $this->filters = array_merge($this->filters, $target);
+                
+                // ФИКС: Приводим булевы значения к строкам для корректного отображения в Select-ах
+                if (isset($this->filters['is_premium'])) {
+                    $this->filters['is_premium'] = $this->filters['is_premium'] ? 'true' : 'false';
+                }
+                if (isset($this->filters['has_photo'])) {
+                    $this->filters['has_photo'] = $this->filters['has_photo'] ? 'true' : 'false';
+                }
             }
         }
+    }
+
+        /**
+     * Правила валидации данных.
+     * Использует conditional rules (required_if, required_unless) и prohibited_unless.
+     *
+     * @return array
+     */
+
+    protected function rules(): array
+    {
+        return [
+            'title' => 'required|string|max:255',
+            'message' => 'required_unless:type,email|string|max:5000',
+            'emailBody' => 'required_if:type,email|string|max:10000',
+            'type' => 'required|in:in_app,push,email',
+            'actionUrl' => 'nullable|url|max:500',
+            'scheduledDate' => 'nullable|date|after_or_equal:now|before_or_equal:' . now()->addYear()->toDateTimeString(),
+            'selectedUserId' => 'nullable|integer|exists:users,id', 
+            'filters.gender' => ['nullable', 'in:male,female', 'prohibited_unless:selectedUserId,null'],
+            'filters.is_premium' => ['nullable', 'in:true,false', 'prohibited_unless:selectedUserId,null'],
+            'filters.city' => ['nullable', 'string', 'max:100', 'prohibited_unless:selectedUserId,null'],
+            'filters.age_from' => [
+                'nullable', 'integer', 'min:18', 'max:99', 'prohibited_unless:selectedUserId,null',
+                function (string $attribute, mixed $value, \Closure $fail) {
+                    if (!empty($this->filters['age_to']) && $value > $this->filters['age_to']) {
+                        $fail('Возраст "от" не может быть больше возраста "до".');
+                    }
+                },
+            ],
+            'filters.age_to' => ['nullable', 'integer', 'min:18', 'max:99', 'prohibited_unless:selectedUserId,null'],
+            // ФИКС: Убрали filters.device_os, так как колонки в users больше нет
+            'filters.last_seen_days' => ['nullable', 'integer', 'in:3,7,30', 'prohibited_unless:selectedUserId,null'],
+            'filters.has_photo' => ['nullable', 'in:true,false', 'prohibited_unless:selectedUserId,null'],
+        ];
     }
 
         /**
@@ -100,41 +141,7 @@ new #[Layout('layouts.admin')] class extends Component
         }
     }
 
-    /**
-     * Правила валидации данных.
-     * Использует conditional rules (required_if, required_unless) и prohibited_unless.
-     *
-     * @return array
-     */
-    protected function rules(): array
-    {
-        return [
-            'title' => 'required|string|max:255',
-            'message' => 'required_unless:type,email|string|max:5000',
-            'emailBody' => 'required_if:type,email|string|max:10000',
-            'type' => 'required|in:in_app,push,email',
-            'actionUrl' => 'nullable|url|max:500',
-            'scheduledDate' => 'nullable|date|after_or_equal:now|before_or_equal:' . now()->addYear()->toDateTimeString(),
-            'selectedUserId' => 'nullable|integer|exists:users,id', 
-            'filters.gender' => ['nullable', 'in:male,female', 'prohibited_unless:selectedUserId,null'],
-            // РАЗРЕШАЕМ true И false
-            'filters.is_premium' => ['nullable', 'in:true,false', 'prohibited_unless:selectedUserId,null'],
-            'filters.city' => ['nullable', 'string', 'max:100', 'prohibited_unless:selectedUserId,null'],
-            'filters.age_from' => [
-                'nullable', 'integer', 'min:18', 'max:99', 'prohibited_unless:selectedUserId,null',
-                function (string $attribute, mixed $value, \Closure $fail) {
-                    if (!empty($this->filters['age_to']) && $value > $this->filters['age_to']) {
-                        $fail('Возраст "от" не может быть больше возраста "до".');
-                    }
-                },
-            ],
-            'filters.age_to' => ['nullable', 'integer', 'min:18', 'max:99', 'prohibited_unless:selectedUserId,null'],
-            'filters.device_os' => ['nullable', 'in:ios,android,web', 'prohibited_unless:selectedUserId,null'],
-            'filters.last_seen_days' => ['nullable', 'integer', 'in:3,7,30', 'prohibited_unless:selectedUserId,null'],
-            // РАЗРЕШАЕМ true И false
-            'filters.has_photo' => ['nullable', 'in:true,false', 'prohibited_unless:selectedUserId,null'],
-        ];
-    }
+
 
     /**
      * Обработчик события выбора юзера из дочернего компонента поиска.
@@ -262,6 +269,7 @@ new #[Layout('layouts.admin')] class extends Component
                     'user_name' => $this->selectedUserName,
                 ];
             } else {
+                // ФИКС: Жестко фильтруем null и пустые строки
                 $targetAudience = array_filter($this->filters, fn($value) => !is_null($value) && $value !== '');
                 
                 if (isset($targetAudience['is_premium'])) {
@@ -373,7 +381,7 @@ new #[Layout('layouts.admin')] class extends Component
             </a>
             <div class="flex flex-col gap-1">
                 <div class="flex items-center gap-2 text-sm text-muted-foreground">
-                    <a href="{{ route('admin.system.broadcasts.index') }}" wire:navigate class="hover:text-foreground transition-colors">Рассылки</a>
+                    <a href="{{ route('admin.system.broadcasts.index') }}" wire:navigate class="hover:text-foreground transition-colors">Назад к рассылкам</a>
                     <x-lucide-chevron-right class="w-4 h-4" />
                     <span>{{ $broadcast && $broadcast->exists ? 'Просмотр / Редактирование' : 'Создание' }}</span>
                 </div>
@@ -564,7 +572,7 @@ new #[Layout('layouts.admin')] class extends Component
                     <div class="flex flex-col gap-1">
                         <x-ui.label class="text-xs">Пол</x-ui.label>
                         <x-ui.select wire:model.live="filters.gender">
-                            <x-ui.select-trigger :disabled="$isLocked"><x-ui.select-value placeholder="Все" /></x-ui.select-trigger>
+                            <x-ui.select-trigger class="w-full" :disabled="$isLocked"><x-ui.select-value placeholder="Все" /></x-ui.select-trigger>
                             <x-ui.select-content>
                                 <x-ui.select-item value="">Все</x-ui.select-item>
                                 <x-ui.select-item value="male">Мужчины</x-ui.select-item>
@@ -578,7 +586,7 @@ new #[Layout('layouts.admin')] class extends Component
                     <div class="flex flex-col gap-1">
                         <x-ui.label class="text-xs">VIP статус</x-ui.label>
                         <x-ui.select wire:model.live="filters.is_premium">
-                            <x-ui.select-trigger :disabled="$isLocked"><x-ui.select-value placeholder="Все" /></x-ui.select-trigger>
+                            <x-ui.select-trigger class="w-full" :disabled="$isLocked"><x-ui.select-value placeholder="Все" /></x-ui.select-trigger>
                             <x-ui.select-content>
                                 <x-ui.select-item value="">Все</x-ui.select-item>
                                 <x-ui.select-item value="true">Только VIP</x-ui.select-item>
@@ -605,51 +613,38 @@ new #[Layout('layouts.admin')] class extends Component
                         </div>
                         @error('filters.age_from') <p class="text-xs text-destructive mt-1">{{ $message }}</p> @enderror
                         @error('filters.age_to') <p class="text-xs text-destructive mt-1">{{ $message }}</p> @enderror
-                    </div>
+                    </div>                   
 
-                    <!-- ОС устройства -->
-                    <div class="flex flex-col gap-1">
-                        <x-ui.label class="text-xs">ОС устройства</x-ui.label>
-                        <x-ui.select wire:model.live="filters.device_os">
-                            <x-ui.select-trigger :disabled="$isLocked"><x-ui.select-value placeholder="Все" /></x-ui.select-trigger>
-                            <x-ui.select-content>
-                                <x-ui.select-item value="">Все</x-ui.select-item>
-                                <x-ui.select-item value="ios">iOS</x-ui.select-item>
-                                <x-ui.select-item value="android">Android</x-ui.select-item>
-                                <x-ui.select-item value="web">Web</x-ui.select-item>
-                            </x-ui.select-content>
-                        </x-ui.select>
-                        @error('filters.device_os') <p class="text-xs text-destructive mt-1">{{ $message }}</p> @enderror
-                    </div>
+                   
+                        <!-- Активность -->
+                        <div class="flex flex-col gap-1">
+                            <x-ui.label class="text-xs">Не заходили</x-ui.label>
+                            <x-ui.select wire:model.live="filters.last_seen_days">
+                                <x-ui.select-trigger class="w-full" :disabled="$isLocked"><x-ui.select-value placeholder="Любая" /></x-ui.select-trigger>
+                                <x-ui.select-content>
+                                    <x-ui.select-item value="">Любая</x-ui.select-item>
+                                    <x-ui.select-item value="3">> 3 дней</x-ui.select-item>
+                                    <x-ui.select-item value="7">> 7 дней</x-ui.select-item>
+                                    <x-ui.select-item value="30">> 30 дней</x-ui.select-item>
+                                </x-ui.select-content>
+                            </x-ui.select>
+                            @error('filters.last_seen_days') <p class="text-xs text-destructive mt-1">{{ $message }}</p> @enderror
+                        </div>
 
-                    <!-- Активность -->
-                    <div class="flex flex-col gap-1">
-                        <x-ui.label class="text-xs">Не заходили</x-ui.label>
-                        <x-ui.select wire:model.live="filters.last_seen_days">
-                            <x-ui.select-trigger :disabled="$isLocked"><x-ui.select-value placeholder="Любая" /></x-ui.select-trigger>
-                            <x-ui.select-content>
-                                <x-ui.select-item value="">Любая</x-ui.select-item>
-                                <x-ui.select-item value="3">> 3 дней</x-ui.select-item>
-                                <x-ui.select-item value="7">> 7 дней</x-ui.select-item>
-                                <x-ui.select-item value="30">> 30 дней</x-ui.select-item>
-                            </x-ui.select-content>
-                        </x-ui.select>
-                        @error('filters.last_seen_days') <p class="text-xs text-destructive mt-1">{{ $message }}</p> @enderror
-                    </div>
-
-                    <!-- Фото -->
-                    <div class="flex flex-col gap-1 col-span-2">
-                        <x-ui.label class="text-xs">Наличие фото</x-ui.label>
-                        <x-ui.select wire:model.live="filters.has_photo">
-                            <x-ui.select-trigger :disabled="$isLocked"><x-ui.select-value placeholder="Любое" /></x-ui.select-trigger>
-                            <x-ui.select-content>
-                                <x-ui.select-item value="">Любое</x-ui.select-item>
-                                <x-ui.select-item value="true">С фото</x-ui.select-item>
-                                <x-ui.select-item value="false">Без фото</x-ui.select-item>
-                            </x-ui.select-content>
-                        </x-ui.select>
-                        @error('filters.has_photo') <p class="text-xs text-destructive mt-1">{{ $message }}</p> @enderror
-                    </div>
+                        <!-- Фото -->
+                        <div class="flex flex-col gap-1">
+                            <x-ui.label class="text-xs">Наличие фото</x-ui.label>
+                            <x-ui.select wire:model.live="filters.has_photo">
+                                <x-ui.select-trigger class="w-full" :disabled="$isLocked"><x-ui.select-value placeholder="Любое" /></x-ui.select-trigger>
+                                <x-ui.select-content>
+                                    <x-ui.select-item value="">Любое</x-ui.select-item>
+                                    <x-ui.select-item value="true">С фото</x-ui.select-item>
+                                    <x-ui.select-item value="false">Без фото</x-ui.select-item>
+                                </x-ui.select-content>
+                            </x-ui.select>
+                            @error('filters.has_photo') <p class="text-xs text-destructive mt-1">{{ $message }}</p> @enderror
+                        </div>
+                   
                 </div>
             </div>
         </div>
@@ -725,51 +720,8 @@ new #[Layout('layouts.admin')] class extends Component
     </div>
     @endif
 
-    <style>
-    .tinymce-wrapper .tox.tox-tinymce {
-        border: 1px solid var(--border) !important;
-        border-radius: 0.5rem !important;
-        height: 100% !important; 
-        display: flex !important;
-        flex-direction: column !important;
-    }
-    .tinymce-wrapper .tox .tox-editor-container {
-        flex: 1 !important;
-        display: flex !important;
-        flex-direction: column !important;
-    }
-    .tinymce-wrapper .tox .tox-edit-area {
-        flex: 1 !important;
-        border-top: none !important;
-    }
-    .tinymce-wrapper .tox .tox-toolbar-overlord,
-    .tinymce-wrapper .tox .tox-toolbar__primary {
-        background: var(--card) !important;
-        border-bottom: 0.625rem solid var(--border) !important;
-    }
-    .tinymce-wrapper .tox .tox-tbtn {
-        color: var(--muted-foreground) !important;
-    }
-    .tinymce-wrapper .tox .tox-tbtn svg {
-        fill: currentColor !important;
-    }
-    .tinymce-wrapper .tox .tox-tbtn:hover {
-        background: var(--accent) !important;
-        color: var(--accent-foreground) !important;
-    }
-    .tinymce-wrapper .tox .tox-tbtn--enabled,
-    .tinymce-wrapper .tox .tox-tbtn--enabled:hover {
-        background: var(--primary) !important;
-        color: var(--primary-foreground) !important;
-    }
-    .tinymce-wrapper .tox .tox-tbtn--select span {
-        color: var(--foreground) !important;
-    }       
-</style>
-
 <script src="https://cdn.jsdelivr.net/npm/tinymce@6.8.4/tinymce.min.js"></script>
 <script>
-    // ПРИНИМАЕМ ФЛАГ isLocked ИЗ ALPINE X-DATA
     window.broadcastForm = function (isLocked = false) {
         return {
             themeObserver: null,
@@ -777,7 +729,7 @@ new #[Layout('layouts.admin')] class extends Component
             isEditorLoaded: false,
             textareaElement: null,
             typingTimer: null, 
-            isLocked: isLocked, // СОХРАНЯЕМ ФЛАГ
+            isLocked: isLocked,
 
             init() {
                 this.$nextTick(() => {
@@ -845,7 +797,7 @@ new #[Layout('layouts.admin')] class extends Component
                     content_css: isDark ? 'dark' : 'default',
                     statusbar: false, 
                     placeholder: '',
-                    readonly: this.isLocked, // TINYMCE ПЕРЕВОДИТСЯ В РЕЖИМ ЧТЕНИЯ
+                    readonly: this.isLocked,
                     
                     content_style: `
                         body { 
@@ -874,7 +826,7 @@ new #[Layout('layouts.admin')] class extends Component
                         });
 
                         editor.on('input change keyup undo redo SetContent', () => {
-                            if (this.isLocked) return; // НЕ ОТПРАВЛЯЕМ ИЗМЕНЕНИЯ В LIVEWIRE ЕСЛИ ЗАБЛОКИРОВАНО
+                            if (this.isLocked) return;
                             
                             clearTimeout(this.typingTimer);
                             this.typingTimer = setTimeout(() => {
@@ -897,18 +849,26 @@ new #[Layout('layouts.admin')] class extends Component
             },
 
             setupThemeWatcher() {
+                // ФИКС: Наблюдаем только за атрибутом class, и проверяем ИМЕННО класс 'dark'
                 this.themeObserver = new MutationObserver((mutations) => {
-                    mutations.forEach((mutation) => {
+                    for (const mutation of mutations) {
                         if (mutation.attributeName === 'class') {
-                            const newTheme = this.getTheme();
-                            if (newTheme !== this.currentTheme) {
+                            const target = mutation.target;
+                            const isDarkNow = target.classList.contains('dark');
+                            
+                            if (isDarkNow && this.currentTheme !== 'dark') {
+                                this.currentTheme = 'dark';
+                                this.destroyTinyMCE();
+                                setTimeout(() => this.initTinyMCE(), 50);
+                            } else if (!isDarkNow && this.currentTheme !== 'light') {
+                                this.currentTheme = 'light';
                                 this.destroyTinyMCE();
                                 setTimeout(() => this.initTinyMCE(), 50);
                             }
                         }
-                    });
+                    }
                 });
-                this.themeObserver.observe(document.documentElement, { attributes: true });
+                this.themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
             },
 
             destroy() {

@@ -4,37 +4,31 @@ namespace App\Actions\Admin;
 
 use App\Models\AdminLog;
 use App\Models\User;
+use App\Notifications\UserDeleted;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class DeleteUserAction
 {
-    /**
-     * Мягкое удаление (деактивация) пользователя.
-     *
-     * @param User $user
-     * @param User $admin
-     * @param string|null $reason Причина удаления (для логов)
-     */
     public function execute(User $user, User $admin, ?string $reason = null): void
     {
         if ($user->isStaff()) {
-            return; // Защита от удаления админов
+            return; 
         }
 
         $before = [
             'status' => $user->getOriginal('status'), 
-            'is_premium' => $user->getOriginal('is_premium'), 
+            'premium_expires_at' => $user->getOriginal('premium_expires_at'),
             'deleted_at' => $user->getOriginal('deleted_at')
         ];
 
         DB::transaction(function () use ($user, $admin, $before, $reason) {
             $user->update([
                 'status' => 'deactivated',
-                'is_premium' => false,
                 'premium_expires_at' => null,
             ]);
             
-            $user->delete(); // Soft Delete
+            $user->delete(); 
 
             $after = [
                 'status' => 'deactivated', 
@@ -49,11 +43,15 @@ class DeleteUserAction
             
             AdminLog::record('user.delete', $user, $admin, $before, $after, participants: [$user->id]);
         });
+
+        // ФИКС: Отправляем уведомление ТОЛЬКО после успешного коммита транзакции!
+        try {
+            $user->notify(new UserDeleted());
+        } catch (\Exception $e) {
+            Log::error('Не удалось отправить уведомление об удалении аккаунта: ' . $e->getMessage());
+        }
     }
 
-        /**
-     * Восстановление деактивированного пользователя.
-     */
     public function restore(User $user, User $admin): void
     {
         if (!$user->trashed()) return;
@@ -65,7 +63,7 @@ class DeleteUserAction
 
         $user->restore();
         $user->update(['status' => 'active']);
-        $user->refresh();
+        // ФИКС: Убрали $user->refresh()
 
         $after = [
             'status' => 'active', 

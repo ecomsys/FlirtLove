@@ -2,26 +2,29 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class Broadcast extends Model
 {
+    // КОНСТАНТЫ ТИПОВ
+    public const TYPE_IN_APP = 'in_app';
+    public const TYPE_PUSH = 'push';
+    public const TYPE_EMAIL = 'email';
+
+    // КОНСТАНТЫ СТАТУСОВ
+    public const STATUS_DRAFT = 'draft';
+    public const STATUS_SCHEDULED = 'scheduled';
+    public const STATUS_SENDING = 'sending';
+    public const STATUS_SENT = 'sent';
+    public const STATUS_FAILED = 'failed';
+
     protected $fillable = [
-        'admin_id',          // кто отправил или заплпнировал
-        'type',              // in_app, push, email
-        'title',             // загловок  
-        'message',           // поле для пуш и колокольчика (обязательное)
-        'email_body',        // поле только для емейл - html (опциональное)
-        'data',              // JSON: deep links, иконки
-        'target_audience',   // JSON: фильтры сегментации
-        'status',            // draft, scheduled, sending, sent, failed
-        'scheduled_at',      // отправка запланировна на ...
-        'started_at',        // отправка началась ...
-        'sent_at',           // отправлено ...
-        'total_recipients',  // Счетчики статистики
-        'sent_count',        // кол-во отправленных 
-        'failed_count',      // кол-во упавших отправок
+        'admin_id', 'type', 'title', 'message', 'email_body',
+        'data', 'target_audience', 'status',
+        'scheduled_at', 'started_at', 'sent_at',
+        'total_recipients', 'sent_count', 'failed_count',
     ];
 
     protected $casts = [
@@ -39,108 +42,80 @@ class Broadcast extends Model
     // СВЯЗИ
     // ============================================
 
-    // Кто создал рассылку (админ/модератор)
     public function admin(): BelongsTo
     {
         return $this->belongsTo(User::class, 'admin_id');
     }
 
     // ============================================
-    // СКОПЫ (Для админки и крон-задач)
+    // СКОПЫ
     // ============================================
 
-    public function scopeDraft($query)
-    {
-        return $query->where('status', 'draft');
-    }
+    public function scopeDraft(Builder $query): Builder { return $query->where('status', self::STATUS_DRAFT); }
+    public function scopeScheduled(Builder $query): Builder { return $query->where('status', self::STATUS_SCHEDULED); }
+    public function scopeSending(Builder $query): Builder { return $query->where('status', self::STATUS_SENDING); }
+    public function scopeSent(Builder $query): Builder { return $query->where('status', self::STATUS_SENT); }
 
-    public function scopeScheduled($query)
+    public function scopeDueForDispatch(Builder $query): Builder
     {
-        return $query->where('status', 'scheduled');
-    }
-
-    public function scopeSending($query)
-    {
-        return $query->where('status', 'sending');
-    }
-
-    public function scopeSent($query)
-    {
-        return $query->where('status', 'sent');
-    }
-
-    /**
-     * КРИТИЧЕСКИ ВАЖНЫЙ СКОП ДЛЯ КРОНА:
-     * Найти все запланированные рассылки, время которых пришло.
-     */
-    public function scopeDueForDispatch($query)
-    {
-        return $query->where('status', 'scheduled')
+        return $query->where('status', self::STATUS_SCHEDULED)
             ->whereNotNull('scheduled_at')
             ->where('scheduled_at', '<=', now());
     }
 
     // ============================================
-    // ХЕЛПЕРЫ ЖИЗНЕННОГО ЦИКЛА (Для воркеров)
+    // ХЕЛПЕРЫ ЖИЗНЕННОГО ЦИКЛА
     // ============================================
 
-    /**
-     * Начать рассылку (блокируем от повторного запуска кроном).
-     */
     public function markAsSending(int $totalRecipients): bool
     {
         return $this->update([
-            'status' => 'sending',
+            'status' => self::STATUS_SENDING,
             'started_at' => now(),
             'total_recipients' => $totalRecipients,
         ]);
     }
 
-    /**
-     * Завершить рассылку успешно.
-     */
     public function markAsSent(): bool
     {
         return $this->update([
-            'status' => 'sent',
+            'status' => self::STATUS_SENT,
             'sent_at' => now(),
         ]);
     }
 
-    /**
-     * Отметить ошибку при рассылке.
-     */
     public function markAsFailed(): bool
     {
         return $this->update([
-            'status' => 'failed',
+            'status' => self::STATUS_FAILED,
             'sent_at' => now(),
         ]);
     }
 
     /**
-     * Увеличить счетчик успешных отправок (вызывается воркером на каждый пуш).
+     * НОВЫЙ: Батч-инкремент для успешных отправок.
+     * Вызывайте этот метод из воркера, передавая количество отправленных пушей (например, по 100 шт).
+     * Это спасет таблицу broadcasts от блокировок (Row Lock Contention) при рассылке на миллионы юзеров.
      */
-    public function incrementSent(): void
+    public function incrementSentBatch(int $count = 1): void
     {
-        $this->increment('sent_count');
+        $this->newQuery()->where('id', $this->id)->increment('sent_count', $count);
+        $this->sent_count += $count;
     }
 
     /**
-     * Увеличить счетчик ошибок (например, невалидный токен пуша).
+     * НОВЫЙ: Батч-инкремент для ошибок.
      */
-    public function incrementFailed(): void
+    public function incrementFailedBatch(int $count = 1): void
     {
-        $this->increment('failed_count');
+        $this->newQuery()->where('id', $this->id)->increment('failed_count', $count);
+        $this->failed_count += $count;
     }
 
     // ============================================
     // АКСЕССОРЫ
     // ============================================
 
-    /**
-     * Прогресс отправки в процентах (для UI админки).
-     */
     public function getProgressAttribute(): int
     {
         if ($this->total_recipients === 0) {
@@ -150,20 +125,21 @@ class Broadcast extends Model
         return (int) round((($this->sent_count + $this->failed_count) / $this->total_recipients) * 100);
     }
 
-     /**
-     * Возвращает массив частей аудитории для списока (UL > LI)
-     */
-       public function getAudiencePartsAttribute(): array
+    public function getAudiencePartsAttribute(): array
     {
         $audience = $this->target_audience ?? [];
         $parts = [];
 
+        $toBool = fn($val) => filter_var($val, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+
         if (!empty($audience['gender'])) {
             $parts[] = $audience['gender'] === 'male' ? 'Мужчины' : 'Женщины';
         }
+        
         if (isset($audience['is_premium'])) {
-            $parts[] = ($audience['is_premium'] === true || $audience['is_premium'] === 'true') ? 'VIP' : 'Без VIP';
+            $parts[] = $toBool($audience['is_premium']) ? 'VIP' : 'Без VIP';
         }
+        
         if (!empty($audience['city'])) {
             $parts[] = 'Город: ' . $audience['city'];
         }
@@ -179,19 +155,18 @@ class Broadcast extends Model
             $osMap = ['ios' => 'iOS', 'android' => 'Android', 'web' => 'Web'];
             $parts[] = $osMap[$audience['device_os']] ?? $audience['device_os'];
         }
+        
         if (!empty($audience['last_seen_days'])) {
             $parts[] = 'неактивные >' . $audience['last_seen_days'] . 'д';
         }
+        
         if (isset($audience['has_photo'])) {
-            $parts[] = ($audience['has_photo'] === true || $audience['has_photo'] === 'true') ? 'с фото' : 'без фото';
+            $parts[] = $toBool($audience['has_photo']) ? 'с фото' : 'без фото';
         }
 
         return $parts;
     }
 
-    /**
-     * Возвращает строку аудитории (используется для title="" и одиночного юзера)
-     */
     public function getAudienceLabelAttribute(): string
     {
         $audience = $this->target_audience ?? [];
@@ -204,7 +179,6 @@ class Broadcast extends Model
         return empty($parts) ? 'Все пользователи' : implode(', ', $parts);
     }
 }
-
 
 // scopeDueForDispatch: Это спаситель от багов. Крон запускается каждую минуту.
 // Если рассылка занимает 5 минут, без этого скоупа (и статуса sending) крон запустил бы рассылку 5 раз подряд, 

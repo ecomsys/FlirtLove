@@ -3,6 +3,7 @@
 use App\Actions\Admin\BroadcastsAction;
 use App\Models\Broadcast;
 use App\Models\User;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Livewire\Attributes\Computed;
@@ -16,10 +17,7 @@ new #[Layout('layouts.admin')] class extends Component
 {
     use WithPagination;
 
-    /** @var array Выбранные чекбоксами рассылки для массового удаления */
     public array $selectedBroadcasts = [];
-    
-    /** @var bool Состояние чекбокса "Выбрать все на странице" */
     public bool $selectAll = false;
     
     #[Url(as: 'date_from', except: '')] 
@@ -28,22 +26,17 @@ new #[Layout('layouts.admin')] class extends Component
     #[Url(as: 'date_to', except: '')] 
     public ?string $dateTo = null;
     
-    /** @var string Поиск (по названию, тексту или ID) */
     #[Url(as: 'q', except: '')]
     public string $search = '';
     
-    /** @var string Фильтр статуса */
-    #[Url(as: 'status', except: 'draft')]
-    public string $statusFilter = 'draft';
+    #[Url(as: 'status', except: 'all')]
+    public string $statusFilter = 'all';
     
-    /** @var string Фильтр типа */
     #[Url(as: 'type', except: 'all')]
     public string $typeFilter = 'all';
     
-    /** @var int Количество записей на страницу */
     public int $perPage = 10;
 
-    /** @var string URL для кнопки "Назад" */
     public string $backUrl = '';
 
     // === ХУКИ ОБНОВЛЕНИЯ ФИЛЬТРОВ ===
@@ -53,8 +46,8 @@ new #[Layout('layouts.admin')] class extends Component
         $this->resetPage(); 
         $this->clearComputedCache(); 
 
-        // Умная подсветка вкладки при ручном вводе ID
-        if (is_numeric($this->search) && !empty($this->search)) {
+        // ФИКС: ctype_digit
+        if (ctype_digit($this->search) && !empty($this->search)) {
             $broadcast = Broadcast::find((int) $this->search);
             if ($broadcast) {
                 $this->statusFilter = $broadcast->status;
@@ -64,22 +57,28 @@ new #[Layout('layouts.admin')] class extends Component
         }
     }
 
-    // ФИКС: Очищаем поиск при смене любого фильтра
     public function updatedStatusFilter(): void { $this->search = ''; $this->resetPage(); $this->clearComputedCache(); }   
     public function updatedTypeFilter(): void { $this->search = ''; $this->resetPage(); $this->clearComputedCache(); }
-    public function updatingDateFrom(): void { $this->search = ''; $this->resetPage(); $this->clearComputedCache(); }
-    public function updatingDateTo(): void { $this->search = ''; $this->resetPage(); $this->clearComputedCache(); }
+    
+    // ФИКС: Изменили updating на updated, чтобы дата успела обновиться перед сбросом страницы
+    public function updatedDateFrom(): void { $this->search = ''; $this->resetPage(); $this->clearComputedCache(); }
+    public function updatedDateTo(): void { $this->search = ''; $this->resetPage(); $this->clearComputedCache(); }
+
+    // ФИКС: Обязательный хук для сброса кэша пагинации
+    public function updatedPage(): void
+    {
+        $this->clearComputedCache();
+    }
 
     public function mount(): void
     {
-        // ФИКС: Запоминаем URL "Назад" только при первой загрузке
         $previousUrl = url()->previous();
         $this->backUrl = ($previousUrl && $previousUrl !== url()->current()) 
             ? $previousUrl 
             : route('admin.dashboard');
 
-        // Умный поиск: если пришли по прямой ссылке ?q=123, автоматически переключаем вкладку
-        if (!empty($this->search) && is_numeric($this->search)) {
+        // ФИКС: ctype_digit
+        if (!empty($this->search) && ctype_digit($this->search)) {
             $broadcast = Broadcast::find((int) $this->search);
             if ($broadcast) {
                 $this->statusFilter = $broadcast->status;
@@ -87,9 +86,6 @@ new #[Layout('layouts.admin')] class extends Component
         }
     }
 
-    /**
-     * Очистка строки поиска.
-     */
     public function clearSearch(): void
     {
         $this->search = '';
@@ -97,9 +93,6 @@ new #[Layout('layouts.admin')] class extends Component
         $this->clearComputedCache();
     }
 
-    /**
-     * Обработка изменения галки "Выбрать все".
-     */
     public function updatedSelectAll(): void
     {
         if ($this->selectAll) {
@@ -109,12 +102,10 @@ new #[Layout('layouts.admin')] class extends Component
         }
     }
 
-    // === ДЕЙСТВИЯ (ДЕЛЕГИРУЕМ В ACTION) ===
-
     public function setStatusFilter(string $status): void
     {
         $this->statusFilter = $status;
-        $this->search = ''; // ФИКС: Очищаем поиск
+        $this->search = '';
         $this->resetPage();
         $this->clearComputedCache();
     }
@@ -132,7 +123,6 @@ new #[Layout('layouts.admin')] class extends Component
     public function sendNow(int $id, BroadcastsAction $action): void
     {
         $result = $action->sendNow($id, auth()->user());
-        
         $this->dispatch('show-toast', type: $result['success'] ? 'success' : 'info', message: $result['message']);
         
         if ($result['success']) {
@@ -155,7 +145,6 @@ new #[Layout('layouts.admin')] class extends Component
     public function deleteBroadcast(int $id, BroadcastsAction $action): void
     {
         $result = $action->deleteBroadcast($id, auth()->user());
-        
         $this->dispatch('show-toast', type: $result['success'] ? 'success' : 'error', message: $result['message']);
         
         if ($result['success']) {
@@ -200,32 +189,32 @@ new #[Layout('layouts.admin')] class extends Component
 
     // === ВЫЧИСЛЯЕМЫЕ СВОЙСТВА (DATA SOURCE) ===
 
-       #[Computed]
+    #[Computed]
     public function broadcasts()
     {
-        $avatarQuery = fn($q) => $q->select(['user_id', 'is_primary', 'path_thumb', 'path_medium'])
+        $avatarQuery = fn($q) => $q->select(['id', 'user_id', 'is_primary', 'status', 'path_thumb', 'path_medium'])
                                   ->orderByDesc('is_primary')
                                   ->limit(1);
 
         $operator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
+        $isId = !empty($this->search) && ctype_digit($this->search);
 
         $paginated = Broadcast::query()
-            // ФИКС 1: withTrashed() для админа-автора рассылки
             ->with(['admin' => fn($q) => $q->withTrashed()->select('id', 'name', 'email', 'last_seen')->with(['photos' => $avatarQuery])])
-            ->when($this->search, function ($query) use ($operator) {
+            ->when($this->search, function ($query) use ($operator, $isId) {
                 $search = '%' . $this->search . '%';
-                $query->where(function ($q) use ($search, $operator) {
+                $query->where(function ($q) use ($search, $operator, $isId) {
                     $q->where('title', $operator, $search)
                       ->orWhere('message', $operator, $search);
-                    if (is_numeric($this->search)) {
+                    if ($isId) {
                         $q->orWhere('id', (int) $this->search);
                     }
                 });
             })
             ->when($this->statusFilter !== 'all', fn($q) => $q->where('status', $this->statusFilter))
             ->when($this->typeFilter !== 'all', fn($q) => $q->where('type', $this->typeFilter))
-            ->when($this->dateFrom, fn($q) => $q->whereDate('created_at', '>=', $this->dateFrom))
-            ->when($this->dateTo, fn($q) => $q->whereDate('created_at', '<=', $this->dateTo))
+            ->when($this->dateFrom, fn($q) => $q->where('created_at', '>=', \Carbon\Carbon::parse($this->dateFrom)->startOfDay()))
+            ->when($this->dateTo, fn($q) => $q->where('created_at', '<=', \Carbon\Carbon::parse($this->dateTo)->endOfDay()))
             ->latest('created_at')
             ->paginate($this->perPage);
 
@@ -237,9 +226,8 @@ new #[Layout('layouts.admin')] class extends Component
             ->all();
 
         if (!empty($targetUserIds)) {
-            // ФИКС 2: withTrashed() для юзера-получателя рассылки
             $targetUsers = User::with(['photos' => $avatarQuery])
-                ->withTrashed() // <-- ВОТ ЭТО ДОБАВИЛИ
+                ->withTrashed()
                 ->whereIn('id', $targetUserIds)
                 ->get()
                 ->keyBy('id');
@@ -253,8 +241,8 @@ new #[Layout('layouts.admin')] class extends Component
         return $paginated;
     }
 
-    #[Computed]
-    public function counts(): array
+    // ФИКС: Перенесли счетчики в with(). Они будут 100% свежими на каждый wire:poll
+    public function with(): array
     {
         $counts = Broadcast::select('status', DB::raw('count(*) as total'))
             ->groupBy('status')
@@ -262,22 +250,28 @@ new #[Layout('layouts.admin')] class extends Component
             ->toArray();
 
         return [
-            'draft' => $counts['draft'] ?? 0,
-            'scheduled' => $counts['scheduled'] ?? 0,
-            'sending' => $counts['sending'] ?? 0,
-            'sent' => $counts['sent'] ?? 0,
-            'failed' => $counts['failed'] ?? 0,
-            'total' => array_sum($counts),
+            'broadcasts' => $this->broadcasts,
+            'counts' => [
+                'draft' => $counts['draft'] ?? 0,
+                'scheduled' => $counts['scheduled'] ?? 0,
+                'sending' => $counts['sending'] ?? 0,
+                'sent' => $counts['sent'] ?? 0,
+                'failed' => $counts['failed'] ?? 0,
+                'total' => array_sum($counts),
+            ]
         ];
     }
 
     private function clearComputedCache(): void
     {
         unset($this->broadcasts);
-        unset($this->counts);
+        // unset($this->counts) убрали, так как теперь counts передается через with()
     }
+
+
 }; 
 ?>
+
 
 <div class="space-y-6 pb-6">
     <!-- Заголовок страницы -->
@@ -289,8 +283,9 @@ new #[Layout('layouts.admin')] class extends Component
             <h1 class="text-2xl font-semibold flex items-center gap-2">
                 <x-lucide-radio class="w-6 h-6" />
                 Рассылка уведомлений
-                @if ($this->counts['draft'] > 0)
-                    <x-ui.badge variant="warning" size="sm">{{ $this->counts['draft'] }} черновиков</x-ui.badge>
+               <!-- Стало -->
+                @if ($counts['draft'] > 0)
+                    <x-ui.badge variant="warning" size="sm">{{ $counts['draft'] }} черновиков</x-ui.badge>
                 @endif
             </h1>
         </div>
@@ -368,27 +363,31 @@ new #[Layout('layouts.admin')] class extends Component
     <!-- Кнопки фильтрации по статусам -->
     <div class="flex flex-wrap gap-1.5">
         <x-ui.button wire:click="setStatusFilter('all')" variant="{{ $statusFilter === 'all' ? 'default' : 'secondary' }}" size="sm">
-            Все <x-ui.badge size="xs">{{ $this->counts['total'] }}</x-ui.badge>
+            Все <x-ui.badge size="xs">{{ $counts['total'] }}</x-ui.badge>
         </x-ui.button>
         <x-ui.button wire:click="setStatusFilter('draft')" variant="{{ $statusFilter === 'draft' ? 'default' : 'secondary' }}" size="sm">
-            Черновики <x-ui.badge size="xs" variant="warning">{{ $this->counts['draft'] }}</x-ui.badge>
+            Черновики <x-ui.badge size="xs" variant="warning">{{ $counts['draft'] }}</x-ui.badge>
         </x-ui.button>
         <x-ui.button wire:click="setStatusFilter('scheduled')" variant="{{ $statusFilter === 'scheduled' ? 'default' : 'secondary' }}" size="sm">
-            Запланированы <x-ui.badge size="xs" variant="info">{{ $this->counts['scheduled'] }}</x-ui.badge>
+            Запланированы <x-ui.badge size="xs" variant="info">{{ $counts['scheduled'] }}</x-ui.badge>
         </x-ui.button>
         <x-ui.button wire:click="setStatusFilter('sending')" variant="{{ $statusFilter === 'sending' ? 'default' : 'secondary' }}" size="sm">
-            В процессе <x-ui.badge size="xs" variant="info">{{ $this->counts['sending'] }}</x-ui.badge>
+            В процессе <x-ui.badge size="xs" variant="info">{{ $counts['sending'] }}</x-ui.badge>
         </x-ui.button>
         <x-ui.button wire:click="setStatusFilter('sent')" variant="{{ $statusFilter === 'sent' ? 'default' : 'secondary' }}" size="sm">
-            Отправлены <x-ui.badge size="xs" variant="success">{{ $this->counts['sent'] }}</x-ui.badge>
+            Отправлены <x-ui.badge size="xs" variant="success">{{ $counts['sent'] }}</x-ui.badge>
         </x-ui.button>
         <x-ui.button wire:click="setStatusFilter('failed')" variant="{{ $statusFilter === 'failed' ? 'default' : 'secondary' }}" size="sm">
-            Ошибки <x-ui.badge size="xs" variant="destructive">{{ $this->counts['failed'] }}</x-ui.badge>
+            Ошибки <x-ui.badge size="xs" variant="destructive">{{ $counts['failed'] }}</x-ui.badge>
         </x-ui.button>
     </div>
 
-    <!-- Таблица рассылок. Polling (2s) активируется только если есть рассылки в статусе 'sending' -->
-    <x-ui.table :poll="($this->counts['sending'] > 0 || $this->counts['scheduled'] > 0) ? '2s' : false" >
+  @php
+    $pollAttribute = ($counts['sending'] > 0) ? 'wire:poll.5s="$refresh"' : '';
+@endphp
+
+<div {!! $pollAttribute !!}>
+    <x-ui.table>
         <x-ui.table-header>
             <x-ui.table-row>
                 <x-ui.table-head class="w-8"><x-checkbox wire:model.live="selectAll" /></x-ui.table-head>
@@ -406,12 +405,11 @@ new #[Layout('layouts.admin')] class extends Component
 
         <x-ui.table-body>
             @forelse ($this->broadcasts as $broadcast)
-                @php 
-                    $isHighlighted = is_numeric($this->search) && $broadcast->id == (int)$this->search; 
-                @endphp
+                @php $isHighlighted = ctype_digit($this->search) && $broadcast->id == (int)$this->search; @endphp
+                
                 <x-ui.table-row 
-                    wire:key="broadcast-row-{{ $broadcast->id }}" 
-                    class="{{ in_array($broadcast->id, array_map('intval', $this->selectedBroadcasts)) ? 'bg-muted/50' : '' }} {{ $isHighlighted ? 'bg-blue-500/10 ring-2 ring-blue-500/50' : '' }}"
+                    wire:key="broadcast-row-{{ $broadcast->id }}"                     
+                    class="{{ in_array((string)$broadcast->id, $this->selectedBroadcasts) ? 'bg-muted/50' : '' }} {{ $isHighlighted ? 'bg-blue-500/10 ring-2 ring-blue-500/50' : '' }}"
                     x-data="{ isHi: {{ $isHighlighted ? 'true' : 'false' }} }"
                     x-init="isHi && setTimeout(() => { $el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 200)"
                 >             
@@ -469,9 +467,10 @@ new #[Layout('layouts.admin')] class extends Component
                         @else
                             <ul class="text-sm whitespace-normal flex gap-2 flex-wrap" title="{{ $broadcast->audience_label }}">
                                 @forelse ($broadcast->audience_parts as $part)
-                                    <li class="border border-border rounded-sm p-2 bg-card text-card-foreground whitespace-nowrap">{{ $part }}</li>
+                                    {{-- ФИКС: Добавлен wire:key --}}
+                                    <li class="border border-border rounded-sm p-2 bg-card text-card-foreground whitespace-nowrap" wire:key="part-{{ $loop->iteration }}">{{ $part }}</li>
                                 @empty
-                                    <li class="border border-border rounded-sm p-2 bg-card text-card-foreground ">Все пользователи</li>
+                                    <li class="border border-border rounded-sm p-2 bg-card text-card-foreground " wire:key="part-empty">Все пользователи</li>
                                 @endforelse
                             </ul>
                         @endif
@@ -595,22 +594,19 @@ new #[Layout('layouts.admin')] class extends Component
                         </div>
                     </x-ui.table-cell>
                 </x-ui.table-row>
-            @empty
-                <x-ui.table-row>
-                    <x-ui.table-cell colspan="10" class="py-12 text-center text-muted-foreground bg-card">
-                        <x-ui.empty>
-                            <x-ui.empty-header>
-                                <x-ui.empty-media variant="icon">
-                                    <x-lucide-radio class="w-12 h-12 opacity-30" />
-                                </x-ui.empty-media>
-                                <x-ui.empty-title>Нет рассылок</x-ui.empty-title>       
-                            </x-ui.empty-header>    
-                        </x-ui.empty>                                                                        
+           @empty
+                <x-ui.table-row wire:key="empty-state">
+                    <x-ui.table-cell colspan="10" class="py-12 text-center text-muted-foreground">
+                        <x-lucide-radio class="w-12 h-12 opacity-30 mx-auto mb-2" />
+                        <p>Нет рассылок</p>
                     </x-ui.table-cell>
                 </x-ui.table-row>
             @endforelse
         </x-ui.table-body>
     </x-ui.table>
+    </div>
+
+    <x-loading-overlay fixed="true" wire:loading.delay wire:key="overlay-loading-page"/>
 
     <!-- Пагинация -->
     <div class="flex items-center justify-between flex-wrap gap-2">

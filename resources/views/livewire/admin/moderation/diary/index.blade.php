@@ -8,6 +8,7 @@ use App\Actions\Admin\ModerateDiaryAction;
 use App\Actions\Admin\ManageDiaryRubricAction;
 
 use Illuminate\Support\Str;
+use Illuminate\Support\Facades\Cache; // ДОБАВИЛИ КЭШ
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Layout;
 use Livewire\Volt\Component;
@@ -207,7 +208,6 @@ new #[Layout('layouts.admin')] class extends Component
     {
         $avatarQuery = fn($q) => $q->select(['id', 'user_id', 'is_primary', 'status', 'path_thumb', 'path_medium', 'path_large', 'path_original'])->orderByDesc('is_primary')->limit(1);
         
-        // ФИКС: Загружаем связь diaryRubric (вместо rubric)
         $query = Diary::query()->with([
             'user' => fn($q) => $q->withTrashed()->with(['photos' => $avatarQuery]), 
             'diaryRubric'
@@ -231,26 +231,30 @@ new #[Layout('layouts.admin')] class extends Component
         $query->when($this->statusFilter !== 'all', fn($q) => $q->where('status', $this->statusFilter));
         $query->when($this->rubricFilter !== 'all', fn($q) => $q->where('diary_rubric_id', $this->rubricFilter));
 
-        return $query->latest('published_at')->paginate(15);
+        // Добавил fallback на created_at, если published_at пусто (на случай сортировки черновиков)
+        return $query->latest('published_at')->latest('created_at')->paginate(15);
     }
 
     #[Computed]
     public function diaryCounts(): array
     {
-        $stats = Diary::selectRaw("
-            COUNT(*) as all_count,
-            SUM(CASE WHEN status = 'published' AND deleted_at IS NULL THEN 1 ELSE 0 END) as published,
-            SUM(CASE WHEN status = 'pending' AND deleted_at IS NULL THEN 1 ELSE 0 END) as pending,
-            SUM(CASE WHEN status = 'rejected' AND deleted_at IS NULL THEN 1 ELSE 0 END) as rejected
-        ")->first();
+        // Кэшируем счетчики на 1 минуту. Сбрасывается в Action.
+        return Cache::remember('admin_diary_counts', 60, function () {
+            $stats = Diary::selectRaw("
+                SUM(CASE WHEN deleted_at IS NULL THEN 1 ELSE 0 END) as all_count,
+                SUM(CASE WHEN status = 'published' AND deleted_at IS NULL THEN 1 ELSE 0 END) as published,
+                SUM(CASE WHEN status = 'pending' AND deleted_at IS NULL THEN 1 ELSE 0 END) as pending,
+                SUM(CASE WHEN status = 'rejected' AND deleted_at IS NULL THEN 1 ELSE 0 END) as rejected
+            ")->first();
 
-        return [
-            'all' => (int) ($stats->all_count ?? 0),
-            'published' => (int) ($stats->published ?? 0),
-            'pending' => (int) ($stats->pending ?? 0),
-            'rejected' => (int) ($stats->rejected ?? 0),
-            'trashed' => Diary::onlyTrashed()->count(),
-        ];
+            return [
+                'all' => (int) ($stats->all_count ?? 0),
+                'published' => (int) ($stats->published ?? 0),
+                'pending' => (int) ($stats->pending ?? 0),
+                'rejected' => (int) ($stats->rejected ?? 0),
+                'trashed' => Diary::onlyTrashed()->count(),
+            ];
+        });
     }
 
     // ============================================
@@ -287,11 +291,13 @@ new #[Layout('layouts.admin')] class extends Component
 
     public function saveRubric(ManageDiaryRubricAction $action): void
     {
-        // ФИКС: Таблица diary_rubrics
+        // ЖЕСТКАЯ ВАЛИДАЦИЯ: Только строчные латинские буквы (a-z), цифры (0-9) и дефис (-)
         $this->validate([
             'rubricName' => 'required|string|max:255',
-            'rubricSlug' => 'required|alpha_dash|unique:diary_rubrics,slug',
+            'rubricSlug' => ['required', 'regex:/^[a-z0-9-]+$/', 'unique:diary_rubrics,slug'],
             'rubricSortOrder' => 'integer',
+        ], [
+            'rubricSlug.regex' => 'Slug может содержать только строчные латинские буквы, цифры и дефисы.'
         ]);
 
         $action->create([
@@ -311,14 +317,15 @@ new #[Layout('layouts.admin')] class extends Component
 
     public function updateRubric(ManageDiaryRubricAction $action): void
     {
-        // ФИКС: Таблица diary_rubrics
+        // ЖЕСТКАЯ ВАЛИДАЦИЯ: Только строчные латинские буквы (a-z), цифры (0-9) и дефис (-)
         $this->validate([
             'rubricName' => 'required|string|max:255',
-            'rubricSlug' => 'required|alpha_dash|unique:diary_rubrics,slug,' . $this->editingRubricId,
+            'rubricSlug' => ['required', 'regex:/^[a-z0-9-]+$/', 'unique:diary_rubrics,slug,' . $this->editingRubricId],
             'rubricSortOrder' => 'integer',
+        ], [
+            'rubricSlug.regex' => 'Slug может содержать только строчные латинские буквы, цифры и дефисы.'
         ]);
 
-        // ФИКС: Используем DiaryRubric
         $rubric = DiaryRubric::find($this->editingRubricId);
         if (!$rubric) return;
 
@@ -338,7 +345,6 @@ new #[Layout('layouts.admin')] class extends Component
 
     public function openDeleteRubricModal(int $id): void
     {
-        // ФИКС: Используем DiaryRubric
         $rubric = DiaryRubric::withCount('diaries')->find($id);
         if (!$rubric) return;
 
@@ -618,7 +624,11 @@ new #[Layout('layouts.admin')] class extends Component
                                             <x-ui.dropdown-menu-separator />
                                         @endif
                                         
-                                        <x-ui.dropdown-menu-item variant="destructive" wire:click="deleteDiary({{ $diary->id }})">
+                                        <x-ui.dropdown-menu-item 
+                                            variant="destructive" 
+                                            wire:click="deleteDiary({{ $diary->id }})" 
+                                            wire:confirm="Внимание! Отправить запись в карантин? Она будет немедленно скрыта с сайта БЕЗ уведомления автора."
+                                        >
                                             <x-lucide-trash-2 class="w-4 h-4" /> В карантин
                                         </x-ui.dropdown-menu-item>
                                     @else
@@ -673,7 +683,7 @@ new #[Layout('layouts.admin')] class extends Component
                         <x-ui.table-head>Slug</x-ui.table-head>
                         <x-ui.table-head>Постов</x-ui.table-head>
                         <x-ui.table-head>Статус</x-ui.table-head>
-                        <x-ui.table-head class="text-right">Действия</x-ui.table-row>
+                        <x-ui.table-head class="text-right">Действия</x-ui.table-head>
                     </x-ui.table-row>
                 </x-ui.table-header>
                 <x-ui.table-body>
@@ -872,11 +882,14 @@ new #[Layout('layouts.admin')] class extends Component
             <div class="flex items-center justify-end gap-2 p-4 border-t border-border bg-muted/20">
                 <x-ui.button @click="$wire.showDeleteRubricModal = false" variant="outline" size="sm">Отмена</x-ui.button>
                 <x-ui.button wire:click="confirmDeleteRubric" variant="destructive" size="sm" wire:target="confirmDeleteRubric" wire:loading.attr="disabled">
-                    <x-lucide-trash-2 class="w-4 h-4 wire:loading.remove wire:target="confirmDeleteRubric" />
+                    <x-lucide-trash-2 class="w-4 h-4" wire:loading.remove wire:target="confirmDeleteRubric" />
                     <x-lucide-loader-2 class="w-4 h-4 animate-spin hidden" wire:loading wire:target="confirmDeleteRubric" />
                     Удалить рубрику
                 </x-ui.button>
             </div>
         </div>
     </div>
+
+    
+    <x-loading-overlay fixed="true" wire:loading.delay wire:key="overlay-loading-page"/>
 </div>

@@ -2,7 +2,6 @@
 
 use App\Actions\Admin\ManageUserRolesAction;
 use App\Models\User;
-use Livewire\Attributes\Computed;
 use Livewire\Attributes\Layout;
 use Livewire\Volt\Component;
 use Livewire\WithPagination;
@@ -15,16 +14,16 @@ new #[Layout('layouts.admin')] class extends Component
     public array $selectedRoles = [];
     
     public array $rolesList = [
-        'admin' => 'Суперадмин',
-        'moderator' => 'Модератор',
-        'support' => 'Саппорт',
+        User::ROLE_ADMIN => 'Суперадмин',
+        User::ROLE_MODERATOR => 'Модератор',
+        User::ROLE_SUPPORT => 'Саппорт',
     ];
 
     public string $backUrl = '';
 
     public function mount(): void
     {
-        abort_unless(auth()->user()?->role === 'admin', 403);
+        abort_unless(auth()->user()?->role === User::ROLE_ADMIN, 403);
 
         $previousUrl = url()->previous();
         $this->backUrl = ($previousUrl && $previousUrl !== url()->current()) 
@@ -47,7 +46,6 @@ new #[Layout('layouts.admin')] class extends Component
 
             if ($success) {
                 $this->selectedRoles[$userId] = $role;
-                unset($this->staffMembers);
                 $this->dispatch('show-toast', type: 'success', message: "{$user->name} повышен до «{$this->rolesList[$role]}»!");
             }
         } catch (\Exception $e) {
@@ -75,7 +73,6 @@ new #[Layout('layouts.admin')] class extends Component
 
             if ($success) {
                 unset($this->selectedRoles[$userId]);
-                unset($this->staffMembers);
                 $this->dispatch('show-toast', type: 'info', message: "{$user->name} разжалован в обычные юзеры.");
             }
         } catch (\Exception $e) {
@@ -91,7 +88,6 @@ new #[Layout('layouts.admin')] class extends Component
 
             if ($updatedCount > 0) {
                 $this->dispatch('show-toast', type: 'success', message: "Успешно сохранено! Ролей изменено: {$updatedCount}");
-                unset($this->staffMembers);
             } else {
                 $this->dispatch('show-toast', type: 'info', message: 'Изменений для сохранения нет.');
             }
@@ -99,68 +95,62 @@ new #[Layout('layouts.admin')] class extends Component
             $this->dispatch('show-toast', type: 'error', message: 'Ошибка сервера при сохранении!');
         }
     }
- 
-    #[Computed]
-    public function staffMembers()
+
+    // ФИКС: Перенесли данные в with(), чтобы пагинация и поиск не ломались из-за кэша #[Computed]
+    public function with(): array
     {
         $founders = config('app.founders', []);
         $founderCase = !empty($founders) 
             ? "CASE WHEN id IN (" . implode(',', array_map('intval', $founders)) . ") THEN 0 ELSE 1 END" 
             : "1";
 
-        $avatarQuery = fn($q) => $q->select(['id', 'user_id', 'is_primary', 'status', 'path_thumb', 'path_medium', 'path_large', 'path_original'])->orderByDesc('is_primary')->limit(1);
+        $avatarQuery = fn($q) => $q->select(['id', 'user_id', 'is_primary', 'status', 'path_thumb'])->orderByDesc('is_primary')->limit(1);
 
         $staff = User::withTrashed()
-            ->whereNot('role', 'user')
-            ->with(['profile', 'photos' => $avatarQuery]) 
+            ->whereNot('role', User::ROLE_USER)
+            ->with(['photos' => $avatarQuery]) 
             ->orderByRaw($founderCase)
             ->orderBy('id', 'asc')
             ->paginate(20);
 
+        // Инициализация селектов ролей для текущей страницы
         foreach ($staff as $user) {
             if (!isset($this->selectedRoles[$user->id])) {
                 $this->selectedRoles[$user->id] = $user->role;
             }
         }
 
-        return $staff;
-    }
-
-    #[Computed]
-    public function candidatesForPromotion()
-    {
-        if (empty($this->promoteSearch)) {
-            return collect();
+        // Поиск кандидатов на повышение
+        $candidates = collect();
+        if (!empty($this->promoteSearch)) {
+            $searchOperator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
+            $candidates = User::excludeStaff()
+                ->with(['photos' => $avatarQuery])
+                ->where(function ($q) use ($searchOperator) {
+                    $q->where('name', $searchOperator, "%{$this->promoteSearch}%")
+                      ->orWhere('email', $searchOperator, "%{$this->promoteSearch}%");
+                })
+                ->limit(5)
+                ->get();
         }
 
-        $searchOperator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
+        // Проверка несохраненных изменений
+        $hasChanges = false;
+        foreach ($staff as $staffUser) {
+            if (in_array($staffUser->id, $founders) || $staffUser->id === auth()->id()) continue;
 
-        return User::excludeStaff()
-            ->with('photos')
-            ->where(function ($q) use ($searchOperator) {
-                $q->where('name', $searchOperator, "%{$this->promoteSearch}%")
-                  ->orWhere('email', $searchOperator, "%{$this->promoteSearch}%");
-            })
-            ->limit(5)
-            ->get();
-    }
-
-    #[Computed]
-    public function hasUnsavedChanges(): bool
-    {
-        if (!isset($this->staffMembers)) return false;
-
-        foreach ($this->staffMembers as $staff) {
-            if ($this->isFounder($staff) || $staff->id === auth()->id()) continue;
-
-            $currentSelectedRole = $this->selectedRoles[$staff->id] ?? $staff->role;
-            
-            if ($currentSelectedRole !== $staff->role) {
-                return true;
+            $currentSelectedRole = $this->selectedRoles[$staffUser->id] ?? $staffUser->role;
+            if ($currentSelectedRole !== $staffUser->role) {
+                $hasChanges = true;
+                break;
             }
         }
 
-        return false;
+        return [
+            'staffMembers' => $staff,
+            'candidatesForPromotion' => $candidates,
+            'hasUnsavedChanges' => $hasChanges,
+        ];
     }
 }; 
 ?>
@@ -210,8 +200,8 @@ new #[Layout('layouts.admin')] class extends Component
                     x-transition 
                     class="absolute z-50 top-full mt-1 w-full bg-card border border-border rounded-lg shadow-xl overflow-hidden"
                 >
-                    @if($this->candidatesForPromotion->isNotEmpty())
-                        @foreach($this->candidatesForPromotion as $candidate)
+                    @if($candidatesForPromotion->isNotEmpty())
+                        @foreach($candidatesForPromotion as $candidate)
                             <div wire:key="candidate-{{ $candidate->id }}" class="flex items-center justify-between p-3 border-b border-border last:border-b-0 hover:bg-muted/10 bg-background">
                                  <a href="{{ route('admin.users.show', $candidate->id) }}" wire:navigate class="flex items-center gap-3 text-sm font-medium hover:text-primary transition-colors">                                                                                                        
                                     <x-avatar src="{{ $candidate->avatar_url }}" name="{{ $candidate->name }}" size="sm" userId="{{ $candidate->id }}" showStatus="true" :isOnline="$candidate->is_online" />
@@ -250,11 +240,11 @@ new #[Layout('layouts.admin')] class extends Component
         <div class="p-6 border-b border-border flex items-center justify-between flex-wrap gap-4">
             <h2 class="text-lg font-semibold">Текущий персонал</h2>
             
-            <x-ui.button wire:click="saveAllRoles" variant="{{ $this->hasUnsavedChanges ? 'success' : 'secondary' }}" size="sm" class="relative">
+            <x-ui.button wire:click="saveAllRoles" variant="{{ $hasUnsavedChanges ? 'success' : 'secondary' }}" size="sm" class="relative">
                 <span wire:loading.remove wire:target="saveAllRoles"><x-lucide-save class="w-4 h-4" /></span>
                 <span wire:loading wire:target="saveAllRoles"><x-lucide-loader-2 class="w-4 h-4 animate-spin" /></span>
                 
-                @if($this->hasUnsavedChanges) Сохранить @else Сохранено @endif               
+                @if($hasUnsavedChanges) Сохранить @else Сохранено @endif               
             </x-ui.button>
         </div>
 
@@ -271,7 +261,7 @@ new #[Layout('layouts.admin')] class extends Component
                 </x-ui.table-header>
 
                 <x-ui.table-body>
-                    @forelse ($this->staffMembers as $staff)
+                    @forelse ($staffMembers as $staff)
                         <x-ui.table-row wire:key="staff-{{ $staff->id }}">
                             <x-ui.table-cell>
                                 <div class="flex items-center gap-2">
@@ -307,7 +297,8 @@ new #[Layout('layouts.admin')] class extends Component
                                         </x-ui.select-trigger>
                                         <x-ui.select-content>
                                             @foreach($this->rolesList as $key => $roleLabel)
-                                                <x-ui.select-item wire:key="role-{{ $key }}" value="{{ $key }}">{{ $roleLabel }}</x-ui.select-item>
+                                                {{-- ФИКС: Добавлен жесткий wire:key для опций --}}
+                                                <x-ui.select-item wire:key="role-opt-{{ $key }}" value="{{ $key }}">{{ $roleLabel }}</x-ui.select-item>
                                             @endforeach
                                         </x-ui.select-content>
                                     </x-ui.select>
@@ -342,8 +333,10 @@ new #[Layout('layouts.admin')] class extends Component
             </x-ui.table>
         </div>
 
+        <x-loading-overlay fixed="true" wire:loading.delay wire:key="overlay-loading-page"/>
+
         <div class="p-4">
-            {{ $this->staffMembers->links('partials.pagination') }}
+            {{ $staffMembers->links('partials.pagination') }}
         </div>
     </div>
 </div>

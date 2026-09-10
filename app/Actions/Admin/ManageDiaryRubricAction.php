@@ -6,6 +6,8 @@ use App\Models\AdminLog;
 use App\Models\Diary;
 use App\Models\DiaryRubric;
 use App\Models\User;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Cache;
 
 class ManageDiaryRubricAction
 {
@@ -28,7 +30,6 @@ class ManageDiaryRubricAction
 
         $participants = $rubric->user_id ? [$rubric->user_id] : [];
         
-        // ФИКС: diary_rubric.create
         AdminLog::record('diary_rubric.create', $rubric, $admin, null, $after, participants: $participants);
         
         return $rubric;
@@ -45,7 +46,7 @@ class ManageDiaryRubricAction
         ];
         
         $rubric->update($data);
-        $rubric->refresh();
+        // ФИКС: Убрали $rubric->refresh(), update() уже обновил атрибуты в памяти
         
         $after = [
             'name' => $rubric->name,
@@ -59,7 +60,6 @@ class ManageDiaryRubricAction
 
         $participants = $rubric->user_id ? [$rubric->user_id] : [];
         
-        // ФИКС: diary_rubric.update
         AdminLog::record('diary_rubric.update', $rubric, $admin, $before, $after, participants: $participants);
     }
 
@@ -77,8 +77,11 @@ class ManageDiaryRubricAction
             'reassign_to' => $reassignId
         ];
 
-        // ФИКС: Меняем foreign key на diary_rubric_id
-        Diary::where('diary_rubric_id', $rubricId)->update(['diary_rubric_id' => $reassignId]);
+        // ФИКС: Обернули в транзакцию, чтобы перенос постов и удаление рубрики прошли атомарно
+        DB::transaction(function () use ($rubric, $rubricId, $reassignId) {
+            Diary::where('diary_rubric_id', $rubricId)->update(['diary_rubric_id' => $reassignId]);
+            $rubric->delete();
+        });
 
         $after = [
             'status' => 'deleted', 
@@ -93,10 +96,10 @@ class ManageDiaryRubricAction
 
         $participants = $userId ? [$userId] : [];
 
-        // ФИКС: diary_rubric.delete
         AdminLog::record('diary_rubric.delete', $rubric, $admin, $before, $after, participants: $participants);
         
-        $rubric->delete();
+        // ФИКС: Сбрасываем кэш счетчиков дневников, так как посты переехали в другую рубрику (или стали "Без рубрики")
+        Cache::forget('admin_diary_counts');
     }
 
     /**
@@ -107,7 +110,7 @@ class ManageDiaryRubricAction
         $before = ['is_active' => $rubric->getOriginal('is_active')];
         
         $rubric->update(['is_active' => !$rubric->is_active]);
-        $rubric->refresh();
+        // ФИКС: Убрали $rubric->refresh()
         
         $after = [
             'is_active' => $rubric->is_active, 
@@ -122,7 +125,6 @@ class ManageDiaryRubricAction
 
         $participants = $rubric->user_id ? [$rubric->user_id] : [];
         
-        // ФИКС: diary_rubric.toggle_status
         AdminLog::record('diary_rubric.toggle_status', $rubric, $admin, $before, $after, participants: $participants);
     }
 }

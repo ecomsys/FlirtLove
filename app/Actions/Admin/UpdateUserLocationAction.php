@@ -14,7 +14,8 @@ class UpdateUserLocationAction
         private GeocodingService $geocodingService
     ) {}
 
-    public function execute(User $user, float $lat, float $lng, ?string $existingAddress = null): array
+    // ФИКС: Добавили User $admin параметром, чтобы не зависеть от сессии (auth())
+    public function execute(User $user, float $lat, float $lng, User $admin, ?string $existingAddress = null): array
     {
         $geoData = $this->geocodingService->reverseGeocode($lat, $lng);
 
@@ -26,15 +27,15 @@ class UpdateUserLocationAction
             $address = $user->profile?->address;
         }
 
-        // ФИКС: Сохраняем старые данные до обновления
         $before = $user->profile ? $user->profile->only(['address', 'city', 'country']) : null;
 
-        DB::transaction(function () use ($user, $lat, $lng, $address, $city, $country, $before) {
+        DB::transaction(function () use ($user, $lat, $lng, $address, $city, $country, $before, $admin) {
             $locationData = [
                 'address' => $address,
                 'city' => $city,
                 'country' => $country,
-                'location' => DB::raw("ST_SetSRID(ST_MakePoint({$lng}, {$lat}), 4326)"),
+                // ФИКС: Защита от SQL-инъекций через координаты (приводим к float)
+                'location' => DB::raw("ST_SetSRID(ST_MakePoint(" . (float) $lng . ", " . (float) $lat . "), 4326)"),
             ];
 
             if ($user->profile) {
@@ -43,7 +44,6 @@ class UpdateUserLocationAction
                 $user->profile()->create($locationData);
             }
 
-            // ФИКС: Формируем лог с диффами и контекстом
             $after = [
                 'address' => $address,
                 'city' => $city,
@@ -51,16 +51,16 @@ class UpdateUserLocationAction
                 'context' => [
                     'user_id' => $user->id,
                     'user_name' => $user->name,
-                    'admin_id' => auth()->id(),
+                    'admin_id' => $admin->id, // ФИКС: Берем ID из переданного объекта
                     'lat' => $lat,
                     'lng' => $lng
                 ]
             ];
 
-            AdminLog::record('user.location_update', $user, auth()->user(), $before, $after, participants: [$user->id]);
+            AdminLog::record('user.location_update', $user, $admin, $before, $after, participants: [$user->id]);
 
             Log::info('Локация пользователя обновлена', [
-                'user_id' => $user->id, 'lat' => $lat, 'lng' => $lng, 'admin_id' => auth()->id(),
+                'user_id' => $user->id, 'lat' => $lat, 'lng' => $lng, 'admin_id' => $admin->id,
             ]);
         });
 

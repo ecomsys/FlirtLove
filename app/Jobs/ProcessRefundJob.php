@@ -3,18 +3,17 @@
 namespace App\Jobs;
 
 use App\Events\TransactionRefunded;
-use App\Models\AdminLog;
 use App\Models\Transaction;
+use App\Notifications\RefundProcessed;
+use App\Notifications\PaymentFailed;
 use App\Services\Payments\MockAcquiringService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
-
-// Создаем Job (Очередь) для возврата средств
-// Джоба улетает в Redis/БД и делает тяжелую работу вне запроса пользователя.
 
 class ProcessRefundJob implements ShouldQueue
 {
@@ -26,42 +25,54 @@ class ProcessRefundJob implements ShouldQueue
 
     public function handle(MockAcquiringService $bank): void
     {
-        $transaction = Transaction::lockForUpdate()->find($this->transactionId);
+        DB::transaction(function () use ($bank) {
+            
+            $transaction = Transaction::lockForUpdate()->find($this->transactionId);
 
-        if (!$transaction || $transaction->status !== 'success') {
-            Log::warning("RefundJob: Транзакция #{$this->transactionId} не найдена, уже возвращена или не успешна.");
-            return;
-        }
+            if (!$transaction || $transaction->status !== 'success') {
+                Log::warning("RefundJob: Транзакция #{$this->transactionId} не найдена, уже возвращена или не успешна.");
+                return;
+            }
 
-        // 1. Отправляем запрос в банк
-        $bankResponse = $bank->refund($transaction);
+            // Подгружаем юзера, если вдруг не загружен, для уведомлений
+            if (!$transaction->relationLoaded('user')) {
+                $transaction->load('user');
+            }
 
-        // 2. Если банк отклонил
-        if (!$bankResponse['success']) {
-            // Пишем ошибку в meta, статус НЕ меняем (остается success)
-            $transaction->update([
-                'meta' => array_merge($transaction->meta ?? [], [
-                    'refund_error' => $bankResponse['message'],
-                    'raw_error' => $bankResponse['raw_response']
-                ])
-            ]);
-            Log::error("RefundJob: Банк отклонил возврат #{$transaction->id}. Причина: {$bankResponse['message']}");
-            return; // Завершаем джобу
-        }
+            $bankResponse = $bank->refund($transaction);
 
-        // 3. Банк одобрил! Меняем статус на refunded
-        $metaData = [
-            'bank_response' => $bankResponse['raw_response'],
-            'bank_refund_id' => $bankResponse['provider_refund_id'],
-        ];
-        
-        \Illuminate\Support\Facades\DB::transaction(function () use ($transaction, $metaData) {
+            if (!$bankResponse['success']) {
+                $transaction->update([
+                    'meta' => array_merge($transaction->meta ?? [], [
+                        'refund_error' => $bankResponse['message'],
+                        'raw_error' => $bankResponse['raw_response']
+                    ])
+                ]);
+                
+                // ФИКС: Оповещаем юзера, что банк отклонил возврат
+                if ($transaction->user) {
+                    $transaction->user->notify(new PaymentFailed($transaction->id, (float)$transaction->amount, 'Банк отклонил возврат: ' . $bankResponse['message']));
+                }
+
+                Log::error("RefundJob: Банк отклонил возврат #{$transaction->id}. Причина: {$bankResponse['message']}");
+                return;
+            }
+
+            $metaData = [
+                'bank_response' => $bankResponse['raw_response'],
+                'bank_refund_id' => $bankResponse['provider_refund_id'],
+            ];
+            
+            // Модель Transaction сама вызовет событие TransactionRefunded внутри markAsRefunded
             $transaction->markAsRefunded($metaData);
+
+            // ФИКС: Отправляем уведомление об успешном возврате!
+            if ($transaction->user) {
+                $reason = $transaction->meta['refund_reason'] ?? 'По решению администрации';
+                $transaction->user->notify(new RefundProcessed($transaction->id, (float)$transaction->amount, $reason));
+            }
+
+            Log::info("RefundJob: Возврат #{$transaction->id} успешно обработан банком.");
         });
-
-        Log::info("RefundJob: Возврат #{$transaction->id} успешно обработан банком.");
-
-        // 5. Запускаем событие для списания бонусов
-        TransactionRefunded::dispatch($transaction->fresh());
     }
 }

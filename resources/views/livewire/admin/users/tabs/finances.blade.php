@@ -150,8 +150,7 @@ new class extends Component
                             <x-ui.table-head class="w-12">ID</x-ui.table-head>
                             <x-ui.table-head>Назначение</x-ui.table-head>
                             <x-ui.table-head>Сумма</x-ui.table-head>
-                            <x-ui.table-head>Статус</x-ui.table-head>
-                            <x-ui.table-head>Дата</x-ui.table-head>
+                            <x-ui.table-head>Статус и Дата</x-ui.table-head>
                         </x-ui.table-row>
                     </x-ui.table-header>
                     <x-ui.table-body>
@@ -194,21 +193,28 @@ new class extends Component
                                         {{ $trans->amount }} ₽
                                     </span>
                                 </x-ui.table-cell>
-                                <x-ui.table-cell>
-                                    @if($trans->status === 'success')
-                                        <x-ui.badge variant="success" size="xs">Успешно</x-ui.badge>
-                                    @elseif($trans->status === 'pending')
-                                        <x-ui.badge variant="warning" size="xs">Ожидает</x-ui.badge>
-                                    @elseif($trans->status === 'failed')
-                                        <x-ui.badge variant="destructive" size="xs">Ошибка</x-ui.badge>
-                                    @elseif($trans->status === 'refunded')
-                                        <x-ui.badge variant="secondary" size="xs">Возврат</x-ui.badge>
-                                    @else
-                                        <x-ui.badge variant="secondary" size="xs">{{ ucfirst($trans->status) }}</x-ui.badge>
-                                    @endif
-                                </x-ui.table-cell>
-                                <x-ui.table-cell class="text-xs text-muted-foreground whitespace-nowrap">
-                                    {{ $trans->created_at->format('d.m.y H:i') }}
+                                <x-ui.table-cell class="whitespace-nowrap">
+                                    <div class="flex flex-col gap-1">
+                                        @if($trans->status === 'success')
+                                            <x-ui.badge variant="success" size="xs">Успешно</x-ui.badge>
+                                        @elseif($trans->status === 'pending')
+                                            <x-ui.badge variant="warning" size="xs">Ожидает</x-ui.badge>
+                                        @elseif($trans->status === 'failed')
+                                            <x-ui.badge variant="destructive" size="xs">Ошибка</x-ui.badge>
+                                        @elseif($trans->status === 'refunded')
+                                            <x-ui.badge variant="secondary" size="xs">Возврат</x-ui.badge>
+                                        @else
+                                            <x-ui.badge variant="secondary" size="xs">{{ ucfirst($trans->status) }}</x-ui.badge>
+                                        @endif
+                                        
+                                        {{-- ФИКС: Динамический вывод даты события --}}
+                                        @php 
+                                            // Если ждет оплаты — показываем дату создания. 
+                                            // Если успех/возврат/ошибка — показываем дату обновления (когда свершилось событие).
+                                            $eventDate = $trans->status === 'pending' ? $trans->created_at : $trans->updated_at; 
+                                        @endphp
+                                        <span class="text-[10px] text-muted-foreground">{{ $eventDate->format('d.m.Y H:i:s') }}</span>
+                                    </div>
                                 </x-ui.table-cell>
                             </x-ui.table-row>
                         @endforeach
@@ -218,7 +224,7 @@ new class extends Component
             @endif
         </div>
 
-                {{-- Правая колонка: История подписок --}}
+        {{-- Правая колонка: История подписок --}}
         <div class="space-y-3">
             <h3 class="text-sm font-semibold flex items-center gap-2">
                 <x-lucide-history class="w-4 h-4" /> Подписки ({{ $this->subscriptions->total() }})
@@ -234,8 +240,7 @@ new class extends Component
                         <x-ui.table-row>
                             <x-ui.table-head class="w-12">ID</x-ui.table-head>
                             <x-ui.table-head>Тип / Тариф</x-ui.table-head>
-                            <x-ui.table-head>Начало</x-ui.table-head>
-                            <x-ui.table-head>Конец</x-ui.table-head>
+                            <x-ui.table-head>Срок действия</x-ui.table-head>
                             <x-ui.table-head>Чек</x-ui.table-head>
                             <x-ui.table-head>Статус</x-ui.table-head>
                         </x-ui.table-row>
@@ -257,10 +262,11 @@ new class extends Component
                                     </div>
                                 </x-ui.table-cell>
                                 <x-ui.table-cell class="text-xs text-muted-foreground whitespace-nowrap">
-                                    {{ $sub->starts_at->format('d.m.y') }}
-                                </x-ui.table-cell>
-                                <x-ui.table-cell class="text-xs text-muted-foreground whitespace-nowrap">
-                                    {{ $sub->ends_at->format('d.m.y') }}
+                                    <!-- Объединили начало и конец в один блок -->
+                                    <div class="flex flex-col">
+                                        <span>С: {{ $sub->starts_at->format('d.m.Y') }}</span>
+                                        <span>По: {{ $sub->ends_at->format('d.m.Y') }}</span>
+                                    </div>
                                 </x-ui.table-cell>
                                 <x-ui.table-cell class="text-xs text-muted-foreground font-mono whitespace-nowrap">
                                     @if($sub->transaction_id)
@@ -271,16 +277,25 @@ new class extends Component
                                         <span>-</span>
                                     @endif
                                 </x-ui.table-cell>
-                                <x-ui.table-cell>
-                                    @if($sub->status === 'active')
-                                        <x-ui.badge variant="success" size="xs">Активна</x-ui.badge>
-                                    @elseif($sub->status === 'expired')
-                                        <x-ui.badge variant="secondary" size="xs">Истекла</x-ui.badge>
-                                    @elseif($sub->status === 'canceled')
-                                        <x-ui.badge variant="warning" size="xs">Отменена</x-ui.badge>
-                                    @else
-                                        <x-ui.badge variant="destructive" size="xs">Ошибка</x-ui.badge>
-                                    @endif
+                                <x-ui.table-cell class="whitespace-nowrap">
+                                    <div class="flex flex-col gap-1">
+                                        @if($sub->status === 'active')
+                                            <x-ui.badge variant="success" size="xs">Активна</x-ui.badge>
+                                        @elseif($sub->status === 'expired')
+                                            <x-ui.badge variant="secondary" size="xs">Истекла</x-ui.badge>
+                                        @elseif($sub->status === 'canceled')
+                                            <x-ui.badge variant="warning" size="xs">Отменена</x-ui.badge>
+                                        @else
+                                            <x-ui.badge variant="destructive" size="xs">Ошибка</x-ui.badge>
+                                        @endif                                        
+                                        {{-- ФИКС: Динамический вывод даты события --}}
+                                        @php 
+                                            // Если активна — показываем дату покупки (создания). 
+                                            // Если отменена/истекла — показываем дату обновления (когда отменили).
+                                            $subEventDate = $sub->status === 'active' ? $sub->created_at : $sub->updated_at; 
+                                        @endphp
+                                        <span class="text-[10px] text-muted-foreground">{{ $subEventDate->format('d.m.Y H:i') }}</span>
+                                    </div>
                                 </x-ui.table-cell>
                             </x-ui.table-row>
                         @endforeach

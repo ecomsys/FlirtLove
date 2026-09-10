@@ -4,7 +4,9 @@ use App\Actions\Admin\ModerateDatingAction;
 use App\Enums\MatchStatus;
 use App\Enums\SwipeType;
 use App\Models\Swipe;
+use App\Models\User;
 use App\Models\UserMatch;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Layout;
@@ -25,43 +27,44 @@ new #[Layout('layouts.admin')] class extends Component
     #[Url(as: 'type', except: 'all')]
     public string $typeFilter = 'all'; 
 
-       public ?string $dateFrom = null;
+    public ?string $dateFrom = null;
     public ?string $dateTo = null;
     public int $perPage = 10;
 
-    /** @var string URL для кнопки "Назад" */
     public string $backUrl = '';
-
-    public function updatingSearch(): void { $this->resetPage(); }
-    public function updatingDateFrom(): void { $this->resetPage(); }
-    public function updatingDateTo(): void { $this->resetPage(); }
-    public function updatingTypeFilter(): void { $this->resetPage(); }
 
     public function mount(): void
     {
-        // ФИКС: Запоминаем URL "Назад" только при первой загрузке
+        abort_unless(in_array(auth()->user()?->role, [User::ROLE_ADMIN, User::ROLE_MODERATOR]), 403);
+
         $previousUrl = url()->previous();
         $this->backUrl = ($previousUrl && $previousUrl !== url()->current()) 
             ? $previousUrl 
             : route('admin.dashboard');
         
-        // Если пришли с поиском, очищаем фильтр типа, чтобы не мешал
         if (!empty($this->search)) {
             $this->typeFilter = 'all';
         }
     }
 
+    public function updatingSearch(): void { $this->resetPage(); $this->clearComputedCache(); }
+    public function updatingDateFrom(): void { $this->resetPage(); $this->clearComputedCache(); }
+    public function updatingDateTo(): void { $this->resetPage(); $this->clearComputedCache(); }
+    public function updatingTypeFilter(): void { $this->resetPage(); $this->clearComputedCache(); }
+
     public function setViewMode(string $mode): void
     {
         $this->viewMode = $mode;
-        $this->search = ''; // ФИКС: При смене режима очищаем поиск, так как ID из другого режима не найдется
+        $this->search = ''; 
         $this->resetPage();
+        $this->clearComputedCache();
     }
 
-       public function setTypeFilter(string $type): void
+    public function setTypeFilter(string $type): void
     {
         $this->typeFilter = $type;
         $this->resetPage();
+        $this->clearComputedCache();
     }
 
     public function resetFilters(): void
@@ -69,6 +72,13 @@ new #[Layout('layouts.admin')] class extends Component
         $this->reset(['search', 'dateFrom', 'dateTo', 'typeFilter']);
         $this->typeFilter = 'all'; 
         $this->resetPage();
+        $this->clearComputedCache();
+    }
+
+    private function clearComputedCache(): void
+    {
+        unset($this->items);
+        unset($this->stats);
     }
 
     // ============================================
@@ -90,6 +100,7 @@ new #[Layout('layouts.admin')] class extends Component
                 $this->dispatch('show-toast', type: 'success', message: 'Свайп удален');
             }
         }
+        $this->clearComputedCache();
     }
 
     public function restoreMatch(int $id, ModerateDatingAction $action): void
@@ -99,6 +110,7 @@ new #[Layout('layouts.admin')] class extends Component
             $action->restoreMatch($match, auth()->user());
             $this->dispatch('show-toast', type: 'success', message: 'Мэтч восстановлен.');
         }
+        $this->clearComputedCache();
     }
     
     // ============================================
@@ -108,11 +120,20 @@ new #[Layout('layouts.admin')] class extends Component
     #[Computed]
     public function stats(): array
     {
+        // Кэшируем на 1 минуту. Сбрасывается в Action при любом удалении/восстановлении.
         return Cache::remember('dating_admin_stats', 60, function () {
             $baseSwipeQuery = Swipe::where(function ($q) {
                 $q->whereNull('user_id')->orWhereHas('user', fn($q2) => $q2->withTrashed()->excludeStaff());
             });
                 
+            // ОПТИМИЗАЦИЯ: 1 запрос вместо 4
+            $swipeStats = $baseSwipeQuery->selectRaw("
+                SUM(CASE WHEN type = 'like' THEN 1 ELSE 0 END) as total_likes,
+                SUM(CASE WHEN type = 'dislike' THEN 1 ELSE 0 END) as total_dislikes,
+                SUM(CASE WHEN type = 'superlike' THEN 1 ELSE 0 END) as total_superlikes,
+                COUNT(*) as total_swipes
+            ")->first();
+
             $baseMatchQuery = UserMatch::where(function ($q) {
                 $q->whereNull('user1_id')->orWhereHas('user1', fn($q2) => $q2->withTrashed()->excludeStaff());
             })->where(function ($q) {
@@ -120,10 +141,10 @@ new #[Layout('layouts.admin')] class extends Component
             });
 
             return [
-                'total_likes' => (clone $baseSwipeQuery)->where('type', 'like')->count(),
-                'total_dislikes' => (clone $baseSwipeQuery)->where('type', 'dislike')->count(),
-                'total_superlikes' => (clone $baseSwipeQuery)->where('type', 'superlike')->count(),
-                'total_swipes' => (clone $baseSwipeQuery)->count(),
+                'total_likes' => (int) ($swipeStats->total_likes ?? 0),
+                'total_dislikes' => (int) ($swipeStats->total_dislikes ?? 0),
+                'total_superlikes' => (int) ($swipeStats->total_superlikes ?? 0),
+                'total_swipes' => (int) ($swipeStats->total_swipes ?? 0),
                 'total_matches' => $baseMatchQuery->count(),
             ];
         });
@@ -135,18 +156,16 @@ new #[Layout('layouts.admin')] class extends Component
         return $this->viewMode === 'matches' ? $this->getMatches() : $this->getSwipes();
     }
 
-       private function getSwipes()
+    private function getSwipes()
     {
         $searchOperator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
         $avatarQuery = fn($q) => $q->select(['id', 'user_id', 'is_primary', 'status', 'path_thumb', 'path_medium', 'path_large', 'path_original'])->orderByDesc('is_primary')->limit(1);
 
         return Swipe::with([
-                // ФИКС: Добавлено 'deleted_at' в select!
-                'user' => fn($q) => $q->withTrashed()->select('id', 'name', 'email', 'role', 'status', 'is_premium', 'premium_expires_at', 'last_seen', 'deleted_at')->with(['photos' => $avatarQuery]),
-                'targetUser' => fn($q) => $q->withTrashed()->select('id', 'name', 'email', 'role', 'status', 'is_premium', 'premium_expires_at', 'last_seen', 'deleted_at')->with(['photos' => $avatarQuery]),
+                'user' => fn($q) => $q->withTrashed()->select('id', 'name', 'email', 'role', 'status', 'premium_expires_at', 'vip_expires_at', 'last_seen', 'deleted_at')->with(['photos' => $avatarQuery]),
+                'targetUser' => fn($q) => $q->withTrashed()->select('id', 'name', 'email', 'role', 'status', 'premium_expires_at', 'vip_expires_at', 'last_seen', 'deleted_at')->with(['photos' => $avatarQuery]),
             ])
             ->where(function ($q) {
-                // ФИКС: Ищем даже удаленных юзеров
                 $q->whereNull('user_id')->orWhereHas('user', fn($q2) => $q2->withTrashed()->excludeStaff());
             })
             ->where(function ($q) {
@@ -154,29 +173,35 @@ new #[Layout('layouts.admin')] class extends Component
             })
             ->when($this->typeFilter !== 'all', fn($q) => $q->where('type', $this->typeFilter))
             ->when($this->search, function ($q) use ($searchOperator) {
-                $search = $this->search;
-                $q->where(function ($innerQ) use ($search, $searchOperator) {
-                    $innerQ->whereRaw("CAST(id AS TEXT) {$searchOperator} ?", ["%{$search}%"])
-                    // ФИКС: Ищем по имени даже удаленных
-                    ->orWhereHas('user', fn($q2) => $q2->withTrashed()->where('name', $searchOperator, "%{$search}%"))
-                    ->when(is_numeric($search), fn($q3) => $q3->orWhere('user_id', $search));
+                $search = trim($this->search);
+                // ФИКС: Строгая проверка на целое число (ctype_digit), чтобы не передать 1.5 в PostgreSQL
+                $isId = !empty($search) && ctype_digit($search);
+                
+                $q->where(function ($innerQ) use ($search, $searchOperator, $isId) {
+                    if ($isId) {
+                        $innerQ->where('id', (int) $search)
+                              ->orWhere('user_id', (int) $search)
+                              ->orWhere('target_user_id', (int) $search);
+                    } else {
+                        $innerQ->orWhereHas('user', fn($q2) => $q2->withTrashed()->where('name', $searchOperator, "%{$search}%"))
+                              ->orWhereHas('targetUser', fn($q2) => $q2->withTrashed()->where('name', $searchOperator, "%{$search}%"));
+                    }
                 });
             })
-            ->when($this->dateFrom, fn($q) => $q->whereDate('created_at', '>=', $this->dateFrom))
-            ->when($this->dateTo, fn($q) => $q->whereDate('created_at', '<=', $this->dateTo))
+            ->when($this->dateFrom, fn($q) => $q->where('created_at', '>=', Carbon::parse($this->dateFrom)->startOfDay()))
+            ->when($this->dateTo, fn($q) => $q->where('created_at', '<=', Carbon::parse($this->dateTo)->endOfDay()))
             ->latest('created_at')->latest('id')
             ->paginate($this->perPage)->onEachSide(2);
     }
 
-        private function getMatches()
+    private function getMatches()
     {
         $searchOperator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
         $avatarQuery = fn($q) => $q->select(['id', 'user_id', 'is_primary', 'status', 'path_thumb', 'path_medium', 'path_large', 'path_original'])->orderByDesc('is_primary')->limit(1);
 
         return UserMatch::with([
-                // ФИКС: Добавлено 'deleted_at' в select!
-                'user1' => fn($q) => $q->withTrashed()->select('id', 'name', 'email', 'role', 'status', 'is_premium', 'premium_expires_at', 'last_seen', 'deleted_at')->with(['photos' => $avatarQuery]),
-                'user2' => fn($q) => $q->withTrashed()->select('id', 'name', 'email', 'role', 'status', 'is_premium', 'premium_expires_at', 'last_seen', 'deleted_at')->with(['photos' => $avatarQuery]),
+                'user1' => fn($q) => $q->withTrashed()->select('id', 'name', 'email', 'role', 'status', 'premium_expires_at', 'vip_expires_at', 'last_seen', 'deleted_at')->with(['photos' => $avatarQuery]),
+                'user2' => fn($q) => $q->withTrashed()->select('id', 'name', 'email', 'role', 'status', 'premium_expires_at', 'vip_expires_at', 'last_seen', 'deleted_at')->with(['photos' => $avatarQuery]),
             ])
             ->where(function ($q) {
                 $q->whereNull('user1_id')->orWhereHas('user1', fn($q2) => $q2->withTrashed()->excludeStaff());
@@ -185,19 +210,22 @@ new #[Layout('layouts.admin')] class extends Component
                 $q->whereNull('user2_id')->orWhereHas('user2', fn($q2) => $q2->withTrashed()->excludeStaff());
             })
             ->when($this->search, function ($q) use ($searchOperator) {
-                $search = $this->search;
-                $q->where(function ($innerQ) use ($search, $searchOperator) {
-                    $innerQ->whereRaw("CAST(id AS TEXT) {$searchOperator} ?", ["%{$search}%"])
-                    // ФИКС: Ищем по имени даже удаленных
-                    ->orWhereHas('user1', fn($q2) => $q2->withTrashed()->where('name', $searchOperator, "%{$search}%"))
-                    ->orWhereHas('user2', fn($q2) => $q2->withTrashed()->where('name', $searchOperator, "%{$search}%"))
-                    ->when(is_numeric($search), function ($q3) use ($search) {
-                        $q3->orWhere('user1_id', $search)->orWhere('user2_id', $search);
-                    });
+                $search = trim($this->search);
+                $isId = !empty($search) && ctype_digit($search);
+                
+                $q->where(function ($innerQ) use ($search, $searchOperator, $isId) {
+                    if ($isId) {
+                        $innerQ->where('id', (int) $search)
+                              ->orWhere('user1_id', (int) $search)
+                              ->orWhere('user2_id', (int) $search);
+                    } else {
+                        $innerQ->orWhereHas('user1', fn($q2) => $q2->withTrashed()->where('name', $searchOperator, "%{$search}%"))
+                              ->orWhereHas('user2', fn($q2) => $q2->withTrashed()->where('name', $searchOperator, "%{$search}%"));
+                    }
                 });
             })
-            ->when($this->dateFrom, fn($q) => $q->whereDate('created_at', '>=', $this->dateFrom))
-            ->when($this->dateTo, fn($q) => $q->whereDate('created_at', '<=', $this->dateTo))
+            ->when($this->dateFrom, fn($q) => $q->where('created_at', '>=', Carbon::parse($this->dateFrom)->startOfDay()))
+            ->when($this->dateTo, fn($q) => $q->where('created_at', '<=', Carbon::parse($this->dateTo)->endOfDay()))
             ->latest('created_at')->latest('id')
             ->paginate($this->perPage)->onEachSide(2);
     }
@@ -226,26 +254,27 @@ new #[Layout('layouts.admin')] class extends Component
 
     <!-- Блок фильтров по типу (только для свайпов) -->
     @if ($viewMode === 'swipes')
-        <div class="flex gap-1.5" wire:key="type-filter-buttons">
-            <x-ui.button wire:click="setTypeFilter('like')" variant="{{ $typeFilter === 'like' ? 'default' : 'secondary' }}" size="sm" wire:key="type-like">
+        <div class="flex gap-1.5">
+            <x-ui.button wire:click="setTypeFilter('like')" variant="{{ $typeFilter === 'like' ? 'default' : 'secondary' }}" size="sm">
                 <x-lucide-thumbs-up class="w-3 h-3 inline mr-1" /> Лайки <x-ui.badge size="xs">{{ $this->stats['total_likes'] }}</x-ui.badge>
             </x-ui.button>
-            <x-ui.button wire:click="setTypeFilter('dislike')" variant="{{ $typeFilter === 'dislike' ? 'default' : 'secondary' }}" size="sm" wire:key="type-dislike">
+            <x-ui.button wire:click="setTypeFilter('dislike')" variant="{{ $typeFilter === 'dislike' ? 'default' : 'secondary' }}" size="sm">
                 <x-lucide-thumbs-down class="w-3 h-3 inline mr-1" /> Дизлайки <x-ui.badge size="xs">{{ $this->stats['total_dislikes'] }}</x-ui.badge>
             </x-ui.button>
-            <x-ui.button wire:click="setTypeFilter('superlike')" variant="{{ $typeFilter === 'superlike' ? 'default' : 'secondary' }}" size="sm" wire:key="type-superlike">
+            <x-ui.button wire:click="setTypeFilter('superlike')" variant="{{ $typeFilter === 'superlike' ? 'default' : 'secondary' }}" size="sm">
                 <x-lucide-star class="w-3 h-3 inline mr-1" /> Суперлайки <x-ui.badge size="xs">{{ $this->stats['total_superlikes'] }}</x-ui.badge>
             </x-ui.button>
         </div>
     @endif       
 
     <!-- Переключатель режима (Свайпы/Матчи) и Поиск -->
-    <div class="flex justify-between items-center flex-wrap gap-3" wire:key="filters-wrapper">
-        <div class="flex gap-1.5" wire:key="mode-buttons">
-            <x-ui.button wire:click="setViewMode('swipes')" variant="{{ $viewMode === 'swipes' ? 'default' : 'secondary' }}" size="sm" wire:key="mode-swipes">
+    <div class="flex justify-between items-center flex-wrap gap-3">
+        <div class="flex gap-1.5">
+            <!-- ФИКС: Очищаем search через Alpine ДО отправки запроса -->
+            <x-ui.button wire:click="setViewMode('swipes')"  variant="{{ $viewMode === 'swipes' ? 'default' : 'secondary' }}" size="sm">
                 Свайпы <x-ui.badge size="xs">{{ $this->stats['total_swipes'] }}</x-ui.badge>
             </x-ui.button>
-            <x-ui.button wire:click="setViewMode('matches')" variant="{{ $viewMode === 'matches' ? 'default' : 'secondary' }}" size="sm" wire:key="mode-matches">
+            <x-ui.button wire:click="setViewMode('matches')"  variant="{{ $viewMode === 'matches' ? 'default' : 'secondary' }}" size="sm">
                 Матчи <x-ui.badge size="xs">{{ $this->stats['total_matches'] }}</x-ui.badge>
             </x-ui.button>
         </div>
@@ -258,9 +287,9 @@ new #[Layout('layouts.admin')] class extends Component
                     <button wire:click="$set('search', '')" class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"><x-lucide-x class="w-4 h-4" /></button>
                 @endif
             </div>
-            <x-ui.date-picker wire:model.live="dateFrom" placeholder="с" width="w-[10rem]" wire:key="date-from-search" />
+            <x-ui.date-picker wire:model.live="dateFrom" placeholder="с" width="w-[10rem]" />
             <span class="text-muted-foreground">—</span>
-            <x-ui.date-picker wire:model.live="dateTo" placeholder="по" width="w-[10rem]" wire:key="date-to-search" />
+            <x-ui.date-picker wire:model.live="dateTo" placeholder="по" width="w-[10rem]" />
             <x-ui.button wire:click="resetFilters" variant="outline" size="sm">
                 <x-lucide-rotate-ccw class="w-4 h-4 inline mr-2" /><span>Сбросить</span>
             </x-ui.button>
@@ -268,7 +297,7 @@ new #[Layout('layouts.admin')] class extends Component
     </div>
 
     <!-- Таблица данных -->
-    <x-ui.table wire:key="dating-table">
+    <x-ui.table>
         <x-ui.table-header>
             <x-ui.table-row>
                 <x-ui.table-head class="w-16">ID</x-ui.table-head>
@@ -431,7 +460,7 @@ new #[Layout('layouts.admin')] class extends Component
                                             wire:loading.attr="disabled"
                                         >
                                             <x-lucide-trash-2 class="w-4 h-4 mr-2" wire:loading.remove wire:target="deleteItem({{ $item->id }})" />
-                                            <x-lucide-loader-2 class="w-4 h-4 mr-2 animate-spin hidden" wire:loading wire:target="deleteItem({{ $item->id }})" />
+                                            <x-lucide-loader-2 class="w-4 h-4 mr-2 animate-spin" wire:loading wire:target="deleteItem({{ $item->id }})" />
                                             Разорвать мэтч
                                         </x-ui.dropdown-menu-item>
                                     @else
@@ -443,7 +472,7 @@ new #[Layout('layouts.admin')] class extends Component
                                             wire:loading.attr="disabled"
                                         >
                                             <x-lucide-rotate-ccw class="w-4 h-4 mr-2" wire:loading.remove wire:target="restoreMatch({{ $item->id }})" />
-                                            <x-lucide-loader-2 class="w-4 h-4 mr-2 animate-spin hidden" wire:loading wire:target="restoreMatch({{ $item->id }})" />
+                                            <x-lucide-loader-2 class="w-4 h-4 mr-2 animate-spin" wire:loading wire:target="restoreMatch({{ $item->id }})" />
                                             Восстановить мэтч
                                         </x-ui.dropdown-menu-item>
                                     @endif
@@ -456,7 +485,7 @@ new #[Layout('layouts.admin')] class extends Component
                                         wire:loading.attr="disabled"
                                     >
                                         <x-lucide-trash-2 class="w-4 h-4 mr-2" wire:loading.remove wire:target="deleteItem({{ $item->id }})" />
-                                        <x-lucide-loader-2 class="w-4 h-4 mr-2 animate-spin hidden" wire:loading wire:target="deleteItem({{ $item->id }})" />
+                                        <x-lucide-loader-2 class="w-4 h-4 mr-2 animate-spin" wire:loading wire:target="deleteItem({{ $item->id }})" />
                                         Удалить
                                     </x-ui.dropdown-menu-item>
                                 @endif
@@ -465,7 +494,7 @@ new #[Layout('layouts.admin')] class extends Component
                     </x-ui.table-cell>
                 </x-ui.table-row>
             @empty
-                <x-ui.table-row wire:key="empty-state">
+                <x-ui.table-row wire:key="empty-state-dating">
                     <x-ui.table-cell colspan="6" class="py-12 text-center text-muted-foreground">
                         <x-lucide-heart class="w-12 h-12 mx-auto mb-3 opacity-20" />
                         <p class="text-sm">Нет данных для отображения</p>
@@ -479,8 +508,9 @@ new #[Layout('layouts.admin')] class extends Component
     </x-ui.table>
 
     <!-- Пагинация -->
-    <div class="mt-4" wire:key="pagination-wrapper">        
+    <div class="mt-4">        
         {{ $this->items->links('partials.pagination') }}
     </div>
-</div>
 
+    <x-loading-overlay fixed="true" wire:loading.delay wire:key="overlay-loading-page"/>
+</div>

@@ -30,7 +30,7 @@ class ModerateDatingAction
                 $u2 = max($swipe->user_id, $swipe->target_user_id);
                 
                 $affected = UserMatch::where('user1_id', $u1)->where('user2_id', $u2)->update([
-                    'status' => 'unmatched',
+                    'status' => UserMatch::STATUS_UNMATCHED, // ФИКС: Константа
                     'unmatched_by' => $admin->id,
                     'unmatched_at' => now(),
                 ]);
@@ -40,7 +40,6 @@ class ModerateDatingAction
                 }
             }
 
-            // ФИКС: Обернули ID юзеров в ключ context, чтобы calculateDiff их не вырезал
             $after = [
                 'status' => 'destroyed', 
                 'deleted_by' => $admin->id, 
@@ -71,18 +70,17 @@ class ModerateDatingAction
 
         DB::transaction(function () use ($match, $admin, $before) {
             $match->update([
-                'status' => 'unmatched',
+                'status' => UserMatch::STATUS_UNMATCHED, // ФИКС: Константа
                 'unmatched_by' => $admin->id,
                 'unmatched_at' => now(),
             ]);
 
-            $match->refresh();
+            // ФИКС: Убрали $match->refresh(), update() уже обновил атрибуты
 
             $after = [
-                'status' => 'unmatched', 
+                'status' => UserMatch::STATUS_UNMATCHED, 
                 'unmatched_by' => $admin->id, 
                 'unmatched_at' => now()->toDateTimeString(),
-                // ФИКС: Обернули ID юзеров в ключ context
                 'context' => [
                     'user1_id' => $match->user1_id, 
                     'user2_id' => $match->user2_id
@@ -104,28 +102,30 @@ class ModerateDatingAction
     {
         $before = ['status' => $match->getOriginal('status')];
 
-        $match->update([
-            'status' => 'active',
-            'unmatched_by' => null,
-            'unmatched_at' => null,
-        ]);
+        // ФИКС: Обернули в транзакцию для надежности
+        DB::transaction(function () use ($match, $admin, $before) {
+            $match->update([
+                'status' => UserMatch::STATUS_ACTIVE, // ФИКС: Константа
+                'unmatched_by' => null,
+                'unmatched_at' => null,
+            ]);
 
-        $match->refresh();
+            // ФИКС: Убрали $match->refresh()
 
-        $after = [
-            'status' => 'active', 
-            'restored_by' => $admin->id, 
-            'restored_at' => now()->toDateTimeString(),
-            // ФИКС: Обернули ID юзеров в ключ context
-            'context' => [
-                'user1_id' => $match->user1_id, 
-                'user2_id' => $match->user2_id
-            ]
-        ];
+            $after = [
+                'status' => UserMatch::STATUS_ACTIVE, 
+                'restored_by' => $admin->id, 
+                'restored_at' => now()->toDateTimeString(),
+                'context' => [
+                    'user1_id' => $match->user1_id, 
+                    'user2_id' => $match->user2_id
+                ]
+            ];
 
-        $participants = array_filter([$match->user1_id, $match->user2_id]);
+            $participants = array_filter([$match->user1_id, $match->user2_id]);
 
-        AdminLog::record('match.restore', $match, $admin, $before, $after, participants: $participants);
+            AdminLog::record('match.restore', $match, $admin, $before, $after, participants: $participants);
+        });
         
         Cache::forget('dating_admin_stats');
     }

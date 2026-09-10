@@ -157,7 +157,6 @@ new class extends Component
     }
 }; 
 ?>
-
 <div class="space-y-6">
     @if($this->albums->isEmpty())
         <div class="bg-card border border-border rounded-lg p-16 text-center">
@@ -188,7 +187,8 @@ new class extends Component
                             </h4>
                             <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
                                 @foreach($albumData['photos']['pending'] as $photo)
-                                    <div class="bg-muted/10 border border-border rounded-lg overflow-hidden" wire:key="photo-{{ $photo->id }}">
+                                    <!-- ФИКС: Ключ с префиксом статуса -->
+                                    <div class="bg-muted/10 border border-border rounded-lg overflow-hidden" wire:key="photo-pending-{{ $photo->id }}">
                                         <div class="relative aspect-square group overflow-hidden">
                                             <a href="{{ $photo->original_url ?: $photo->medium_url ?: '#' }}" data-fancybox="gallery-user-{{ $this->user->id }}" data-caption="Фото #{{ $photo->id }}" class="block w-full h-full cursor-pointer">
                                                 <img src="{{ $photo->thumb_url ?: $photo->medium_url ?: asset('images/no-image-placeholder.png') }}" class="w-full h-full object-cover">
@@ -210,7 +210,6 @@ new class extends Component
                                                     <x-lucide-loader-2 wire:loading wire:target="approve({{ $photo->id }})" class="w-4 h-4 animate-spin" />
                                                 </x-ui.button>
                                                 <x-ui.button wire:click="openRejectModal({{ $photo->id }})" variant="warning" size="sm" class="flex-1 h-8 text-xs">Отклонить</x-ui.button>
-                                                <!-- ФИКС: Текст "Карантин" -->
                                                 <x-ui.button wire:click="softDelete({{ $photo->id }})" wire:confirm="Переместить в карантин без причины?" wire:target="softDelete({{ $photo->id }})" variant="destructive" size="sm" class="h-8 text-xs">
                                                     <span wire:loading.remove wire:target="softDelete({{ $photo->id }})">Карантин</span>
                                                     <x-lucide-loader-2 wire:loading wire:target="softDelete({{ $photo->id }})" class="w-4 h-4 animate-spin" />
@@ -231,7 +230,7 @@ new class extends Component
                             </h4>
                             <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
                                 @foreach($albumData['photos']['approved'] as $photo)
-                                    <div class="bg-muted/10 border border-border rounded-lg overflow-hidden" wire:key="photo-{{ $photo->id }}">
+                                    <div class="bg-muted/10 border border-border rounded-lg overflow-hidden" wire:key="photo-approved-{{ $photo->id }}">
                                         <div class="relative aspect-square group overflow-hidden">
                                             <a href="{{ $photo->original_url ?: $photo->medium_url ?: '#' }}" data-fancybox="gallery-user-{{ $this->user->id }}" data-caption="Фото #{{ $photo->id }}" class="block w-full h-full cursor-pointer">
                                                 <img src="{{ $photo->thumb_url ?: $photo->medium_url ?: asset('images/no-image-placeholder.png') }}" class="w-full h-full object-cover">
@@ -255,7 +254,6 @@ new class extends Component
                                                     </x-ui.button>
                                                 @endif
                                                 <x-ui.button wire:click="openRejectModal({{ $photo->id }})" variant="warning" size="sm" class="flex-1 h-8 text-xs">Отклонить</x-ui.button>
-                                                <!-- ФИКС: Текст "Карантин" -->
                                                 <x-ui.button wire:click="softDelete({{ $photo->id }})" wire:confirm="Переместить в карантин без причины?" wire:target="softDelete({{ $photo->id }})" variant="destructive" size="sm" class="h-8 text-xs">
                                                     <span wire:loading.remove wire:target="softDelete({{ $photo->id }})">Карантин</span>
                                                     <x-lucide-loader-2 wire:loading wire:target="softDelete({{ $photo->id }})" class="w-4 h-4 animate-spin" />
@@ -277,7 +275,7 @@ new class extends Component
                             <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
                                 @foreach($albumData['photos']['rejected'] as $photo)
                                     @php $reasonEnum = $photo->reject_reason ? PhotoRejectReason::tryFrom($photo->reject_reason) : null; @endphp
-                                    <div class="bg-muted/10 border border-destructive/20 rounded-lg overflow-hidden" wire:key="photo-{{ $photo->id }}-rejected">
+                                    <div class="bg-muted/10 border border-destructive/20 rounded-lg overflow-hidden" wire:key="photo-rejected-{{ $photo->id }}">
                                         <div class="relative aspect-square group overflow-hidden">
                                             <a href="{{ $photo->original_url ?: $photo->medium_url ?: '#' }}" data-fancybox="gallery-user-{{ $this->user->id }}" data-caption="Фото #{{ $photo->id }}" class="block w-full h-full cursor-pointer">
                                                 <img src="{{ $photo->thumb_url ?: $photo->medium_url ?: asset('images/no-image-placeholder.png') }}" class="w-full h-full object-cover opacity-70">
@@ -320,7 +318,7 @@ new class extends Component
                                         $reasonEnum = $photo->reject_reason ? PhotoRejectReason::tryFrom($photo->reject_reason) : null;
                                         $trashLabel = $reasonEnum ? $reasonEnum->label() : 'Удалено модератором';
                                     @endphp
-                                    <div class="bg-muted/10 border border-border rounded-lg overflow-hidden" wire:key="photo-{{ $photo->id }}-trashed">
+                                    <div class="bg-muted/10 border border-border rounded-lg overflow-hidden" wire:key="photo-trashed-{{ $photo->id }}">
                                         <div class="relative aspect-square group overflow-hidden">
                                             <a href="{{ $photo->original_url ?: $photo->medium_url ?: '#' }}" data-fancybox="gallery-user-{{ $this->user->id }}" data-caption="Фото #{{ $photo->id }}" class="block w-full h-full cursor-pointer">
                                                 <img src="{{ $photo->thumb_url ?: $photo->medium_url ?: asset('images/no-image-placeholder.png') }}" class="w-full h-full object-cover opacity-50 grayscale">
@@ -350,10 +348,10 @@ new class extends Component
 
                 </div>
             </div>
-        @endforeach
+         @endforeach
     @endif
 
-    {{-- МОДАЛКА ОТКЛОНЕНИЯ (Починенная) --}}
+    {{-- МОДАЛКА ОТКЛОНЕНИЯ --}}
     <div x-data="{ show: @entangle('isRejectModalVisible') }" x-show="show" x-cloak 
          class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" 
          style="display: none;"
@@ -378,7 +376,7 @@ new class extends Component
                             <x-ui.select-item value="">Выберите причину...</x-ui.select-item>
                             @foreach(PhotoRejectReason::options() as $value => $label)
                                 <x-ui.select-item value="{{ $value }}" wire:key="reason-{{ $value }}">{{ $label }}</x-ui.select-item>
-                            @endforeach
+                             @endforeach
                         </x-ui.select-content>
                     </x-ui.select>
                     @error('rejectReason') <p class="text-xs text-destructive">{{ $message }}</p> @enderror

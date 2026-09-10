@@ -25,10 +25,10 @@ class FinanceHistorySeeder extends Seeder
         UserSubscription::query()->delete();
         Transaction::query()->delete();
         
-        // Сбрасываем ВСЕ флаги монетизации у юзеров
+        // ФИКС: Сбрасываем даты подписок (убрали несуществующие is_premium и is_vip)
         User::query()->update([
-            'is_premium' => false, 'premium_expires_at' => null,
-            'is_vip' => false, 'vip_expires_at' => null,
+            'premium_expires_at' => null,
+            'vip_expires_at' => null,
         ]);
 
         // Сбрасываем балансы (только кредиты и суперлайки)
@@ -121,14 +121,13 @@ class FinanceHistorySeeder extends Seeder
                             ]);
                             $createdSubs++;
 
-                            // Синхронизируем кэш в users с правильным стеканием дат!
+                            // ФИКС: Синхронизируем кэш в users (убрали флаги, оставили только даты)
                             if ($subStatus === 'active') {
                                 if ($plan->tier === 'premium') {
                                     $startFrom = $user->premium_expires_at && $user->premium_expires_at->isFuture() 
                                                  ? $user->premium_expires_at 
                                                  : now();
                                     $user->update([
-                                        'is_premium' => true, 
                                         'premium_expires_at' => $startFrom->copy()->addDays($plan->duration_days)
                                     ]);
                                 } elseif ($plan->tier === 'vip') {
@@ -136,7 +135,6 @@ class FinanceHistorySeeder extends Seeder
                                                  ? $user->vip_expires_at 
                                                  : now();
                                     $user->update([
-                                        'is_vip' => true, 
                                         'vip_expires_at' => $startFrom->copy()->addDays($plan->duration_days)
                                     ]);
                                 }
@@ -145,7 +143,6 @@ class FinanceHistorySeeder extends Seeder
                     } 
                     else {
                         // --- ЭТАП 2: Покупка кредитов (Единиц) ---
-                        // 1 кредит = 1 рубль. Паки как в топовых приложениях.
                         $creditPacks = [
                             ['credits' => 80, 'price' => 80.00],
                             ['credits' => 300, 'price' => 250.00],
@@ -176,16 +173,16 @@ class FinanceHistorySeeder extends Seeder
                 } // Конец цикла покупок
                 
                 // --- ЭТАП 3: Трата кредитов на Бусты и Подарки ---
-                $user->refresh(); // Обновляем юзера, чтобы получить свежий баланс
+                $user->refresh(); 
                 $balance = $user->balance;
 
                 if ($balance && $balance->credits > 0) {
                     
-                    // 3.1 Активация Бустов (1 буст = 80 кредитов)
+                    // 3.1 Активация Бустов
                     $boostAttempts = rand(0, 3);
                     for ($b = 0; $b < $boostAttempts; $b++) {
                         if ($balance->credits >= 80) {
-                            $balance->spendCredits(80); // Списываем 80 единиц
+                            $balance->spendCredits(80); 
                             $boostDate = now()->subDays(rand(0, 15));
                             
                             UserBoost::create([
@@ -193,8 +190,8 @@ class FinanceHistorySeeder extends Seeder
                                 'transaction_id' => null,
                                 'type' => 'profile_boost',
                                 'starts_at' => $boostDate,
-                                'ends_at' => $boostDate->copy()->addMinutes(30), // Длится 30 минут
-                                'status' => 'expired', // Дата в прошлом, значит истек
+                                'ends_at' => $boostDate->copy()->addMinutes(30), 
+                                'status' => 'expired', 
                                 'created_at' => $boostDate,
                                 'updated_at' => $boostDate,
                             ]);
@@ -206,7 +203,6 @@ class FinanceHistorySeeder extends Seeder
                     if ($gifts->isNotEmpty()) {
                         $giftAttempts = rand(0, 3);
                         for ($g = 0; $g < $giftAttempts; $g++) {
-                            // Находим подарок, на который хватает кредитов
                             $affordableGifts = $gifts->filter(fn($gift) => $gift->price <= $balance->credits);
                             if ($affordableGifts->isEmpty()) break;
 
@@ -243,7 +239,7 @@ class FinanceHistorySeeder extends Seeder
         $this->command->newLine(2);
 
         // ============================================
-        // СТАТИСТИКА
+        // СТАТИСТИКА (ФИКС: Считаем по дате окончания, а не по флагу)
         // ============================================
         $stats = [
             'transactions' => $createdTrans,
@@ -251,8 +247,8 @@ class FinanceHistorySeeder extends Seeder
             'boosts' => $createdBoosts,
             'gifts' => $createdGifts,
             'revenue' => Transaction::where('status', 'success')->sum('amount'),
-            'premium_users' => User::where('is_premium', true)->count(),
-            'vip_users' => User::where('is_vip', true)->count(),
+            'premium_users' => User::where('premium_expires_at', '>', now())->count(),
+            'vip_users' => User::where('vip_expires_at', '>', now())->count(),
             'total_credits' => UserBalance::sum('credits'),
         ];
 

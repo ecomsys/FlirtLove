@@ -7,14 +7,17 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class UserMatch extends Model
 {
-    protected $table = 'user_matches'; // Указываем явно, так как "Match" может конфликтовать в Laravel
+    public const STATUS_ACTIVE = 'active';
+    public const STATUS_UNMATCHED = 'unmatched';
+
+    protected $table = 'user_matches'; 
 
     protected $fillable = [
         'user1_id',
         'user2_id',
-        'status',         // active, unmatched
-        'unmatched_by',   // ID юзера, который разорвал мэтч
-        'unmatched_at',   // Время разрыва
+        'status',
+        'unmatched_by',
+        'unmatched_at',
     ];
 
     protected $casts = [
@@ -25,32 +28,35 @@ class UserMatch extends Model
     // СТАТИЧЕСКИЕ ХЕЛПЕРЫ (Бизнес-логика)
     // ============================================
 
-    /**
-     * Создать мэтч с гарантией отсутствия дубликатов.
-     * Меньший ID всегда идет в user1_id, больший в user2_id.
-     * Это защищает от багов, когда Вася лайкает Машу (10-5), а Маша Васю (5-10).
-     */
-   public static function createMatch(int $userA, int $userB): self
+    public static function createMatch(int $userA, int $userB): self
     {
         $user1Id = min($userA, $userB);
         $user2Id = max($userA, $userB);
 
         try {
-            // Пытаемся создать. Если параллельный процесс уже создал - БД выдаст ошибку дубля.
             return self::create([
                 'user1_id' => $user1Id,
                 'user2_id' => $user2Id,
-                'status' => 'active'
+                'status' => self::STATUS_ACTIVE
             ]);
         } catch (\Illuminate\Database\QueryException $e) {
-            // Код 23505 - ошибка уникального индекса в PostgreSQL
-            // Если упали именно из-за дубля (состояние гонки) - просто забираем существующий мэтч
             if ($e->errorInfo[1] === 23505) { 
-                return self::where('user1_id', $user1Id)
+                // ФИКС: Если мэтч уже есть (например, они разорвали его и снова полайкали)
+                // Мы НЕ просто возвращаем старый unmatched мэтч, а РЕАКТИВИРУЕМ его!
+                $match = self::where('user1_id', $user1Id)
                     ->where('user2_id', $user2Id)
                     ->firstOrFail();
+                    
+                if ($match->status === self::STATUS_UNMATCHED) {
+                    $match->update([
+                        'status' => self::STATUS_ACTIVE,
+                        'unmatched_by' => null,
+                        'unmatched_at' => null,
+                    ]);
+                }
+                
+                return $match;
             }
-            // Если ошибка другая - пробрасываем дальше
             throw $e;
         }
     }
@@ -75,7 +81,7 @@ class UserMatch extends Model
 
     public function scopeActive($query)
     {
-        return $query->where('status', 'active');
+        return $query->where('status', self::STATUS_ACTIVE);
     }
 
     // ============================================
@@ -83,30 +89,26 @@ class UserMatch extends Model
     // ============================================
 
     /**
-     * Получить второго участника матча (Твой код из старой модели).
-     * Оптимизировано под eager loading.
+     * Получить второго участника матча.
+     * getRelationValue само проверит eager loading и сделает запрос, если нужно.
      */
     public function getPartner(int $userId): ?User
     {
-        if ($this->user1_id === $userId) {
-            return $this->relationLoaded('user2') ? $this->user2 : $this->user2()->first();
-        }
-        
-        return $this->relationLoaded('user1') ? $this->user1 : $this->user1()->first();
+        $relationName = $this->user1_id === $userId ? 'user2' : 'user1';
+        return $this->getRelationValue($relationName);
     }
 
     /**
      * Разорвать мэтч (Unmatch).
-     * @param int $userId - Кто инициировал разрыв
      */
     public function unmatch(int $userId): bool
     {
-        if ($this->status === 'unmatched') {
-            return true; // Уже разорван
+        if ($this->status === self::STATUS_UNMATCHED) {
+            return true;
         }
 
         return $this->update([
-            'status' => 'unmatched',
+            'status' => self::STATUS_UNMATCHED,
             'unmatched_by' => $userId,
             'unmatched_at' => now(),
         ]);

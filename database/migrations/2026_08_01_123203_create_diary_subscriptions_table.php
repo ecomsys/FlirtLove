@@ -11,11 +11,8 @@ return new class extends Migration
         Schema::create('diary_subscriptions', function (Blueprint $table) {
             $table->id();
             
-            // Кто подписался (читатель)
-            $table->foreignId('subscriber_id')->constrained('users')->cascadeOnDelete();
-            
-            // На кого подписался (автор дневника)
-            $table->foreignId('author_id')->constrained('users')->cascadeOnDelete();
+            $table->foreignId('subscriber_id')->constrained('users')->nullOnDelete();
+            $table->foreignId('author_id')->constrained('users')->nullOnDelete();
             
             $table->timestamps();
 
@@ -24,11 +21,10 @@ return new class extends Migration
             // 1. Защита от дублей (Иван не может подписаться на Машу дважды)
             $table->unique(['subscriber_id', 'author_id']);
             
-            // 2. Для вывода списка "На кого я подписан" (WHERE subscriber_id = ?)
-            $table->index('subscriber_id');
+            // Убрали index('subscriber_id'), так как он автоматом работает из unique-индекса!
             
-            // 3. Для вывода списка "Мои подписчики" (WHERE author_id = ?)
-            $table->index('author_id');
+            // 2. Для пагинации списка "Мои подписчики" (с сортировкой по дате)
+            $table->index(['author_id', 'created_at']);
         });
     }
 

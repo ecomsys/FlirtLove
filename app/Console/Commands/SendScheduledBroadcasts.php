@@ -8,28 +8,23 @@ use App\Models\AdminLog;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
 
-// запускаем 2 терминала обработки очередей чтобы действия на сайте не задерживали отправку уведомлений
-
-// php artisan queue:work --queue=default
-// php artisan queue:work --queue=broadcasts
-
 class SendScheduledBroadcasts extends Command
 {
     protected $signature = 'broadcasts:send-scheduled';
     protected $description = 'Отправляет запланированные оповещения (рассылки)';
 
-       public function handle(): int
+    public function handle(): int
     {
+        // dueForDispatch использует индекс ['status', 'scheduled_at'], запрос летает за 1ms
         $broadcasts = Broadcast::dueForDispatch()->get();
 
         if ($broadcasts->isEmpty()) {
             $this->info('Нет запланированных оповещений для отправки.');
-            return 0;
+            return Command::SUCCESS;
         }
 
         foreach ($broadcasts as $broadcast) {
             try {
-                // Сохраняем состояние ДО (для диффа в логах)
                 $before = $broadcast->only(['status', 'started_at']);
 
                 $updated = Broadcast::where('id', $broadcast->id)
@@ -40,14 +35,16 @@ class SendScheduledBroadcasts extends Command
                     ]);
                 
                 if ($updated) {
-                    // Обновляем модель в памяти, чтобы получить точное время started_at
-                    $broadcast->refresh();
+                    // ФИКС: Убрали $broadcast->refresh(). Просто вручную синхронизируем память.
+                    $broadcast->status = 'sending';
+                    $broadcast->started_at = now();
                     $after = $broadcast->only(['status', 'started_at']);
 
-                    // ПИШЕМ В ЖУРНАЛ! (Передаем null вместо админа, так как это система)
+                    // Пишем в Журнал (null вместо админа, так как это система)
                     AdminLog::record('broadcast.send_scheduled', $broadcast, null, $before, $after);
                     Log::info("Крон запустил рассылку по расписанию", ['broadcast_id' => $broadcast->id]);
 
+                    // Отправляем в очередь
                     SendBroadcastJob::dispatch($broadcast->id, $broadcast->target_audience)->onQueue('broadcasts');
                     
                     $this->info("Оповещение #{$broadcast->id} передано в очередь на отправку.");
@@ -61,6 +58,6 @@ class SendScheduledBroadcasts extends Command
             }
         }
 
-        return 0;
+        return Command::SUCCESS;
     }
 }

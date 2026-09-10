@@ -35,7 +35,13 @@ class SendSubscribeExpiringNotification implements ShouldQueue
             return; 
         }
 
-        $user->notify(new SubscriptionExpiringSoonNotification($this->subscription));
+         $user->notify(new SubscriptionExpiringSoonNotification(
+            subscriptionId: $this->subscription->id,
+            planName: $this->subscription->plan?->name ?? 'Подписка',
+            price: $this->subscription->plan ? number_format($this->subscription->plan->price, 2) . ' ' . $this->subscription->plan->currency : null,
+            endsAt: $this->subscription->ends_at->format('d.m.Y H:i'),
+            isAutoRenew: (bool) $this->subscription->is_auto_renew
+        ));
         
         Log::info("SendSubscribeExpiringNotification: Отправлено юзеру ID {$user->id} о подписке ID {$this->subscription->id}");
     }

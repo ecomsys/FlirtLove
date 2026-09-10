@@ -26,7 +26,6 @@ new class extends Component
         $this->userId = $userId;
     }
 
-    // ФИКС: Добавили недостающее свойство user
     #[Computed]
     public function user(): User
     {
@@ -35,8 +34,9 @@ new class extends Component
 
     private function getAvatarQuery(): \Closure
     {
+        // ФИКС: Убрали is_premium, добавили vip_expires_at
         return fn($q) => $q->withTrashed()
-            ->select('id', 'name', 'email', 'status', 'is_premium', 'premium_expires_at', 'last_seen')
+            ->select('id', 'name', 'email', 'status', 'premium_expires_at', 'vip_expires_at', 'last_seen')
             ->with(['photos' => fn($sq) => $sq->select('id', 'user_id', 'is_primary', 'status', 'path_thumb')->orderByDesc('is_primary')->limit(1)]);
     }
 
@@ -58,7 +58,6 @@ new class extends Component
             ->paginate(10, ['*'], 'blockersPage');
     }
 
-    // ФИКС: Делегируем логику в Action
     public function unblockUser(int $blockId, ManageUserBlocksAction $action): void
     {
         $block = UserBlock::find($blockId);
@@ -143,16 +142,17 @@ new class extends Component
                             <x-ui.table-cell class="text-xs text-muted-foreground whitespace-nowrap">
                                 {{ $block->created_at->diffForHumans() }}
                             </x-ui.table-cell>
-                            <!-- НОВАЯ КОЛОНКА ДЕЙСТВИЙ -->
+                            <!-- НОВАЯ КОЛОНКА ДЕЙСТВИЙ (СО СПИННЕРОМ) -->
                             <x-ui.table-cell class="text-right">
-                                <x-ui.button variant="ghost" size="icon-sm" wire:click="unblockUser({{ $block->id }})" wire:confirm="Принудительно снять блокировку?">
-                                    <x-lucide-trash-2 class="w-4 h-4 text-destructive" />
+                                <x-ui.button variant="ghost" size="icon-sm" wire:click="unblockUser({{ $block->id }})" wire:confirm="Принудительно снять блокировку?" wire:loading.attr="disabled" wire:target="unblockUser({{ $block->id }})" class="text-destructive hover:text-destructive">
+                                    <x-lucide-trash-2 class="w-4 h-4" wire:loading.remove wire:target="unblockUser({{ $block->id }})" />
+                                    <x-lucide-loader-2 class="w-4 h-4 animate-spin" wire:loading wire:target="unblockUser({{ $block->id }})" />
                                 </x-ui.button>
                             </x-ui.table-cell>
                         </x-ui.table-row>
                     @endforeach
                 </x-ui.table-body>
-                  </x-ui.table>
+            </x-ui.table>
             <div class="mt-2">{{ $this->blockedUsers->links('partials.pagination') }}</div>
         @endif
     </div>
@@ -218,16 +218,17 @@ new class extends Component
                             <x-ui.table-cell class="text-xs text-muted-foreground whitespace-nowrap">
                                 {{ $block->created_at->diffForHumans() }}
                             </x-ui.table-cell>
-                            <!-- НОВАЯ КОЛОНКА ДЕЙСТВИЙ -->
+                            <!-- НОВАЯ КОЛОНКА ДЕЙСТВИЙ (СО СПИННЕРОМ) -->
                             <x-ui.table-cell class="text-right">
-                                <x-ui.button variant="ghost" size="icon-sm" wire:click="unblockUser({{ $block->id }})" wire:confirm="Принудительно снять блокировку?">
-                                    <x-lucide-trash-2 class="w-4 h-4 text-destructive" />
+                                <x-ui.button variant="ghost" size="icon-sm" wire:click="unblockUser({{ $block->id }})" wire:confirm="Принудительно снять блокировку?" wire:loading.attr="disabled" wire:target="unblockUser({{ $block->id }})" class="text-destructive hover:text-destructive">
+                                    <x-lucide-trash-2 class="w-4 h-4" wire:loading.remove wire:target="unblockUser({{ $block->id }})" />
+                                    <x-lucide-loader-2 class="w-4 h-4 animate-spin" wire:loading wire:target="unblockUser({{ $block->id }})" />
                                 </x-ui.button>
                             </x-ui.table-cell>
                         </x-ui.table-row>
                     @endforeach
                 </x-ui.table-body>
-                  </x-ui.table>
+            </x-ui.table>
             <div class="mt-2">{{ $this->blockers->links('partials.pagination') }}</div>
         @endif
     </div>

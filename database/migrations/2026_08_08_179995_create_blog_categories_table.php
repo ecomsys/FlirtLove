@@ -10,20 +10,14 @@ return new class extends Migration
     {
         Schema::create('blog_categories', function (Blueprint $table) {
             $table->id();
-            
-            // Название для отображения (в админке и на сайте)
             $table->string('name');
-            
-            // Слаг для URL (например: /blog/category/tips)
             $table->string('slug')->unique();
-            
-            // Флаг активности (скрытые категории не выводятся на сайте)
             $table->boolean('is_active')->default(true);
-            
-            // Порядок сортировки (ручной порядок в меню)
             $table->unsignedSmallInteger('sort_order')->default(0);
-            
             $table->timestamps();
+
+            // НОВЫЙ: Для моментального вывода активных категорий в меню (без filesort)
+            $table->index(['is_active', 'sort_order']);
         });
     }
 

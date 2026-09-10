@@ -23,7 +23,7 @@ new class extends Component
     public function updatedSearch(): void
     {
         $this->resetPage();
-         unset($this->diaries); 
+        unset($this->diaries); 
     }
 
     public function setRubricFilter(string $filter): void
@@ -45,7 +45,8 @@ new class extends Component
     public function userRubrics()
     {
         return DiaryRubric::whereHas('diaries', fn($q) => $q->where('user_id', $this->userId))
-            ->orderBy('user_id') // Системные (null) будут сверху
+            // ФИКС: PostgreSQL по умолчанию кидает NULL в конец. IS NULL DESC ставит их на первое место.
+            ->orderByRaw('user_id IS NULL DESC')
             ->orderBy('name')
             ->get();
     }
@@ -60,7 +61,6 @@ new class extends Component
             ->with('diaryRubric')
             ->withTrashed()
             ->when($this->search, function ($q) use ($operator) {
-                // ФИКС: Обернули в where(), чтобы OR не сломал фильтр user_id
                 $q->where(function ($q) use ($operator) {
                     $q->where('title', $operator, "%{$this->search}%");
                     if (is_numeric($this->search)) {
@@ -80,38 +80,38 @@ new class extends Component
     }
 }; 
 ?>
-
 <div class="space-y-4">
 
     <div class="flex justify-between gap-4">
-    <!-- Кнопки фильтров по рубрикам -->
-    <div class="flex flex-wrap gap-1.5">
-        <x-ui.button wire:click="setRubricFilter('all')" variant="{{ $rubricFilter === 'all' ? 'default' : 'secondary' }}" size="sm">
-            Все записи
-        </x-ui.button>
-        <x-ui.button wire:click="setRubricFilter('none')" variant="{{ $rubricFilter === 'none' ? 'default' : 'secondary' }}" size="sm">
-            Без рубрики
-        </x-ui.button>
-        @foreach($this->userRubrics as $r)
-            <x-ui.button wire:click="setRubricFilter('{{ $r->id }}')" variant="{{ $rubricFilter == $r->id ? 'default' : 'secondary' }}" size="sm">
-                <span class="flex items-center gap-1">
-                    @if($r->user_id) 
-                        <x-lucide-user class="w-3 h-3 text-muted-foreground" />
-                    @else 
-                        <x-lucide-globe class="w-3 h-3 text-blue-500" />
-                    @endif
-                    {{ $r->name }}
-                </span>
+        <!-- Кнопки фильтров по рубрикам -->
+        <div class="flex flex-wrap gap-1.5">
+            <x-ui.button wire:click="setRubricFilter('all')" variant="{{ $rubricFilter === 'all' ? 'default' : 'secondary' }}" size="sm">
+                Все записи
             </x-ui.button>
-        @endforeach
-    </div>
-    <!-- Поиск по записям этого юзера -->
-    <div class="flex justify-end">
-        <div class="relative w-64">
-            <x-ui.input wire:model.live.debounce.300ms="search" type="search" placeholder="Поиск по названию..." class="pl-9 pr-8" />
-            <x-lucide-search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground z-10" />
+            <x-ui.button wire:click="setRubricFilter('none')" variant="{{ $rubricFilter === 'none' ? 'default' : 'secondary' }}" size="sm">
+                Без рубрики
+            </x-ui.button>
+            @foreach($this->userRubrics as $r)
+                <!-- ФИКС: Добавлен wire:key для стабильности фильтров -->
+                <x-ui.button wire:key="rubric-filter-{{ $r->id }}" wire:click="setRubricFilter('{{ $r->id }}')" variant="{{ $rubricFilter == $r->id ? 'default' : 'secondary' }}" size="sm">
+                    <span class="flex items-center gap-1">
+                        @if($r->user_id) 
+                            <x-lucide-user class="w-3 h-3 text-muted-foreground" />
+                        @else 
+                            <x-lucide-globe class="w-3 h-3 text-blue-500" />
+                        @endif
+                        {{ $r->name }}
+                    </span>
+                </x-ui.button>
+            @endforeach
         </div>
-    </div>    
+        <!-- Поиск по записям этого юзера -->
+        <div class="flex justify-end">
+            <div class="relative w-64">
+                <x-ui.input wire:model.live.debounce.300ms="search" type="search" placeholder="Поиск по названию..." class="pl-9 pr-8" />
+                <x-lucide-search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground z-10" />
+            </div>
+        </div>    
     </div>
 
     <x-ui.table>

@@ -17,7 +17,7 @@ return new class extends Migration
             // Кого заблокировал
             $table->foreignId('blocked_id')->constrained('users')->cascadeOnDelete();
             
-            // Причина блокировки (для аналитики в админке: spam, insult, creepy и т.д.)
+            // Причина блокировки (для аналитики в админке)
             $table->string('reason')->nullable();
             
             $table->timestamps();
@@ -27,8 +27,11 @@ return new class extends Migration
             // 1. Защита от дубликатов (нельзя заблокировать дважды)
             $table->unique(['blocker_id', 'blocked_id']);
             
-            // 2. Для админки: найти юзеров, которых блокируют чаще всего (жертвы скамеров)
-            $table->index('blocked_id');
+            // 2. Для пагинации списка "Кого я заблокировал"
+            $table->index(['blocker_id', 'created_at']);
+            
+            // 3. Для админки: найти юзеров, которых блокируют чаще всего
+            $table->index(['blocked_id', 'created_at']);
         });
     }
 

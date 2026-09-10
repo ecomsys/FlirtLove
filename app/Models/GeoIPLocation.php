@@ -2,12 +2,18 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class GeoIPLocation extends Model
 {
+    // КОНСТАНТЫ ТИПОВ
+    public const TYPE_COUNTRY = 'country';
+    public const TYPE_REGION = 'region';
+    public const TYPE_CITY = 'city';
+
     protected $table = 'geoip_locations';
 
     protected $fillable = [
@@ -42,18 +48,37 @@ class GeoIPLocation extends Model
     // СКОПЫ
     // ============================================
 
-    public function scopeCountries($query)
+    public function scopeCountries(Builder $query): Builder
     {
-        return $query->where('type', 'country');
+        return $query->where('type', self::TYPE_COUNTRY);
     }
 
-    public function scopeRegistrationBlocked($query)
+    public function scopeRegistrationBlocked(Builder $query): Builder
     {
         return $query->where('is_registration_blocked', true);
     }
 
-    public function scopeFeedBlocked($query)
+    public function scopeFeedBlocked(Builder $query): Builder
     {
         return $query->where('is_feed_blocked', true);
+    }
+
+    // ============================================
+    // ХЕЛПЕРЫ
+    // ============================================
+
+    public function isCountry(): bool
+    {
+        return $this->type === self::TYPE_COUNTRY;
+    }
+
+    public function isRegion(): bool
+    {
+        return $this->type === self::TYPE_REGION;
+    }
+
+    public function isCity(): bool
+    {
+        return $this->type === self::TYPE_CITY;
     }
 }

@@ -15,23 +15,31 @@ class AddLocationToUsersSeeder extends Seeder
             return;
         }
 
+        // Названия городов пишем на английском, так как пакет world хранит их так
         $cities = [
-            'Москва' => ['lat' => 55.7558, 'lng' => 37.6173],
-            'Санкт-Петербург' => ['lat' => 59.9343, 'lng' => 30.3351],
-            'Казань' => ['lat' => 55.7887, 'lng' => 49.1221],
-            'Новосибирск' => ['lat' => 55.0084, 'lng' => 82.9357],
-            'Екатеринбург' => ['lat' => 56.8389, 'lng' => 60.6057],
-            'Сочи' => ['lat' => 43.6028, 'lng' => 39.7342],
-            'Краснодар' => ['lat' => 45.0355, 'lng' => 38.9753],
-            'Владивосток' => ['lat' => 43.1155, 'lng' => 131.8855],
-            'Калининград' => ['lat' => 54.7104, 'lng' => 20.4522],
-            'Ростов-на-Дону' => ['lat' => 47.2357, 'lng' => 39.7015],
-            'Самара' => ['lat' => 53.1959, 'lng' => 50.1008],
-            'Уфа' => ['lat' => 54.7388, 'lng' => 55.9721],
-            'Красноярск' => ['lat' => 56.0106, 'lng' => 92.8526],
-            'Пермь' => ['lat' => 58.0104, 'lng' => 56.2294],
-            'Воронеж' => ['lat' => 51.6608, 'lng' => 39.2003],
+            'Moscow' => ['lat' => 55.7558, 'lng' => 37.6173],
+            'Saint Petersburg' => ['lat' => 59.9343, 'lng' => 30.3351],
+            'Kazan' => ['lat' => 55.7887, 'lng' => 49.1221],
+            'Novosibirsk' => ['lat' => 55.0084, 'lng' => 82.9357],
+            'Yekaterinburg' => ['lat' => 56.8389, 'lng' => 60.6057],
+            'Sochi' => ['lat' => 43.6028, 'lng' => 39.7342],
+            'Krasnodar' => ['lat' => 45.0355, 'lng' => 38.9753],
+            'Vladivostok' => ['lat' => 43.1155, 'lng' => 131.8855],
+            'Kaliningrad' => ['lat' => 54.7104, 'lng' => 20.4522],
+            'Rostov-on-Don' => ['lat' => 47.2357, 'lng' => 39.7015],
+            'Samara' => ['lat' => 53.1959, 'lng' => 50.1008],
+            'Ufa' => ['lat' => 54.7388, 'lng' => 55.9721],
+            'Krasnoyarsk' => ['lat' => 56.0106, 'lng' => 92.8526],
+            'Perm' => ['lat' => 58.0104, 'lng' => 56.2294],
+            'Voronezh' => ['lat' => 51.6608, 'lng' => 39.2003],
         ];
+
+        // Достаем ID России и собираем ID нужных городов из БД
+        $russia = DB::table('countries')->where('iso2', 'RU')->first();
+        $cityIds = DB::table('cities')
+            ->where('country_id', $russia->id ?? 0)
+            ->whereIn('name', array_keys($cities))
+            ->pluck('id', 'name'); // Вернет коллекцию: ['Moscow' => 123, 'Kazan' => 456, ...]
 
         // Берем только обычных юзеров (role = 'user')
         $users = DB::table('users')->where('role', 'user')->get();
@@ -55,19 +63,21 @@ class AddLocationToUsersSeeder extends Seeder
             $lat = $center['lat'] + $latOffset;
             $lng = $center['lng'] + $lngOffset;
 
+            // Находим ID города, если он есть в базе
+            $cityId = $cityIds[$cityName] ?? null;
+
             // ВАЖНО: Добавлено ::geography, так как колонка имеет тип geography!
-            // Профиль уже 100% существует (создается событием booted в модели User)
             DB::table('user_profiles')
                 ->where('user_id', $user->id)
                 ->update([
-                    'city' => $cityName,
-                    'country' => 'Россия',
+                    'city_id' => $cityId, // Записываем ID вместо строки
+                    'country_id' => $russia->id ?? null, // Записываем ID страны
                     'location' => DB::raw("ST_SetSRID(ST_MakePoint({$lng}, {$lat}), 4326)::geography"),
                     'updated_at' => now(),
                 ]);
 
             $updated++;
-            $this->command->line("   ✓ Пользователь ID {$user->id} → {$cityName} ({$lat}, {$lng})");
+            $this->command->line("   ✓ Пользователь ID {$user->id} → {$cityName} (ID: {$cityId}) ({$lat}, {$lng})");
         }
 
         $this->command->info("✅ Координаты добавлены для {$updated} пользователей!");

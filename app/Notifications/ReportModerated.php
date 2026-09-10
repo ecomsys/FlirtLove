@@ -2,9 +2,6 @@
 
 namespace App\Notifications;
 
-use App\Models\Report;
-use App\Models\User;
-use App\Models\Photo;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Notifications\Notification;
@@ -16,26 +13,28 @@ class ReportModerated extends Notification implements ShouldQueue
 {
     use Queueable;
 
+    // ФИКС: Передаем ТОЛЬКО скаляры! Никаких моделей в Redis.
     public function __construct(
-        protected ?Report $report = null,
+        protected ?int $reportId = null,
+        protected ?string $reportableType = null,
+        protected ?int $reportableId = null,
+        protected ?string $reportedName = null,
+        protected ?string $reason = null,
         protected string $action = 'resolved',
         protected ?string $additionalInfo = null
     ) {}
 
-    /**
-     *  Каналы доставки с учетом глобальных тумблеров и категорий
-     */
     public function via($notifiable): array
     {
-        $channels = ['database']; // В базу (колокольчик) пишем ВСЕГДА
+        $channels = ['database'];
 
-        // Проверяем глобальный тумблер Push
+        $emailSettings = $notifiable->email_settings ?? [];
+
         if ($notifiable->push_enabled && in_array($this->action, ['resolved', 'rejected', 'user_banned', 'photo_deleted'])) {
             $channels[] = 'broadcast';
         }
 
-        // Проверяем глобальный тумблер Email И категорию "Новые события" (on_event)
-        if ($notifiable->email_enabled && ($notifiable->email_settings['on_event'] ?? true)) {
+        if ($notifiable->email_enabled && ($emailSettings['on_event'] ?? true)) {
             $channels[] = 'mail';
         }
 
@@ -51,17 +50,13 @@ class ReportModerated extends Notification implements ShouldQueue
             ->greeting('Здравствуйте, ' . $notifiable->name . '!')
             ->line($messages['body']);
 
-        if ($this->report) {
-            // Используем полиморфную связь reportable_type вместо старого поля type
-            if ($this->report->reportable_type === User::class) {
-                $reportedName = $this->report->reported ? $this->report->reported->name : 'Удален';
-                $mail->line('Жалоба на пользователя: ' . $reportedName);
-                $mail->line('Причина: "' . $this->report->reason . '"');
-            } elseif ($this->report->reportable_type === Photo::class) {
-                // Берем ID из полиморфной связи
-                $mail->line('Жалоба на фото #' . $this->report->reportable_id);
-                $mail->line('Причина: "' . $this->report->reason . '"');
-            }
+        // ФИКС: Используем скаляры вместо связей модели
+        if ($this->reportableType === 'App\Models\User') {
+            $mail->line('Жалоба на пользователя: ' . ($this->reportedName ?? 'Удален'));
+            $mail->line('Причина: "' . ($this->reason ?? 'не указана') . '"');
+        } elseif ($this->reportableType === 'App\Models\Photo') {
+            $mail->line('Жалоба на фото #' . $this->reportableId);
+            $mail->line('Причина: "' . ($this->reason ?? 'не указана') . '"');
         }
 
         if ($this->action === 'resolved') {
@@ -69,8 +64,7 @@ class ReportModerated extends Notification implements ShouldQueue
         } elseif ($this->action === 'rejected') {
             $mail->line('К сожалению, ваша жалоба не была подтверждена.');
         } elseif ($this->action === 'user_banned') {
-            $userName = $this->getReportedUserName();
-            $mail->line('Пользователь ' . $userName . ' забанен.');
+            $mail->line('Пользователь ' . ($this->reportedName ?? 'нарушитель') . ' забанен.');
         } elseif ($this->action === 'photo_deleted') {
             $mail->line('Фото удалено с сайта.');
         }
@@ -84,24 +78,16 @@ class ReportModerated extends Notification implements ShouldQueue
 
     public function toDatabase($notifiable): array
     {
-        $messages = $this->getMessages();
-        
-        $finalMessage = $messages['message'];
-        if ($this->additionalInfo) {
-            $finalMessage .= ' ' . $this->additionalInfo;
-        }
-
         return [
             'type' => 'report_moderated',
-            'title' => $messages['title'],
-            'message' => $finalMessage,
-            'action_url' => url('/'), // Или url('/admin/reports') если это для админа
+            'title' => $this->getMessages()['title'],
+            'message' => $this->buildFinalMessage(),
+            'action_url' => url('/'),
             'data' => [
-                'report_id' => $this->report ? $this->report->id : null,
+                'report_id' => $this->reportId,
                 'action' => $this->action,
-                // Сохраняем тип сущности через полиморфную связь
-                'report_type' => $this->report ? $this->report->reportable_type : null,
-                'reason' => $this->report ? $this->report->reason : null,
+                'report_type' => $this->reportableType,
+                'reason' => $this->reason,
                 'additional_info' => $this->additionalInfo,
             ]
         ];
@@ -109,42 +95,26 @@ class ReportModerated extends Notification implements ShouldQueue
 
     public function toBroadcast($notifiable): BroadcastMessage
     {
-        $messages = $this->getMessages();
-        
-        $finalMessage = $messages['message'];
-        if ($this->additionalInfo) {
-            $finalMessage .= ' ' . $this->additionalInfo;
-        }
+        $dbData = $this->toDatabase($notifiable);
 
-        return new BroadcastMessage([
-            'type' => 'report_moderated',
-            'title' => $messages['title'],
-            'message' => $finalMessage,
-            'action_url' => url('/'),
+        return new BroadcastMessage(array_merge($dbData, [
             'timestamp' => now()->toDateTimeString(),
-            'data' => [
-                'report_id' => $this->report ? $this->report->id : null,
-                'action' => $this->action,
-                'report_type' => $this->report ? $this->report->reportable_type : null,
-                'reason' => $this->report ? $this->report->reason : null,
-                'additional_info' => $this->additionalInfo,
-            ]
-        ]);
+        ]));
     }
 
-    private function getReportedUserName(): string
+    private function buildFinalMessage(): string
     {
-        // Используем связь reported() из нашей новой модели
-        if ($this->report && $this->report->reported) {
-            return $this->report->reported->name;
+        $message = $this->getMessages()['message'];
+        if ($this->additionalInfo) {
+            $message .= ' ' . $this->additionalInfo;
         }
-
-        return 'нарушитель';
+        return $message;
     }
 
     private function getMessages(): array
     {
-        $userName = $this->getReportedUserName();
+        // ФИКС: Берем имя из скаляра
+        $userName = $this->reportedName ?? 'нарушитель';
 
         return match ($this->action) {
             'resolved' => [
@@ -180,12 +150,8 @@ class ReportModerated extends Notification implements ShouldQueue
         };
     }
 
-    /**
-     * ЗАЩИТА ОЧЕРЕДИ
-     */
     public function failed(\Throwable $exception): void
     {
-        $reportId = $this->report ? $this->report->id : 'N/A';
-        Log::error("Не удалось отправить ReportModerated (Report ID: {$reportId}): " . $exception->getMessage());
+        Log::error("Не удалось отправить ReportModerated (Report ID: {$this->reportId}): " . $exception->getMessage());
     }
 }

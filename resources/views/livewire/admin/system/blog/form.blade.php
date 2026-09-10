@@ -40,13 +40,16 @@ new #[Layout('layouts.admin')] class extends Component
         'archived' => 'В архиве'
     ];
 
-    public function mount(?BlogPost $post = null): void
+       public function mount(?BlogPost $post = null): void
     {
         $previousUrl = url()->previous();
         $currentUrl = url()->current();
         $this->backUrl = $previousUrl && $previousUrl !== $currentUrl ? $previousUrl : route('admin.system.blog.index');
 
         if ($post && $post->exists) {
+            // ФИКС: Eager load обложки, чтобы не было N+1 при выводе $this->coverPreviewUrl
+            $post->loadMissing('cover');
+            
             $this->post = $post;
             $this->title = $post->title;
             $this->slug = $post->slug;
@@ -118,13 +121,18 @@ new #[Layout('layouts.admin')] class extends Component
 
         $categoryName = $this->newCategoryName;
 
+        // ФИКС: Str::slug может вернуть пустую строку, если ввести только смайлы. Защищаемся.
+        $slug = Str::slug($categoryName);
+        if (empty($slug)) {
+            $slug = 'category-' . time();
+        }
+
         $category = BlogCategory::create([
             'name' => $categoryName,
-            'slug' => Str::slug($categoryName),
+            'slug' => $slug,
             'sort_order' => (BlogCategory::max('sort_order') ?? 0) + 1,
         ]);
 
-        // НОВОЕ: Логируем создание рубрики
         AdminLog::record('blog_category.create', $category, auth()->user(), null, [
             'status' => 'created',
             'context' => [
@@ -156,10 +164,9 @@ new #[Layout('layouts.admin')] class extends Component
         }
 
         BlogPost::where('category_id', $id)->update(['category_id' => null]);
-        $category->delete();
         
-        // НОВОЕ: Логируем удаление рубрики
-        AdminLog::record('blog_category.delete', null, auth()->user(), null, [
+        // ФИКС: Передаем саму модель $category, чтобы лог привязался к ID рубрики
+        AdminLog::record('blog_category.delete', $category, auth()->user(), null, [
             'status' => 'destroyed',
             'context' => [
                 'category_id' => $categoryId,
@@ -167,18 +174,18 @@ new #[Layout('layouts.admin')] class extends Component
                 'admin_id' => auth()->id()
             ]
         ]);
+        
+        $category->delete();
 
         unset($this->categories);
 
         $this->dispatch('show-toast', type: 'success', message: 'Рубрика "' . $categoryName . '" удалена!');
     }
 
-    protected function rules(): array
+     protected function rules(): array
     {
-        $slugRule = 'required|alpha_dash|unique:blog_posts,slug';
-        if ($this->post && $this->post->exists) {
-            $slugRule .= ',' . $this->post->id;
-        }
+        // ФИКС: Жесткая регулярка + Rule::unique для PostgreSQL
+        $slugRule = ['required', 'regex:/^[a-z0-9-]+$/', \Illuminate\Validation\Rule::unique('blog_posts', 'slug')->ignore($this->post?->id)];
 
         return [
             'title' => 'required|string|max:255',
@@ -198,11 +205,11 @@ new #[Layout('layouts.admin')] class extends Component
             $validated = $this->validate();
         } catch (ValidationException $e) {
             $this->dispatch('show-toast', type: 'error', message: 'Ошибка валидации: проверьте выделенные поля.');
-            throw $e; // Пробрасываем ошибку дальше, чтобы Livewire подсветил поля красным
+            throw $e; 
         }
 
         try {
-            $validated['cover_media_id'] = $this->cover_media_id;
+            // ФИКС: Убрали дублирующую строку, cover_media_id уже в $validated
 
             if ($this->post && $this->post->exists) {
                 $action->updatePost($this->post, $validated, auth()->user());
@@ -220,7 +227,7 @@ new #[Layout('layouts.admin')] class extends Component
 };
 ?>
 
-<div class="space-y-6 pb-6" x-data="blogForm()">
+<div class="space-y-6 pb-6" x-data="blogForm()"  wire:key="blog-form-{{ $page?->id ?? 'new' }}">
     <!-- Заголовок и хлебные крошки -->
     <div class="flex items-center justify-between flex-wrap gap-4">
         <div class="flex items-start gap-3">
@@ -229,7 +236,7 @@ new #[Layout('layouts.admin')] class extends Component
             </a>
             <div class="flex flex-col gap-1">
                 <div class="flex items-center gap-2 text-sm text-muted-foreground">
-                    <a href="{{ route('admin.system.blog.index') }}" wire:navigate class="hover:text-foreground transition-colors">Блог</a>
+                    <a href="{{ route('admin.system.blog.index') }}" wire:navigate class="hover:text-foreground transition-colors">К записям блога</a>
                     <x-lucide-chevron-right class="w-4 h-4" />
                     <span>{{ $post && $post->exists ? 'Редактирование' : 'Создание' }}</span>
                 </div>
@@ -339,7 +346,7 @@ new #[Layout('layouts.admin')] class extends Component
                 </h3>
 
                 <div class="flex flex-col gap-2 mb-4">
-                    <x-ui.label for="slug" class="text-xs">URL (Slug)</x-ui.label>
+                    <x-ui.label for="slug" class="text-xs">Slug</x-ui.label>
                     <x-ui.input id="slug" wire:model="slug" placeholder="url-posta" class="flex-1 text-sm" />
                     @error('slug') <p class="text-xs text-destructive mt-1">{{ $message }}</p> @enderror
                 </div>
@@ -462,9 +469,8 @@ new #[Layout('layouts.admin')] class extends Component
         </div>
     </div>
 
-    <!-- Подключаем TinyMCE и наш внешний файл конфигурации -->
+       <!-- Подключаем только сам TinyMCE -->
     <script src="https://cdn.jsdelivr.net/npm/tinymce@6.8.4/tinymce.min.js"></script>
-    <script src="{{ asset('js/tinymce.config.js') }}"></script>
 
     <script>
         window.blogForm = function () {
@@ -483,7 +489,7 @@ new #[Layout('layouts.admin')] class extends Component
                             this.waitForTinyMCE();
                             this.setupThemeWatcher();
                         } else {
-                            // ФИКС: Если DOM еще не готов, ждем 100мс и пробуем снова, пока не найдет textarea
+                            // Если DOM еще не готов, ждем 100мс и пробуем снова
                             setTimeout(() => this.init(), 100);
                         }
                     });
@@ -507,11 +513,7 @@ new #[Layout('layouts.admin')] class extends Component
 
                 initTinyMCE() {
                     if (typeof tinymce === 'undefined' || !this.textareaElement) return;
-                    
-                    // ФИКС: Жестко убиваем старые инстансы, если они зависли, чтобы не было гонок
-                    if (tinymce.get('tinyMceBody')) {
-                        tinymce.get('tinyMceBody').remove();
-                    }
+                    if (tinymce.get('tinyMceBody')) return; // Защита от дублей
 
                     this.currentTheme = this.getTheme();
                     const isDark = this.currentTheme === 'dark';
@@ -522,27 +524,54 @@ new #[Layout('layouts.admin')] class extends Component
                     const mutedColor = this.getCssVar('--muted-foreground');
                     const mutedBgColor = this.getCssVar('--muted');
 
-                    // Достаем настройки из внешнего файла
-                    const config = window.getTinyMceConfig(isDark, textColor, bgColor, borderColor, mutedColor, mutedBgColor);
-                    
-                    // Добавляем селектор и коллбэки
-                    config.selector = '#tinyMceBody';
-                    config.setup = (editor) => {
-                        editor.on('init', () => {
-                            this.isEditorLoaded = true; 
-                        });
+                    // Инициализация с inline конфигом (точно как в рассылках)
+                    tinymce.init({
+                        selector: '#tinyMceBody',
+                        license_key: 'gpl',
+                        menubar: false,
+                        height: '100%',
+                        plugins: 'lists link table image autolink wordcount code fullscreen quickbars',
+                        toolbar: 'undo redo | blocks | bold italic underline strikethrough | alignleft aligncenter alignright | bullist numlist outdent indent | link table image | code fullscreen',
+                        skin: isDark ? 'oxide-dark' : 'oxide',
+                        content_css: isDark ? 'dark' : 'default',
+                        statusbar: false, 
+                        placeholder: '',
+                        
+                        content_style: `
+                            body { 
+                                background-color: ${bgColor} !important; 
+                                color: ${textColor} !important;
+                                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; 
+                                font-size: 0.85rem; 
+                                line-height: 1.6; 
+                                padding: 1rem; 
+                                margin: 0 !important;
+                            }
+                            h1, h2, h3, h4 { color: ${textColor} !important; }
+                            h1 { font-size: 1.5rem; font-weight: 700; margin-top: 1rem; margin-bottom: 0.5rem; }
+                            h2 { font-size: 1.25rem; font-weight: 600; margin-top: 1rem; margin-bottom: 0.5rem; }
+                            p { margin: 0 0 1rem 0; }
+                            a { color: #3b82f6; text-decoration: underline; }
+                            blockquote { border-left: 0.25rem solid ${borderColor}; padding-left: 1rem; color: ${mutedColor}; font-style: italic; margin: 1rem 0; }
+                            pre { background-color: ${mutedBgColor}; color: ${textColor}; padding: 1rem; border-radius: 0.5rem; font-family: monospace; overflow-x: auto; }
+                            table { border-collapse: collapse; width: 100%; }
+                            th, td { border: 0.625rem solid ${borderColor}; padding: 0.5rem; }
+                        `,
+                        
+                        setup: (editor) => {
+                            editor.on('init', () => {
+                                this.isEditorLoaded = true; 
+                            });
 
-                        editor.on('input change keyup undo redo SetContent', () => {
-                            clearTimeout(this.typingTimer);
-                            this.typingTimer = setTimeout(() => {
-                                // ФИКС: Напрямую пушим в Livewire, минуя баги с textarea. 
-                                // Добавили ?? '', чтобы не уронить Livewire, если getContent вдруг вернет null
-                                this.$wire.set('body', editor.getContent() ?? '');
-                            }, 500);
-                        });
-                    };
-
-                    tinymce.init(config);
+                            editor.on('input change keyup undo redo SetContent', () => {
+                                clearTimeout(this.typingTimer);
+                                this.typingTimer = setTimeout(() => {
+                                    // ФИКС: Пушим напрямую через Livewire, как в рассылках
+                                    this.$wire.set('body', editor.getContent() ?? '');
+                                }, 500);
+                            });
+                        }
+                    });
                 },
 
                 destroyTinyMCE() {
@@ -554,18 +583,26 @@ new #[Layout('layouts.admin')] class extends Component
                 },
 
                 setupThemeWatcher() {
+                    // ФИКС: Наблюдаем ТОЛЬКО за атрибутом class, и реагируем ТОЛЬКО на смену 'dark'
                     this.themeObserver = new MutationObserver((mutations) => {
-                        mutations.forEach((mutation) => {
+                        for (const mutation of mutations) {
                             if (mutation.attributeName === 'class') {
-                                const newTheme = this.getTheme();
-                                if (newTheme !== this.currentTheme) {
+                                const target = mutation.target;
+                                const isDarkNow = target.classList.contains('dark');
+                                
+                                if (isDarkNow && this.currentTheme !== 'dark') {
+                                    this.currentTheme = 'dark';
+                                    this.destroyTinyMCE();
+                                    setTimeout(() => this.initTinyMCE(), 50);
+                                } else if (!isDarkNow && this.currentTheme !== 'light') {
+                                    this.currentTheme = 'light';
                                     this.destroyTinyMCE();
                                     setTimeout(() => this.initTinyMCE(), 50);
                                 }
                             }
-                        });
+                        }
                     });
-                    this.themeObserver.observe(document.documentElement, { attributes: true });
+                    this.themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
                 },
 
                 destroy() {

@@ -2,22 +2,34 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
 class Message extends Model
 {
-    use SoftDeletes; // КРИТИЧЕСКИ ВАЖНО! Сообщения нельзя удалять физически.
+    use SoftDeletes; 
+
+    // КОНСТАНТЫ ТИПОВ
+    public const TYPE_TEXT = 'text';
+    public const TYPE_IMAGE = 'image';
+    public const TYPE_SYSTEM = 'system';
+    public const TYPE_GIFT = 'gift';
+
+    // КОНСТАНТЫ СТАТУСОВ МОДЕРАЦИИ
+    public const STATUS_PENDING = 'pending';
+    public const STATUS_APPROVED = 'approved';
+    public const STATUS_REJECTED = 'rejected';
 
     protected $fillable = [
         'chat_id',
         'sender_id',
-        'type',             // text, system, gift (image пока игнорируем)
+        'type',             
         'body',
-        'attachment_url',   // Оставляем в БД, на будущее
-        'gift_id',          // Ссылка на подарок (если type=gift)
-        'status',           // approved, pending, rejected (на будущее для фоток)
+        'attachment_url',   
+        'gift_id',          
+        'status',           
         'reject_reason',
         'moderated_by',
         'moderated_at',
@@ -36,9 +48,11 @@ class Message extends Model
         return $this->belongsTo(Chat::class);
     }
 
+    // КРИТИЧЕСКИ ВАЖНО: withTrashed() и ?User.
+    // Если юзер удалил аккаунт (soft delete или nullOnDelete), чат не должен падать!
     public function sender(): BelongsTo
     {
-        return $this->belongsTo(User::class, 'sender_id');
+        return $this->belongsTo(User::class, 'sender_id')->withTrashed();
     }
 
     public function moderator(): BelongsTo
@@ -48,44 +62,55 @@ class Message extends Model
 
     public function gift(): BelongsTo
     {
-        return $this->belongsTo(Gift::class); // Убедись, что модель Gift у тебя существует!
+        return $this->belongsTo(Gift::class); 
     }
 
     // ============================================
-    // СКОПЫ (Для админки и логики)
+    // СКОПЫ
     // ============================================
 
-    public function scopeApproved($query)
+    public function scopeApproved(Builder $query): Builder
     {
-        return $query->where('status', 'approved');
+        return $query->where('status', self::STATUS_APPROVED);
     }
 
-    public function scopeGifts($query)
+    public function scopePending(Builder $query): Builder
     {
-        return $query->where('type', 'gift');
+        return $query->where('status', self::STATUS_PENDING);
     }
 
-    public function scopeSystem($query)
+    public function scopeGifts(Builder $query): Builder
     {
-        return $query->where('type', 'system');
+        return $query->where('type', self::TYPE_GIFT);
+    }
+
+    public function scopeSystem(Builder $query): Builder
+    {
+        return $query->where('type', self::TYPE_SYSTEM);
+    }
+
+    public function scopeImages(Builder $query): Builder
+    {
+        return $query->where('type', self::TYPE_IMAGE);
     }
 
     // ============================================
     // ХЕЛПЕРЫ ТИПОВ
     // ============================================
 
-    public function isText(): bool { return $this->type === 'text'; }
-    public function isGift(): bool { return $this->type === 'gift'; }
-    public function isSystem(): bool { return $this->type === 'system'; }
+    public function isText(): bool { return $this->type === self::TYPE_TEXT; }
+    public function isGift(): bool { return $this->type === self::TYPE_GIFT; }
+    public function isSystem(): bool { return $this->type === self::TYPE_SYSTEM; }
+    public function isImage(): bool { return $this->type === self::TYPE_IMAGE; }
 
     // ============================================
-    // ХЕЛПЕРЫ МОДЕРАЦИИ (Единый паттерн)
+    // ХЕЛПЕРЫ МОДЕРАЦИИ
     // ============================================
 
     public function markAsApproved(int $adminId): bool
     {
         return $this->update([
-            'status' => 'approved',
+            'status' => self::STATUS_APPROVED,
             'moderated_by' => $adminId,
             'moderated_at' => now(),
             'reject_reason' => null,
@@ -95,7 +120,7 @@ class Message extends Model
     public function markAsRejected(int $adminId, string $reason): bool
     {
         return $this->update([
-            'status' => 'rejected',
+            'status' => self::STATUS_REJECTED,
             'moderated_by' => $adminId,
             'moderated_at' => now(),
             'reject_reason' => $reason,

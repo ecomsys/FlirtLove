@@ -170,13 +170,20 @@ class BroadcastsAction
         $actualDeletedCount = 0;
         
         DB::transaction(function () use ($ids, $admin, &$actualDeletedCount) {
+            // 1. Блокируем и получаем только те, которые можно удалить (не sending)
             $broadcasts = Broadcast::whereIn('id', $ids)
                 ->where('status', '!=', 'sending')
                 ->lockForUpdate()
                 ->get();
             
+            if ($broadcasts->isEmpty()) return;
+
+            $logParticipants = [];
+            $validIds = [];
+
             foreach ($broadcasts as $broadcast) {
                 $targetUserId = $broadcast->target_audience['user_id'] ?? null;
+                if ($targetUserId) $logParticipants[] = $targetUserId;
 
                 $before = [
                     'status' => $broadcast->getOriginal('status'), 
@@ -192,12 +199,15 @@ class BroadcastsAction
                     ]
                 ];
 
-                $participants = $targetUserId ? [$targetUserId] : [];
-
-                AdminLog::record('broadcast.delete', $broadcast, $admin, $before, $after, participants: $participants);
+                AdminLog::record('broadcast.delete', $broadcast, $admin, $before, $after, participants: $targetUserId ? [$targetUserId] : []);
                 
-                $broadcast->delete();
-                $actualDeletedCount++;
+                $validIds[] = $broadcast->id;
+            }
+
+            // 2. ФИКС: 1 Bulk-запрос DELETE вместо цикла
+            if (!empty($validIds)) {
+                Broadcast::whereIn('id', $validIds)->delete();
+                $actualDeletedCount = count($validIds);
             }
         });
 

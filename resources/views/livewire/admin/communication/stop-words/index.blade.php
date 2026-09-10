@@ -4,6 +4,7 @@ use App\Actions\Admin\StopWordsAction;
 use App\Enums\StopWordAction;
 use App\Enums\StopWordCategory;
 use App\Models\StopWord;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Validation\Rule;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Layout;
@@ -31,7 +32,6 @@ new #[Layout('layouts.admin')] class extends Component
 
     public int $filterVersion = 0;
 
-    /** @var string URL для кнопки "Назад" */
     public string $backUrl = '';
     public array $selected = [];
     public bool $selectAll = false;
@@ -39,31 +39,28 @@ new #[Layout('layouts.admin')] class extends Component
 
     public bool $showAddModal = false;
     public string $bulkWords = '';
-    // Дефолтные значения берем из Enum
     public string $modalCategory = StopWordCategory::Mat->value; 
     public string $modalAction = StopWordAction::Mask->value;
 
-        public function mount(): void
+    public function mount(): void
     {
-        // ФИКС: Запоминаем URL "Назад" только при первой загрузке
         $previousUrl = url()->previous();
         $this->backUrl = ($previousUrl && $previousUrl !== url()->current()) 
             ? $previousUrl 
             : route('admin.dashboard');
     }
 
-    public function updatedSearch(): void { $this->resetPage(); $this->clearSelection(); }
-    
-    // ФИКС: Очищаем поиск при смене любого фильтра
-    public function updatedCategoryFilter(): void { $this->search = ''; $this->resetPage(); $this->clearSelection(); }
-    public function updatedActionFilter(): void { $this->search = ''; $this->resetPage(); $this->clearSelection(); }
-    public function updatedStatusFilter(): void { $this->search = ''; $this->resetPage(); $this->clearSelection(); }
+    public function updatedSearch(): void { $this->resetPage(); $this->clearSelection(); $this->clearComputedCache(); }
+    public function updatedCategoryFilter(): void { $this->search = ''; $this->resetPage(); $this->clearSelection(); $this->clearComputedCache(); }
+    public function updatedActionFilter(): void { $this->search = ''; $this->resetPage(); $this->clearSelection(); $this->clearComputedCache(); }
+    public function updatedStatusFilter(): void { $this->search = ''; $this->resetPage(); $this->clearSelection(); $this->clearComputedCache(); }
 
     public function clearSearch(): void
     {
         $this->search = '';
         $this->resetPage();
         $this->clearSelection();
+        $this->clearComputedCache();
     }
 
     public function clearFilters(): void
@@ -74,9 +71,16 @@ new #[Layout('layouts.admin')] class extends Component
         $this->statusFilter = 'all';
         $this->resetPage();
         $this->clearSelection();
+        $this->clearComputedCache();
         $this->filterVersion++;
     }
 
+    private function clearComputedCache(): void
+    {
+        unset($this->stopWords);
+        unset($this->counts);
+    }
+    
     public function clearSelection(): void 
     { 
         $this->selected = []; 
@@ -101,6 +105,7 @@ new #[Layout('layouts.admin')] class extends Component
 
         $this->clearSelection();
         $this->bulkAction = '';
+        $this->clearComputedCache(); // ФИКС: Обновляем таблицу
     }
 
     #[Computed]
@@ -110,8 +115,16 @@ new #[Layout('layouts.admin')] class extends Component
 
         return StopWord::query()
             ->when($this->search, function ($q) use ($searchOperator) {
-                $q->where('word', $searchOperator, "%{$this->search}%")
-                  ->orWhereRaw("CAST(id AS TEXT) {$searchOperator} ?", ["%{$this->search}%"]);
+                $search = trim($this->search);
+                // ФИКС: ctype_digit для строгой проверки целого числа (защита PostgreSQL от 1.5)
+                $isId = !empty($search) && ctype_digit($search);
+                
+                $q->where(function ($q) use ($search, $searchOperator, $isId) {
+                    $q->where('word', $searchOperator, "%{$search}%");
+                    if ($isId) {
+                        $q->orWhere('id', (int) $search);
+                    }
+                });
             })
             ->when($this->categoryFilter !== 'all', fn($q) => $q->where('category', $this->categoryFilter))
             ->when($this->actionFilter !== 'all', fn($q) => $q->where('action', $this->actionFilter))
@@ -124,27 +137,32 @@ new #[Layout('layouts.admin')] class extends Component
     #[Computed]
     public function counts(): array
     {
-        $stats = StopWord::query()
-            ->selectRaw("COUNT(*) as total")
-            ->selectRaw("SUM(CASE WHEN is_active = true THEN 1 ELSE 0 END) as active")
-            ->first();
+        // ФИКС: Кэшируем счетчики
+        return Cache::remember('admin_stopword_counts', 60, function () {
+            $stats = StopWord::query()
+                ->selectRaw("COUNT(*) as total")
+                ->selectRaw("SUM(CASE WHEN is_active = true THEN 1 ELSE 0 END) as active")
+                ->first();
 
-        return [
-            'total' => $stats->total ?? 0,
-            'active' => $stats->active ?? 0,
-        ];
+            return [
+                'total' => (int) ($stats?->total ?? 0),
+                'active' => (int) ($stats?->active ?? 0),
+            ];
+        });
     }
 
     public function toggleActive(int $id, StopWordsAction $action): void
     {
         $action->toggleActive($id, auth()->user());
         $this->dispatch('show-toast', type: 'success', message: 'Статус изменен');
+        $this->clearComputedCache(); // ФИКС: Обновляем таблицу
     }
 
     public function deleteWord(int $id, StopWordsAction $action): void
     {
         $action->deleteWord($id, auth()->user());
         $this->dispatch('show-toast', type: 'success', message: 'Слово удалено');
+        $this->clearComputedCache(); // ФИКС: Обновляем таблицу
     }
 
     public function saveBulkWords(StopWordsAction $action): void
@@ -154,14 +172,12 @@ new #[Layout('layouts.admin')] class extends Component
             return;
         }
 
-        // ФИКС: Валидация через Enum
         $this->validate([
             'bulkWords' => 'required|string',
             'modalCategory' => ['required', Rule::enum(StopWordCategory::class)],
             'modalAction' => ['required', Rule::enum(StopWordAction::class)],
         ]);
 
-        // Передаем в Action уже объекты Enum, а не строки!
         $createdCount = $action->createBulk(
             $this->bulkWords, 
             StopWordCategory::from($this->modalCategory), 
@@ -177,6 +193,8 @@ new #[Layout('layouts.admin')] class extends Component
         } else {
             $this->dispatch('show-toast', type: 'error', message: 'Все введенные слова уже существуют в базе!');
         }
+        
+        $this->clearComputedCache(); // ФИКС: Обновляем таблицу
     }
 }; 
 ?>
@@ -286,6 +304,7 @@ new #[Layout('layouts.admin')] class extends Component
         </x-ui.button>
         <x-ui.button wire:click="clearSelection" variant="outline" size="sm"><x-lucide-x class="w-4 h-4" /> Снять выделение</x-ui.button>
     </div>
+  
 
     <!-- ТАБЛИЦА -->
     <x-ui.table>
@@ -370,6 +389,8 @@ new #[Layout('layouts.admin')] class extends Component
         </div>
         {{ $this->stopWords->links('partials.pagination') }}
     </div>
+
+     <x-loading-overlay fixed="true" wire:loading.delay wire:key="overlay-loading-page"/>
 
     <!-- МОДАЛКА МАССОВОГО ДОБАВЛЕНИЯ -->
     <div wire:key="add-modal" x-data="{}" x-show="$wire.showAddModal" 

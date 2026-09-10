@@ -2,7 +2,10 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class DiaryRubric extends Model
 {
@@ -24,15 +27,12 @@ class DiaryRubric extends Model
     // СВЯЗИ
     // ============================================
 
-    /**
-     * Посты (дневники), принадлежащие этой рубрике
-     */
-    public function diaries()
+    public function diaries(): HasMany
     {
         return $this->hasMany(Diary::class);
     }
 
-    public function user()
+    public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
     }
@@ -41,18 +41,12 @@ class DiaryRubric extends Model
     // СКОПЫ
     // ============================================
 
-    /**
-     * Только активные рубрики (для вывода в меню сайта)
-     */
-    public function scopeActive($query)
+    public function scopeActive(Builder $query): Builder
     {
         return $query->where('is_active', true);
     }
 
-    /**
-     * Сортировка по умолчанию (для вывода в меню)
-     */
-    public function scopeOrdered($query)
+    public function scopeOrdered(Builder $query): Builder
     {
         return $query->orderBy('sort_order');
     }
@@ -61,9 +55,6 @@ class DiaryRubric extends Model
     // ХЕЛПЕРЫ
     // ============================================
 
-    /**
-     * Поиск рубрики по слагу
-     */
     public static function findBySlug(string $slug): ?self
     {
         return static::where('slug', $slug)->first();

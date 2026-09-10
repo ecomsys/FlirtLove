@@ -25,8 +25,6 @@ class ModerateDiaryAction
             'reject_reason' => null,
         ]));
 
-        $diary->refresh();
-
         $after = [
             'status' => 'published', 
             'moderated_by' => $admin->id, 
@@ -34,15 +32,15 @@ class ModerateDiaryAction
             'context' => [
                 'diary_id' => $diary->id,
                 'author_id' => $diary->user_id,
-                'title' => $diary->title // Название тоже полезно для быстрого понимания
+                'title' => $diary->title
             ]
         ];
 
         AdminLog::record('diary.approve', $diary, $admin, $before, $after, participants: [$diary->user_id]);
-        Cache::forget('admin_sidebar_stats');
+        $this->clearCaches();
 
         if ($oldStatus !== 'published' && $diary->user) {
-            $diary->user->notify(new DiaryModerated($diary, 'approved'));
+            $diary->user->notify(new DiaryModerated($diary->id, $diary->title, 'approved'));
         }
     }
 
@@ -59,8 +57,6 @@ class ModerateDiaryAction
             'reject_reason' => $reason,
         ]));
 
-        $diary->refresh();
-
         $after = [
             'status' => 'rejected', 
             'reject_reason' => $reason, 
@@ -74,10 +70,10 @@ class ModerateDiaryAction
         ];
 
         AdminLog::record('diary.reject', $diary, $admin, $before, $after, participants: [$diary->user_id]);
-        Cache::forget('admin_sidebar_stats');
+        $this->clearCaches();
 
         if ($oldStatus !== 'rejected' && $diary->user) {
-            $diary->user->notify(new DiaryModerated($diary, 'rejected', $reason));
+             $diary->user->notify(new DiaryModerated($diary->id, $diary->title, 'rejected', $reason));
         }
     }
 
@@ -89,8 +85,6 @@ class ModerateDiaryAction
         $diary->update(array_merge($metaData, [
             'status' => 'pending',
         ]));
-
-        $diary->refresh();
 
         $after = [
             'status' => 'pending', 
@@ -104,10 +98,10 @@ class ModerateDiaryAction
         ];
 
         AdminLog::record('diary.unpublish', $diary, $admin, $before, $after, participants: [$diary->user_id]);
-        Cache::forget('admin_sidebar_stats');
+        $this->clearCaches();
 
         if ($oldStatus === 'published' && $diary->user) {
-            $diary->user->notify(new DiaryModerated($diary, 'unpublished'));
+            $diary->user->notify(new DiaryModerated($diary->id, $diary->title, 'unpublished'));
         }
     }
 
@@ -129,8 +123,8 @@ class ModerateDiaryAction
         ];
 
         AdminLog::record('diary.delete', $diary, $admin, $before, $after, participants: [$diary->user_id]);
-        
         $diary->delete();
+        $this->clearCaches();
     }
 
     public function restore(Diary $diary, User $admin): void
@@ -147,8 +141,6 @@ class ModerateDiaryAction
             'reject_reason' => null
         ]);
         
-        $diary->refresh();
-        
         $after = [
             'status' => 'pending', 
             'restored_by' => $admin->id, 
@@ -161,7 +153,7 @@ class ModerateDiaryAction
         ];
         
         AdminLog::record('diary.restore', $diary, $admin, $before, $after, participants: [$diary->user_id]);
-        Cache::forget('admin_sidebar_stats');
+        $this->clearCaches();
     }
 
     public function forceDelete(Diary $diary, User $admin): void
@@ -183,7 +175,13 @@ class ModerateDiaryAction
         ];
         
         AdminLog::record('diary.force_delete', $diary, $admin, $before, $after, participants: [$userId]);
-        
         $diary->forceDelete();
+        $this->clearCaches();
+    }
+
+    private function clearCaches(): void
+    {
+        Cache::forget('admin_sidebar_stats');
+        Cache::forget('admin_diary_counts');
     }
 }

@@ -1,59 +1,58 @@
 <?php
 
 use App\Models\Chat;
+use App\Models\User;
 use App\Actions\Admin\ManageChatsAction;
+use Illuminate\Support\Facades\Cache;
 use Livewire\Attributes\Layout;
 use Livewire\Volt\Component;
 use Livewire\WithPagination;
 use Livewire\Attributes\Computed;
+use Livewire\Attributes\Url;
 
 new #[Layout('layouts.admin')] class extends Component 
 {
     use WithPagination;
 
-    /** @var string Поиск по имени или ID чата */
     #[Url(as: 'q', except: '')]
     public string $search = '';
 
-    /** @var int|null ID активного чата для просмотра переписки */
     #[Url(as: 'chat', except: '')]
     public ?int $activeChatId = null;
 
-    /** @var string Фильтр блокировки чата (all, locked, unlocked) */
     #[Url(as: 'lock', except: 'all')]
     public string $lockFilter = 'all';
 
-    /** @var string URL для кнопки "Назад" */
     public string $backUrl = '';
 
-        public function mount(): void
+    public function mount(): void
     {
+        abort_unless(in_array(auth()->user()?->role, [User::ROLE_ADMIN, User::ROLE_MODERATOR]), 403);
+
         $previousUrl = url()->previous();
         $this->backUrl = ($previousUrl && $previousUrl !== url()->current()) 
             ? $previousUrl 
             : route('admin.dashboard');
 
-        // ФИКС: Читаем напрямую из Request, так как при wire:navigate Livewire 3 может еще не успеть гидратировать #[Url]
         $qParam = request()->query('q', '');
         $chatParam = request()->query('chat', '');
 
-        // Если пришли по прямой ссылке ?chat=123
-        if (!empty($chatParam)) {
+        // ФИКС: ctype_digit для строгой проверки целого числа
+        if (!empty($chatParam) && ctype_digit($chatParam)) {
             $chat = Chat::find((int) $chatParam);
             if ($chat) {
                 $this->activeChatId = $chat->id;
-                $this->search = (string) $chat->id; // Подставляем в поле поиска
+                $this->search = (string) $chat->id;
                 $this->lockFilter = $chat->is_locked ? 'locked' : 'unlocked';
                 return;
             }
         } 
         
-        // Если пришли по ссылке с поиском ?q=123
-        if (!empty($qParam) && is_numeric($qParam)) {
+        if (!empty($qParam) && ctype_digit($qParam)) {
             $chat = Chat::find((int) $qParam);
             if ($chat) {
                 $this->activeChatId = $chat->id;
-                $this->search = (string) $qParam; // Подставляем в поле поиска
+                $this->search = (string) $qParam;
                 $this->lockFilter = $chat->is_locked ? 'locked' : 'unlocked';
                 return;
             }
@@ -64,18 +63,19 @@ new #[Layout('layouts.admin')] class extends Component
     {
         $this->resetPage();
         $this->activeChatId = null;
+        $this->clearComputedCache();
     }
 
     public function updatedSearch(): void
     {
         $this->resetPage();
+        $this->clearComputedCache();
 
-        // Умный поиск: если ввели точный ID чата, автоматически открываем его переписку
-        if (is_numeric($this->search) && !empty($this->search)) {
+        // ФИКС: ctype_digit
+        if (ctype_digit($this->search) && !empty($this->search)) {
             $chat = Chat::find((int) $this->search);
             if ($chat) {
                 $this->activeChatId = $chat->id;
-                // ФИКС: Автоматически переключаем фильтр на нужную вкладку, чтобы чат не потерялся
                 $this->lockFilter = $chat->is_locked ? 'locked' : 'unlocked';
                 return;
             }
@@ -87,29 +87,38 @@ new #[Layout('layouts.admin')] class extends Component
     public function setLockFilter(string $status): void
     {
         $this->lockFilter = $status;
-        $this->search = ''; // ФИКС: Очищаем поиск при ручной смене фильтра
+        $this->search = '';
         $this->resetPage();
         $this->activeChatId = null;
+        $this->clearComputedCache();
+    }
+
+    private function clearComputedCache(): void
+    {
+        unset($this->chatStats);
     }
 
     #[Computed]
     public function chatStats(): array
     {
-        $baseQuery = Chat::where('type', 'private')
-            ->whereHas('participants', fn($q) => $q->whereHas('user', fn($uq) => $uq->withTrashed()->excludeStaff()));
+        // ФИКС: Кэшируем счетчики на 1 минуту
+        return Cache::remember('admin_chat_stats', 60, function () {
+            $baseQuery = Chat::where('type', 'private')
+                ->whereHas('participants', fn($q) => $q->whereHas('user', fn($uq) => $uq->withTrashed()->excludeStaff()));
 
-        $stats = (clone $baseQuery)->selectRaw("COUNT(*) as total")
-            ->selectRaw("SUM(CASE WHEN is_locked = true THEN 1 ELSE 0 END) as locked")
-            ->first();
+            $stats = (clone $baseQuery)->selectRaw("COUNT(*) as total")
+                ->selectRaw("SUM(CASE WHEN is_locked = true THEN 1 ELSE 0 END) as locked")
+                ->first();
 
-        $total = $stats->total ?? 0;
-        $locked = $stats->locked ?? 0;
+            $total = (int) ($stats?->total ?? 0);
+            $locked = (int) ($stats?->locked ?? 0);
 
-        return [
-            'total' => $total,
-            'locked' => $locked,
-            'unlocked' => $total - $locked,
-        ];
+            return [
+                'total' => $total,
+                'locked' => $locked,
+                'unlocked' => $total - $locked,
+            ];
+        });
     }
 
     public function clearSearch(): void
@@ -117,20 +126,19 @@ new #[Layout('layouts.admin')] class extends Component
         $this->search = '';
         $this->activeChatId = null;
         $this->resetPage();
+        $this->clearComputedCache();
     }
 
     public function selectChat(int $chatId): void
     {
         $this->activeChatId = $chatId;
     }
-
     
     public function toggleLockChat(int $chatId, ManageChatsAction $action): void
     {
         $chat = Chat::find($chatId);
         if (!$chat) return;
 
-        // Делегируем всю логику в Action
         $isLocked = $action->toggleLock($chat, auth()->user());
 
         $this->dispatch('show-toast', 
@@ -138,7 +146,6 @@ new #[Layout('layouts.admin')] class extends Component
             message: $isLocked ? 'Чат заблокирован. Общение остановлено.' : 'Чат разблокирован.'
         );
     }
-
 
     public function with(): array
     {
@@ -155,24 +162,30 @@ new #[Layout('layouts.admin')] class extends Component
             ])
             ->when($this->search, function ($query) use ($operator) {
                 $search = $this->search;
-                $query->where(function ($q) use ($search, $operator) {
+                // ФИКС: ctype_digit
+                $isId = ctype_digit($search);
+                
+                $query->where(function ($q) use ($search, $operator, $isId) {
                     $q->whereHas('participants.user', function ($sub) use ($search, $operator) {
                         $sub->withTrashed()->where('name', $operator, "%{$search}%");
                     });
                     
-                    if (is_numeric($search)) {
+                    if ($isId) {
                         $q->orWhere('id', (int) $search);
                     }
                 });
             })
-            ->orderByDesc('last_message_at')
-            ->paginate(20);
+            ->orderBy('id', 'desc')
+            ->paginate(20); // ФИКС: Обычный paginate, чтобы работали номера страниц в UI
 
         $activeChat = null;
         if ($this->activeChatId) {
             $activeChat = Chat::with([
                 'participants' => fn($q) => $q->with(['user' => fn($uq) => $uq->withTrashed()->with(['photos' => $avatarQuery])]), 
-                'messages' => fn($q) => $q->latest()->limit(50)->with(['sender' => fn($sq) => $sq->withTrashed()->with(['photos' => $avatarQuery])]) 
+                'messages' => fn($q) => $q->latest()->limit(50)->with([
+                    'sender' => fn($sq) => $sq->withTrashed()->with(['photos' => $avatarQuery]),
+                    'gift:id,name,image_url'
+                ]) 
             ])->find($this->activeChatId);
         }
 
@@ -181,8 +194,17 @@ new #[Layout('layouts.admin')] class extends Component
             'activeChat' => $activeChat,
         ];
     }
+
+    public function refreshChats(): void
+    {
+        // Сбрасываем кэш счетчиков, чтобы обновились цифры в кнопках фильтра
+        $this->clearComputedCache();
+        
+        // Livewire автоматически перерисует компонент и обновит список чатов через with()
+    }
 }; 
 ?>
+
 
 <div class="space-y-6">
     <!-- Заголовок -->
@@ -200,24 +222,33 @@ new #[Layout('layouts.admin')] class extends Component
             </div>
         </div>
 
-         <div class="relative w-72">
-            <x-lucide-search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground z-10" />
-            <x-ui.input wire:model.live.debounce.300ms="search" type="search" placeholder="Поиск по имени, id чата ..." class="pl-9 pr-8" />
-            @if (!empty($search))
-                <button wire:click="clearSearch" class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground z-10">
-                    <x-lucide-x class="w-4 h-4" />
-                </button>
-            @endif
+
+        <div class="flex items-center gap-3">
+            <!-- Кнопка обновления переписки -->
+            <x-ui.button wire:click="refreshChats" variant="outline" size="sm" title="Обновить списки" class="mr-auto">
+                <x-lucide-refresh-cw class="w-4 h-4" wire:loading.remove wire:target="refreshChats" /> Обновить
+                <x-lucide-loader-2 class="w-4 h-4 animate-spin inline" wire:loading wire:target="refreshChats" />
+            </x-ui.button>
+
+            <div class="relative w-72">
+                <x-lucide-search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground z-10" />
+                <x-ui.input wire:model.live.debounce.300ms="search" type="search" placeholder="Поиск по имени, id чата ..." class="pl-9 pr-8" />
+                @if (!empty($search))
+                    <button wire:click="clearSearch" class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground z-10">
+                        <x-lucide-x class="w-4 h-4" />
+                    </button>
+                @endif
+            </div>
         </div>
     </div>
 
     <!-- Интерфейс чата (Список + Переписка) -->
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 bg-card border border-border rounded-lg p-4 min-h-[calc(100vh-16rem)]">
 
-               <!-- Левая панель: Список чатов -->
-        <div wire:poll.15s class="lg:col-span-1 border-r border-border pr-4 flex flex-col h-[calc(100vh-16rem)]">
+        <!-- Левая панель: Список чатов -->
+        <div class="lg:col-span-1 border-r border-border pr-4 flex flex-col h-[calc(100vh-16rem)]">
 
-                       <!-- ФИЛЬТР БЛОКИРОВКИ -->
+            <!-- ФИЛЬТР БЛОКИРОВКИ -->
             <div class="flex gap-1.5 mb-3 shrink-0">
                 <x-ui.button title="Все чаты" wire:click="setLockFilter('all')" variant="{{ $lockFilter === 'all' ? 'default' : 'secondary' }}" size="sm" class="flex-1 text-xs">
                     Все <x-ui.badge size="xs" class="ml-1">{{ $this->chatStats['total'] }}</x-ui.badge>
@@ -229,7 +260,7 @@ new #[Layout('layouts.admin')] class extends Component
                     <x-lucide-lock class="w-3 h-3 inline mr-1" /><x-ui.badge size="xs" class="ml-1">{{ $this->chatStats['locked'] }}</x-ui.badge>
                 </x-ui.button>
             </div>
-
+            
             <div class="flex-1 min-h-0 overflow-y-auto space-y-2 pr-1 little-scroll">
                 @forelse ($chats as $chat)
                     @php 
@@ -241,8 +272,8 @@ new #[Layout('layouts.admin')] class extends Component
                     <div wire:click="selectChat({{ $chat->id }})"
                         class="p-2 rounded-lg cursor-pointer transition-colors {{ $this->activeChatId === $chat->id ? 'bg-primary/10 border border-primary/30' : 'bg-muted/30 hover:bg-muted border border-transparent' }} {{ $chat->is_locked ? 'border-destructive/20' : '' }}"
                         wire:key="chat-list-{{ $chat->id }}"
-                        x-data="{ isHi: {{ $this->activeChatId === $chat->id ? 'true' : 'false' }} }"
-                        x-init="isHi && setTimeout(() => { $el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 200)"
+                        x-data="{ isActive: {{ $this->activeChatId === $chat->id ? 'true' : 'false' }} }"
+                        x-effect="if (isActive) { setTimeout(() => { $el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 200) }"
                     >
                         <div class="flex items-center gap-3">
                             <!-- Сдвоенные аватарки с онлайн статусом -->
@@ -293,7 +324,7 @@ new #[Layout('layouts.admin')] class extends Component
                                             <span class="text-[10px] text-muted-foreground whitespace-nowrap">{{ $chat->last_message_at->diffForHumans() }}</span>
                                         @endif
                                         @if ($chat->id)
-                                            <span class="text-[10px] text-muted-foreground bg-muted p-1 rounded-xs whitespace-nowrap">#{{ $chat->id }}</span>
+                                            <span class="text-[10px] text-muted-foreground bg-muted p-1 rounded-sm whitespace-nowrap">#{{ $chat->id }}</span>
                                         @endif
                                     </div>
                                 </div>                               
@@ -337,20 +368,22 @@ new #[Layout('layouts.admin')] class extends Component
                             </div>
                         </div>
 
-                         <!-- Кнопка блокировки -->
-                        @if($activeChat->is_locked)
-                            <x-ui.button wire:click="toggleLockChat({{ $activeChat->id }})" wire:target="toggleLockChat({{ $activeChat->id }})" variant="success" size="sm" wire:confirm="Разблокировать чат?">
-                                <x-lucide-unlock class="w-4 h-4" wire:loading.remove wire:target="toggleLockChat({{ $activeChat->id }})" />
-                                <x-lucide-loader-2 class="w-4 h-4 animate-spin hidden" wire:loading wire:target="toggleLockChat({{ $activeChat->id }})" />
-                                Разблокировать
-                            </x-ui.button>
-                        @else
-                            <x-ui.button wire:click="toggleLockChat({{ $activeChat->id }})" wire:target="toggleLockChat({{ $activeChat->id }})" variant="destructive" size="sm" wire:confirm="Заблокировать чат для общения?">
-                                <x-lucide-lock class="w-4 h-4" wire:loading.remove wire:target="toggleLockChat({{ $activeChat->id }})" />
-                                <x-lucide-loader-2 class="w-4 h-4 animate-spin hidden" wire:loading wire:target="toggleLockChat({{ $activeChat->id }})" />
-                                Заблокировать
-                            </x-ui.button>
-                        @endif
+                       
+                            <!-- Кнопка блокировки -->
+                            @if($activeChat->is_locked)
+                                <x-ui.button wire:click="toggleLockChat({{ $activeChat->id }})" wire:target="toggleLockChat({{ $activeChat->id }})" variant="success" size="sm" wire:confirm="Разблокировать чат?">
+                                    <x-lucide-unlock class="w-4 h-4" wire:loading.remove wire:target="toggleLockChat({{ $activeChat->id }})" />
+                                    <x-lucide-loader-2 class="w-4 h-4 animate-spin hidden" wire:loading wire:target="toggleLockChat({{ $activeChat->id }})" />
+                                    Разблокировать
+                                </x-ui.button>
+                            @else
+                                <x-ui.button wire:click="toggleLockChat({{ $activeChat->id }})" wire:target="toggleLockChat({{ $activeChat->id }})" variant="destructive" size="sm" wire:confirm="Заблокировать чат для общения?">
+                                    <x-lucide-lock class="w-4 h-4" wire:loading.remove wire:target="toggleLockChat({{ $activeChat->id }})" />
+                                    <x-lucide-loader-2 class="w-4 h-4 animate-spin hidden" wire:loading wire:target="toggleLockChat({{ $activeChat->id }})" />
+                                    Заблокировать
+                                </x-ui.button>
+                            @endif
+                       
 
                         <!-- User 2 -->
                         <div class="flex items-center gap-2">
@@ -369,7 +402,7 @@ new #[Layout('layouts.admin')] class extends Component
                 </div>
 
                 <!-- Лента сообщений -->
-                <div wire:poll.10s 
+                <div 
                     x-data="{ autoScroll: true }"
                     x-init="setTimeout(() => { $el.scrollTop = $el.scrollHeight; }, 50)"
                     @scroll="autoScroll = ($el.scrollHeight - $el.scrollTop - $el.clientHeight < 100)"
@@ -424,4 +457,6 @@ new #[Layout('layouts.admin')] class extends Component
             @endif
         </div>
     </div>
+
+    <x-loading-overlay fixed="true" wire:loading.delay wire:key="overlay-loading-page"/>
 </div>

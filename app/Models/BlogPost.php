@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\SoftDeletes;
@@ -10,7 +11,11 @@ class BlogPost extends Model
 {
     use SoftDeletes;
 
-    // УБРАЛИ 'published_at' из fillable
+    // КОНСТАНТЫ СТАТУСОВ
+    public const STATUS_DRAFT = 'draft';
+    public const STATUS_PUBLISHED = 'published';
+    public const STATUS_ARCHIVED = 'archived';
+
     protected $fillable = [
         'user_id',
         'cover_media_id',
@@ -24,7 +29,6 @@ class BlogPost extends Model
         'views_count',
     ];
 
-    // УБРАЛИ 'published_at' из casts
     protected $casts = [
         'is_featured' => 'boolean',
         'views_count' => 'integer',
@@ -53,23 +57,22 @@ class BlogPost extends Model
     // СКОПЫ
     // ============================================
 
-    public function scopePublished($query)
+    public function scopePublished(Builder $query): Builder
     {
-        // Теперь просто проверяем статус, без заморочек с датами
-        return $query->where('status', 'published');
+        return $query->where('status', self::STATUS_PUBLISHED);
     }
 
-    public function scopeDraft($query)
+    public function scopeDraft(Builder $query): Builder
     {
-        return $query->where('status', 'draft');
+        return $query->where('status', self::STATUS_DRAFT);
     }
 
-    public function scopeFeatured($query)
+    public function scopeFeatured(Builder $query): Builder
     {
         return $query->where('is_featured', true);
     }
 
-    public function scopeOfCategory($query, int $categoryId)
+    public function scopeOfCategory(Builder $query, int $categoryId): Builder
     {
         return $query->where('category_id', $categoryId);
     }
@@ -80,36 +83,26 @@ class BlogPost extends Model
 
     public function isPublished(): bool
     {
-        // Просто проверка статуса
-        return $this->status === 'published';
+        return $this->status === self::STATUS_PUBLISHED;
     }
 
-    /**
-     * Опубликовать статью.
-     */
     public function publish(): bool
     {
-        return $this->update([
-            'status' => 'published'
-        ]);
+        return $this->update(['status' => self::STATUS_PUBLISHED]);
     }
 
-    /**
-     * Снять с публикации (вернуть в черновики).
-     */
     public function unpublish(): bool
     {
-        return $this->update([
-            'status' => 'draft',
-        ]);
+        return $this->update(['status' => self::STATUS_DRAFT]);
     }
 
     /**
-     * Увеличить счетчик просмотров.
+     * Атомарное увеличение просмотров (без триггеров событий модели).
      */
     public function incrementViews(): void
     {
-        $this->increment('views_count');
+        $this->newQuery()->where('id', $this->id)->increment('views_count');
+        $this->views_count++;
     }
 
     // ============================================
@@ -129,10 +122,10 @@ class BlogPost extends Model
     public function getStatusBadgeAttribute(): array
     {
         return match ($this->status) {
-            'draft'     => ['variant' => 'warning', 'label' => 'Черновик'],
-            'published' => ['variant' => 'success', 'label' => 'Опубликована'],
-            'archived'  => ['variant' => 'secondary', 'label' => 'В архиве'],
-            default     => ['variant' => 'secondary', 'label' => 'Неизвестно'],
+            self::STATUS_DRAFT     => ['variant' => 'warning', 'label' => 'Черновик'],
+            self::STATUS_PUBLISHED => ['variant' => 'success', 'label' => 'Опубликована'],
+            self::STATUS_ARCHIVED  => ['variant' => 'secondary', 'label' => 'В архиве'],
+            default                => ['variant' => 'secondary', 'label' => 'Неизвестно'],
         };
     }
 }

@@ -5,7 +5,9 @@ use App\Enums\CommentRejectReason;
 use App\Models\Diary;
 use App\Models\DiaryComment;
 use App\Models\AdminLog;
+use App\Models\User;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Validation\Rules\Enum;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Layout;
@@ -29,12 +31,15 @@ new #[Layout('layouts.admin')] class extends Component
     
     public function mount(): void
     {
+        // ФИКС: Защита страницы
+        abort_unless(in_array(auth()->user()?->role, [User::ROLE_ADMIN, User::ROLE_MODERATOR]), 403);
+
         $previousUrl = url()->previous();
         $this->backUrl = ($previousUrl && $previousUrl !== url()->current()) 
             ? $previousUrl 
             : route('admin.moderation.diary.index');
 
-        if (!empty($this->search) && is_numeric($this->search)) {
+        if (!empty($this->search) && ctype_digit($this->search)) {
             $comment = DiaryComment::find((int) $this->search);
             if ($comment) {
                 $this->statusFilter = $comment->status;
@@ -50,7 +55,7 @@ new #[Layout('layouts.admin')] class extends Component
     { 
         $this->resetPage(); 
 
-        if (is_numeric($this->search) && !empty($this->search)) {
+        if (ctype_digit($this->search) && !empty($this->search)) {
             $comment = DiaryComment::find((int) $this->search);
             if ($comment) {
                 $this->statusFilter = $comment->status;
@@ -76,7 +81,7 @@ new #[Layout('layouts.admin')] class extends Component
         $this->resetPage();
     }
 
-    public function approveComment(int $commentId, ModerateDiaryCommentAction $action): void
+        public function approveComment(int $commentId, ModerateDiaryCommentAction $action): void
     {
         $comment = DiaryComment::with('parent')->find($commentId);
         if (!$comment) return;
@@ -87,6 +92,10 @@ new #[Layout('layouts.admin')] class extends Component
             return;
         }
         $this->dispatch('show-toast', type: 'success', message: 'Комментарий одобрен');
+        
+        // СБРАСЫВАЕМ ЛОКАЛЬНЫЙ КЭШ LIVEWIRE
+        unset($this->diaries);
+        unset($this->counts);
     }
 
     public function rejectComment(int $commentId, string $reason, ModerateDiaryCommentAction $action): void
@@ -96,6 +105,10 @@ new #[Layout('layouts.admin')] class extends Component
 
         $action->reject($comment, auth()->user(), $reason);
         $this->dispatch('show-toast', type: 'info', message: 'Комментарий отклонен');
+        
+        // СБРАСЫВАЕМ ЛОКАЛЬНЫЙ КЭШ LIVEWIRE
+        unset($this->diaries);
+        unset($this->counts);
     }
 
     public function markSpam(int $commentId, ModerateDiaryCommentAction $action): void
@@ -105,6 +118,10 @@ new #[Layout('layouts.admin')] class extends Component
 
         $action->markSpam($comment, auth()->user());
         $this->dispatch('show-toast', type: 'error', message: 'Комментарий помечен как спам');
+        
+        // СБРАСЫВАЕМ ЛОКАЛЬНЫЙ КЭШ LIVEWIRE
+        unset($this->diaries);
+        unset($this->counts);
     }
 
     public function restoreComment(int $commentId, ModerateDiaryCommentAction $action): void
@@ -114,6 +131,10 @@ new #[Layout('layouts.admin')] class extends Component
 
         $action->restore($comment, auth()->user());
         $this->dispatch('show-toast', type: 'info', message: 'Комментарий возвращен на модерацию');
+        
+        // СБРАСЫВАЕМ ЛОКАЛЬНЫЙ КЭШ LIVEWIRE
+        unset($this->diaries);
+        unset($this->counts);
     }
 
     public function getStatusBadge(string $status): array
@@ -132,20 +153,24 @@ new #[Layout('layouts.admin')] class extends Component
     {
         $operator = config('database.default') === 'pgsql' ? 'ilike' : 'like';
         $avatarQuery = fn($q) => $q->select(['id', 'user_id', 'is_primary', 'status', 'path_thumb', 'path_medium', 'path_large', 'path_original'])->orderByDesc('is_primary')->limit(1);
+        
+        // ФИКС: Передаем колонки массивом, чтобы Laravel не обернул их в одну строку
+        $userSelect = ['id', 'name', 'status','email', 'premium_expires_at', 'vip_expires_at', 'is_verified', 'last_seen', 'deleted_at'];
 
         $diaries = Diary::query()
             ->whereHas('comments', fn($q) => $this->applyCommentFilters($q))
             ->with([
-                'user' => fn($q) => $q->withTrashed()->select('id', 'name', 'status', 'is_premium', 'premium_expires_at', 'is_verified', 'last_seen', 'deleted_at')->with(['photos' => $avatarQuery]), 
-                'comments' => function ($q) use ($avatarQuery) {
+                'diaryRubric',
+                'user' => fn($q) => $q->withTrashed()->select($userSelect)->with(['photos' => $avatarQuery]), 
+                'comments' => function ($q) use ($avatarQuery, $userSelect) {
                     $this->applyCommentFilters($q);
                     $q->with([
-                        'user' => fn($uq) => $uq->withTrashed()->select('id', 'name', 'status', 'is_premium', 'premium_expires_at', 'is_verified', 'last_seen', 'deleted_at')->with(['photos' => $avatarQuery]),
-                        'replies' => function ($q) use ($avatarQuery) {
+                        'user' => fn($uq) => $uq->withTrashed()->select($userSelect)->with(['photos' => $avatarQuery]),
+                        'replies' => function ($q) use ($avatarQuery, $userSelect) {
                             if ($this->statusFilter !== 'all') {
                                 $q->where('status', $this->statusFilter);
                             }
-                            $q->with(['parent:id,status', 'user' => fn($uq) => $uq->withTrashed()->select('id', 'name', 'status', 'is_premium', 'premium_expires_at', 'is_verified', 'last_seen', 'deleted_at')->with(['photos' => $avatarQuery])])->latest();
+                            $q->with(['parent:id,status', 'user' => fn($uq) => $uq->withTrashed()->select($userSelect)->with(['photos' => $avatarQuery])])->latest();
                         },
                     ])->latest();
                 },
@@ -154,18 +179,14 @@ new #[Layout('layouts.admin')] class extends Component
         if (!empty($this->search)) {
             $diaries->where(function ($q) use ($operator) {
                 $search = $this->search;
+                $isId = ctype_digit($search);
                 
-                // 1. Ищем по названию дневника
                 $q->where('title', $operator, "%{$search}%")
-                  // 2. Ищем по имени автора дневника (вкл. удаленных)
                   ->orWhereHas('user', fn($uq) => $uq->withTrashed()->where('name', $operator, "%{$search}%"))
-                  // 3. Ищем по имени автора комментария (вкл. удаленных)
                   ->orWhereHas('comments.user', fn($cuq) => $cuq->withTrashed()->where('name', $operator, "%{$search}%"))
-                  // 4. Ищем по имени автора ответа (вкл. удаленных)
                   ->orWhereHas('comments.replies.user', fn($ruq) => $ruq->withTrashed()->where('name', $operator, "%{$search}%"));
                 
-                // 5. Если ввели цифры, ищем по ID комментария или ответа
-                if (is_numeric($search)) {
+                if ($isId) {
                     $q->orWhereHas('comments', fn($cq) => $cq->where('id', (int)$search))
                       ->orWhereHas('comments.replies', fn($rq) => $rq->where('id', (int)$search));
                 }
@@ -190,21 +211,24 @@ new #[Layout('layouts.admin')] class extends Component
     #[Computed]
     public function counts(): array
     {
-        $stats = DiaryComment::selectRaw("
-            SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
-            SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) as approved,
-            SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END) as rejected,
-            SUM(CASE WHEN status = 'spam' THEN 1 ELSE 0 END) as spam,
-            COUNT(*) as total
-        ")->first();
+        // ФИКС: Кэшируем счетчики на 1 минуту
+        return Cache::remember('admin_diary_comment_counts', 60, function () {
+            $stats = DiaryComment::selectRaw("
+                SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
+                SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) as approved,
+                SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END) as rejected,
+                SUM(CASE WHEN status = 'spam' THEN 1 ELSE 0 END) as spam,
+                COUNT(*) as total
+            ")->first();
 
-        return [
-            'pending' => (int) ($stats->pending ?? 0),
-            'approved' => (int) ($stats->approved ?? 0),
-            'rejected' => (int) ($stats->rejected ?? 0),
-            'spam' => (int) ($stats->spam ?? 0),
-            'total' => (int) ($stats->total ?? 0),
-        ];
+            return [
+                'pending' => (int) ($stats->pending ?? 0),
+                'approved' => (int) ($stats->approved ?? 0),
+                'rejected' => (int) ($stats->rejected ?? 0),
+                'spam' => (int) ($stats->spam ?? 0),
+                'total' => (int) ($stats->total ?? 0),
+            ];
+        });
     }
 }; 
 ?>
@@ -271,30 +295,50 @@ new #[Layout('layouts.admin')] class extends Component
         <div class="space-y-6">
             @foreach ($this->diaries as $diary)
                 <div class="bg-card border border-border rounded-xl shadow-sm overflow-hidden flex flex-col" wire:key="diary-{{ $diary->id }}">
-                    <div class="p-4 bg-muted/30 border-b border-border flex items-center justify-between gap-4 flex-wrap">
-                        <div class="flex items-center gap-3">
-                            <x-avatar src="{{ $diary->user?->avatar_url }}" name="{{ $diary->user?->name }}" size="sm" userId="{{ $diary->user?->id }}" showStatus="true" :isOnline="$diary->user?->is_online" />
-                            <div>
-                                {{-- ФИКС: Защита от 500 ошибки, если автор дневника удален --}}
-                                @if($diary->user)
-                                    <a href="{{ route('admin.users.show', $diary->user->id) }}" wire:navigate class="font-semibold text-foreground hover:text-primary flex items-center gap-2">
-                                        <span>
-                                            <x-user-status-sign :user="$diary->user" />
-                                            {{ $diary->user->name }}
-                                        </span>
-                                        @if($diary->user->has_active_premium)
-                                            <x-lucide-crown class="w-4 h-4 text-yellow-500" />
-                                        @endif
-                                    </a>
-                                @else
-                                    <span class="font-semibold text-muted-foreground flex items-center gap-2">Удален</span>
-                                @endif
-                                <div class="text-xs text-muted-foreground mt-1">
-                                    Запись: <a href="{{ route('admin.moderation.diary.moderate', $diary->id) }}" wire:navigate class="font-medium text-foreground/80 hover:text-primary transition-colors">{{ $diary->title }}</a>
-                                </div>
-                            </div>
-                        </div>
+                  <div class="p-4 bg-muted/30 border-b border-border flex flex-col gap-3">
+                    <div class="text-lg text-muted-foreground flex items-center gap-2">
+                        <span class="font-medium">Запись:</span> 
+                        <a href="{{ route('admin.moderation.diary.moderate', $diary->id) }}" wire:navigate class="font-medium text-foreground/80 hover:text-primary transition-colors">
+                            {{ $diary->title }}
+                        </a>
                     </div>
+                    
+                    <div class="text-sm text-muted-foreground flex items-center gap-2">
+                        <span class="font-medium">Рубрика:</span>
+                        @if($diary->diaryRubric)
+                            <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium bg-secondary text-secondary-foreground">
+                                @if(!$diary->diaryRubric->is_active)
+                                    <x-lucide-alert-triangle class="w-3 h-3 text-yellow-500" />
+                                @endif
+                                {{ $diary->diaryRubric->name }}
+                            </span>
+                        @else
+                            <span class="text-xs italic text-muted-foreground">Без рубрики</span>
+                        @endif
+                    </div>
+
+                    <div class="flex items-center gap-2">                              
+                        <span class="text-sm text-muted-foreground font-medium">
+                            Автор:
+                        </span>
+                                                                    
+                        @if($diary->user)
+                            <a href="{{ route('admin.users.show', $diary->user->id) }}" wire:navigate class="group flex items-center gap-3 hover:text-primary transition-colors">
+                                <x-avatar src="{{ $diary->user->avatar_url }}" name="{{ $diary->user->name }}" size="sm" userId="{{ $diary->user->id }}" showStatus="true" :isOnline="$diary->user->is_online" />
+                                <div class="flex flex-col">
+                                    <div class="flex items-center gap-1">
+                                        <x-user-status-sign :user="$diary->user" />
+                                        <span class="text-sm font-medium group-hover:text-primary">{{ $diary->user->name }}</span>
+                                        @if($diary->user->has_active_premium) <x-lucide-crown class="w-3 h-3 text-yellow-500" /> @endif
+                                    </div>
+                                    <div class="text-xs text-muted-foreground">{{ $diary->user->email }}</div>
+                                </div>
+                            </a>
+                        @else
+                            <span class="font-semibold text-muted-foreground flex items-center gap-2 text-sm">Удален</span>
+                        @endif                                                           
+                    </div>
+                </div>
 
                     <div class="p-4 grid grid-cols-1 gap-3 flex-1 bg-card">
                         @foreach ($diary->comments as $comment)
@@ -357,8 +401,26 @@ new #[Layout('layouts.admin')] class extends Component
                                             <x-lucide-alert-circle class="w-4 h-4 text-red-500" wire:loading.remove wire:target="markSpam({{ $comment->id }})" />
                                             <x-lucide-loader-2 class="w-4 h-4 animate-spin hidden" wire:loading wire:target="markSpam({{ $comment->id }})" />
                                         </x-ui.button>
-                                    @elseif($comment->status !== 'approved')
-                                        <x-ui.button wire:click="restoreComment({{ $comment->id }})" wire:target="restoreComment({{ $comment->id }})" variant="ghost" size="icon-xs" title="Восстановить">
+                                        
+                                      @elseif($comment->status === 'approved')                                           
+                                            <x-ui.dropdown-menu>
+                                                <x-ui.dropdown-menu-trigger>
+                                                    <x-ui.button variant="ghost" size="icon-xs" title="Отклонить"><x-lucide-x class="w-4 h-4 text-yellow-500" /></x-ui.button>
+                                                </x-ui.dropdown-menu-trigger>
+                                                <x-ui.dropdown-menu-content align="end">
+                                                    <x-ui.dropdown-menu-label>Причина отклонения</x-ui.dropdown-menu-label>
+                                                    <x-ui.dropdown-menu-separator></x-ui.dropdown-menu-separator>
+                                                    @foreach (\App\Enums\CommentRejectReason::options() as $value => $label)
+                                                        <x-ui.dropdown-menu-item wire:click="rejectComment({{ $comment->id }}, '{{ $value }}')">{{ $label }}</x-ui.dropdown-menu-item>
+                                                    @endforeach
+                                                </x-ui.dropdown-menu-content>
+                                            </x-ui.dropdown-menu>
+                                            <x-ui.button wire:click="markSpam({{ $comment->id }})" wire:target="markSpam({{ $comment->id }})" variant="ghost" size="icon-xs" title="Спам">
+                                                <x-lucide-alert-circle class="w-4 h-4 text-red-500" wire:loading.remove wire:target="markSpam({{ $comment->id }})" />
+                                                <x-lucide-loader-2 class="w-4 h-4 animate-spin hidden" wire:loading wire:target="markSpam({{ $comment->id }})" />
+                                            </x-ui.button>
+                                        @else
+                                            <x-ui.button wire:click="restoreComment({{ $comment->id }})" wire:target="restoreComment({{ $comment->id }})" variant="ghost" size="icon-xs" title="Восстановить">
                                             <x-lucide-rotate-ccw class="w-4 h-4 text-blue-500" wire:loading.remove wire:target="restoreComment({{ $comment->id }})" />
                                             <x-lucide-loader-2 class="w-4 h-4 animate-spin hidden" wire:loading wire:target="restoreComment({{ $comment->id }})" />
                                         </x-ui.button>
@@ -426,8 +488,25 @@ new #[Layout('layouts.admin')] class extends Component
                                                         <x-lucide-alert-circle class="w-4 h-4 text-red-500" wire:loading.remove wire:target="markSpam({{ $reply->id }})" />
                                                         <x-lucide-loader-2 class="w-4 h-4 animate-spin hidden" wire:loading wire:target="markSpam({{ $reply->id }})" />
                                                     </x-ui.button>
-                                                @elseif($reply->status !== 'approved')
-                                                    <x-ui.button wire:click="restoreComment({{ $reply->id }})" wire:target="restoreComment({{ $reply->id }})" variant="ghost" size="icon-xs" title="Восстановить">
+                                                @elseif($reply->status === 'approved')                                                       
+                                                        <x-ui.dropdown-menu>
+                                                            <x-ui.dropdown-menu-trigger>
+                                                                <x-ui.button variant="ghost" size="icon-xs" title="Отклонить"><x-lucide-x class="w-4 h-4 text-yellow-500" /></x-ui.button>
+                                                            </x-ui.dropdown-menu-trigger>
+                                                            <x-ui.dropdown-menu-content align="end">
+                                                                <x-ui.dropdown-menu-label>Причина отклонения</x-ui.dropdown-menu-label>
+                                                                <x-ui.dropdown-menu-separator></x-ui.dropdown-menu-separator>
+                                                                @foreach (\App\Enums\CommentRejectReason::options() as $value => $label)
+                                                                    <x-ui.dropdown-menu-item wire:click="rejectComment({{ $reply->id }}, '{{ $value }}')">{{ $label }}</x-ui.dropdown-menu-item>
+                                                                @endforeach
+                                                            </x-ui.dropdown-menu-content>
+                                                        </x-ui.dropdown-menu>
+                                                        <x-ui.button wire:click="markSpam({{ $reply->id }})" wire:target="markSpam({{ $reply->id }})" variant="ghost" size="icon-xs" title="Спам">
+                                                            <x-lucide-alert-circle class="w-4 h-4 text-red-500" wire:loading.remove wire:target="markSpam({{ $reply->id }})" />
+                                                            <x-lucide-loader-2 class="w-4 h-4 animate-spin hidden" wire:loading wire:target="markSpam({{ $reply->id }})" />
+                                                        </x-ui.button>
+                                                    @else
+                                                        <x-ui.button wire:click="restoreComment({{ $reply->id }})" wire:target="restoreComment({{ $reply->id }})" variant="ghost" size="icon-xs" title="Восстановить">
                                                         <x-lucide-rotate-ccw class="w-4 h-4 text-blue-500" wire:loading.remove wire:target="restoreComment({{ $reply->id }})" />
                                                         <x-lucide-loader-2 class="w-4 h-4 animate-spin hidden" wire:loading wire:target="restoreComment({{ $reply->id }})" />
                                                     </x-ui.button>
@@ -447,4 +526,7 @@ new #[Layout('layouts.admin')] class extends Component
             {{ $this->diaries->links('partials.pagination') }}
         </div>
     @endif
+
+    
+    <x-loading-overlay fixed="true" wire:loading.delay wire:key="overlay-loading-page"/>
 </div>

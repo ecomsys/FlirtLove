@@ -15,14 +15,12 @@ class SendBroadcastJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    // Ставим большой таймаут для диспетчера, если юзеров очень много
     public $timeout = 300; 
 
     public function __construct(
         public int $broadcastId,
         public array $targetAudience
     ) {
-        // Отправляем диспетчер в ту же очередь
         $this->onQueue('broadcasts');
     }
 
@@ -42,14 +40,11 @@ class SendBroadcastJob implements ShouldQueue
                 return;
             }
 
-            // Обновляем счетчики
             $broadcast->markAsSending($totalRecipients);
 
-            // ДРОБИМ НА МЕЛКИЕ ДЖОБЫ (по 100 юзеров)
-            // select('id') экономит память, так как нам нужны только ID для уведомления
-            $query->select('id')->chunkById(100, function ($userIds) use ($broadcast) {
-                // Диспатчим новую задачу для каждых 100 юзеров
-                SendBroadcastChunkJob::dispatch($broadcast->id, $userIds->pluck('id')->toArray())->onQueue('broadcasts');
+            // ФИКС: modelKeys() быстрее, чем pluck('id'), так как мы уже выбрали только id
+            $query->select('id')->chunkById(100, function ($users) use ($broadcast) {
+                SendBroadcastChunkJob::dispatch($broadcast->id, $users->modelKeys())->onQueue('broadcasts');
             });
 
         } catch (\Exception $e) {
@@ -61,72 +56,72 @@ class SendBroadcastJob implements ShouldQueue
     protected function buildTargetQuery(array $targetAudience, string $broadcastType): \Illuminate\Database\Eloquent\Builder
     {
         $query = User::query();
-        
-        // Базовое условие: только обычные юзеры. Soft Deletes отсекут удаленных.
-        $query->where('role', 'user');
+        $query->where('role', User::ROLE_USER);
 
-        // ИСПРАВЛЕННАЯ ЛОГИКА СТАТУСОВ (взял из твоей миграции)
         if ($broadcastType === 'push') {
-            // Для пушей исключаем забаненных и теневых, чтобы не спалить бан
-            $query->whereNotIn('status', ['banned', 'shadowbanned']);
+            $query->whereNotIn('status', [User::STATUS_BANNED, User::STATUS_SHADOWBANNED]);
         } else {
-            // Для In-App и Email шлем всем, кроме забаненных (деактивированные получают системные письма)
-            $query->whereNotIn('status', ['banned']); 
+            $query->whereNotIn('status', [User::STATUS_BANNED]); 
         }
 
-        // Если шлем конкретному юзеру по ID
         if (!empty($targetAudience['user_id'])) {
             $query->where('id', $targetAudience['user_id']);
             return $query;
         }
 
-        if (!empty($targetAudience['gender'])) {
-            $query->whereHas('profile', fn($q) => $q->where('gender', $targetAudience['gender']));
-        }
-        
-       // VIP статус
+        // ФИКС: Премиум статус
         if (isset($targetAudience['is_premium'])) {
-            if ($targetAudience['is_premium'] === true || $targetAudience['is_premium'] === 'true') {
-                $query->where('is_premium', true)->where('premium_expires_at', '>', now());
+            $isPremium = filter_var($targetAudience['is_premium'], FILTER_VALIDATE_BOOLEAN);
+            if ($isPremium) {
+                $query->where('premium_expires_at', '>', now());
             } else {
-                // Без VIP (false)
                 $query->where(function($q) {
-                    $q->where('is_premium', false)->orWhereNull('is_premium');
+                    $q->whereNull('premium_expires_at')->orWhere('premium_expires_at', '<=', now());
                 });
             }
-        }
-        
-        if (!empty($targetAudience['city'])) {
-            $query->whereHas('profile', fn($q) => $q->where('city', 'ilike', "%{$targetAudience['city']}%"));
-        }
-        
-        if (!empty($targetAudience['age_from']) || !empty($targetAudience['age_to'])) {
-            $query->whereHas('profile', function ($q) use ($targetAudience) {
-                if (!empty($targetAudience['age_from'])) {
-                    $q->where('birth_date', '<=', now()->subYears($targetAudience['age_from'])->format('Y-m-d'));
-                }
-                if (!empty($targetAudience['age_to'])) {
-                    $q->where('birth_date', '>=', now()->subYears($targetAudience['age_to'])->format('Y-m-d'));
-                }
-            });
         }
         
         if (!empty($targetAudience['last_seen_days'])) {
             $query->where('last_seen', '<=', now()->subDays((int)$targetAudience['last_seen_days']));
         }
         
-        if (!empty($targetAudience['device_os'])) {
-            $query->where('device_os', $targetAudience['device_os']);
-        }
-        
-        // Наличие фото
         if (isset($targetAudience['has_photo'])) {
-            if ($targetAudience['has_photo'] === true || $targetAudience['has_photo'] === 'true') {
+            $hasPhoto = filter_var($targetAudience['has_photo'], FILTER_VALIDATE_BOOLEAN);
+            if ($hasPhoto) {
                 $query->has('photos');
             } else {
-                // Без фото (false)
                 $query->doesntHave('photos');
             }
+        }
+
+        // ФИКС: Объединяем все фильтры профиля в один whereHas, чтобы сделать только 1 JOIN
+        $profileFilters = [];
+        
+        if (!empty($targetAudience['gender'])) {
+            $profileFilters[] = fn($q) => $q->where('gender', $targetAudience['gender']);
+        }
+        
+        if (!empty($targetAudience['city'])) {
+            $profileFilters[] = fn($q) => $q->whereHas('city', fn($cq) => $cq->where('name', 'ilike', "%{$targetAudience['city']}%"));
+        }
+        
+        if (!empty($targetAudience['age_from']) || !empty($targetAudience['age_to'])) {
+            $profileFilters[] = function ($q) use ($targetAudience) {
+                if (!empty($targetAudience['age_from'])) {
+                    $q->where('birth_date', '<=', now()->subYears($targetAudience['age_from']));
+                }
+                if (!empty($targetAudience['age_to'])) {
+                    $q->where('birth_date', '>=', now()->subYears($targetAudience['age_to']));
+                }
+            };
+        }
+
+        if (!empty($profileFilters)) {
+            $query->whereHas('profile', function ($q) use ($profileFilters) {
+                foreach ($profileFilters as $filter) {
+                    $filter($q);
+                }
+            });
         }
 
         return $query;

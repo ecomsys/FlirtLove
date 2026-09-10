@@ -13,7 +13,6 @@ class ManageUserSessionsAction
      */
     public function killSession(User $user, string $sessionId, User $admin): bool
     {
-        // Сначала находим сессию, чтобы забрать IP для лога
         $session = DB::table('sessions')
             ->where('id', $sessionId)
             ->where('user_id', $user->id) // Защита: чтобы не убили чужую сессию
@@ -23,21 +22,25 @@ class ManageUserSessionsAction
             return false;
         }
 
-        DB::table('sessions')->where('id', $sessionId)->delete();
+        // ФИКС: Транзакция гарантирует, что сессия убита И лог записан. Иначе откат.
+        DB::transaction(function () use ($session, $user, $admin) {
+            
+            DB::table('sessions')->where('id', $session->id)->delete();
 
-        $after = [
-            'status' => 'killed', 
-            'killed_by' => $admin->id,
-            'killed_at' => now()->toDateTimeString(),
-            'context' => [
-                'user_id' => $user->id,
-                'session_id' => $sessionId,
-                'ip_address' => $session->ip_address,
-                'admin_id' => $admin->id
-            ]
-        ];
+            $after = [
+                'status' => 'killed', 
+                'killed_by' => $admin->id,
+                'killed_at' => now()->toDateTimeString(),
+                'context' => [
+                    'user_id' => $user->id,
+                    'session_id' => $session->id,
+                    'ip_address' => $session->ip_address,
+                    'admin_id' => $admin->id
+                ]
+            ];
 
-        AdminLog::record('user.session_killed', $user, $admin, null, $after, participants: [$user->id]);
+            AdminLog::record('user.session_killed', $user, $admin, null, $after, participants: [$user->id]);
+        });
 
         return true;
     }
@@ -47,27 +50,31 @@ class ManageUserSessionsAction
      */
     public function killAllSessions(User $user, User $admin): int
     {
-        $count = DB::table('sessions')->where('user_id', $user->id)->count();
+        $deletedCount = 0;
 
-        if ($count === 0) {
-            return 0;
-        }
+        // ФИКС: Обернули в транзакцию
+        DB::transaction(function () use ($user, $admin, &$deletedCount) {
+            
+            // ФИКС: delete() возвращает количество удаленных строк! 
+            // Нам не нужен отдельный запрос COUNT(*), который к тому же подвержен Race Condition.
+            $deletedCount = DB::table('sessions')->where('user_id', $user->id)->delete();
 
-        DB::table('sessions')->where('user_id', $user->id)->delete();
+            if ($deletedCount > 0) {
+                $after = [
+                    'status' => 'all_killed', 
+                    'killed_by' => $admin->id,
+                    'killed_at' => now()->toDateTimeString(),
+                    'context' => [
+                        'user_id' => $user->id,
+                        'admin_id' => $admin->id,
+                        'killed_count' => $deletedCount
+                    ]
+                ];
 
-        $after = [
-            'status' => 'all_killed', 
-            'killed_by' => $admin->id,
-            'killed_at' => now()->toDateTimeString(),
-            'context' => [
-                'user_id' => $user->id,
-                'admin_id' => $admin->id,
-                'killed_count' => $count
-            ]
-        ];
+                AdminLog::record('user.all_sessions_killed', $user, $admin, null, $after, participants: [$user->id]);
+            }
+        });
 
-        AdminLog::record('user.all_sessions_killed', $user, $admin, null, $after, participants: [$user->id]);
-
-        return $count;
+        return $deletedCount;
     }
 }

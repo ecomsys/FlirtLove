@@ -2,16 +2,21 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Chat extends Model
 {
+    // КОНСТАНТЫ ТИПОВ ЧАТА
+    public const TYPE_PRIVATE = 'private';
+    public const TYPE_SUPPORT = 'support';
+
     protected $fillable = [
-        'type',             // private, support
-        'last_message_at',  // Кэш времени последнего сообщения для сортировки
-         'is_locked',
+        'type',             
+        'last_message_at',  
+        'is_locked',
     ];
 
     protected $casts = [
@@ -23,19 +28,11 @@ class Chat extends Model
     // СВЯЗИ
     // ============================================
 
-    /**
-     * Участники чата (прямая связь со сводной таблицей).
-     * Нужна для управления настройками чата (мьюты, баны, счетчики).
-     */
     public function participants(): HasMany
     {
         return $this->hasMany(ChatParticipant::class);
     }
 
-    /**
-     * Юзеры в чате (Многие ко многим через chat_participants).
-     * С пивотом для удобного доступа к настройкам.
-     */
     public function users(): BelongsToMany
     {
         return $this->belongsToMany(User::class, 'chat_participants')
@@ -43,13 +40,9 @@ class Chat extends Model
             ->withTimestamps();
     }
 
-    /**
-     * Сообщения в чате.
-     * Твой правило: связи не должны иметь дефолтной сортировки!
-     * Сортировку делаем при вызове: $chat->messages()->latest()->get()
-     */
     public function messages(): HasMany
     {
+        // Оставляем без дефолтной сортировки! Сортировку делаем при вызове.
         return $this->hasMany(Message::class);
     }
 
@@ -57,32 +50,26 @@ class Chat extends Model
     // СКОПЫ
     // ============================================
 
-    public function scopePrivate($query)
+    public function scopePrivate(Builder $query): Builder
     {
-        return $query->where('type', 'private');
+        return $query->where('type', self::TYPE_PRIVATE);
     }
 
-    public function scopeSupport($query)
+    public function scopeSupport(Builder $query): Builder
     {
-        return $query->where('type', 'support');
+        return $query->where('type', self::TYPE_SUPPORT);
     }
 
     // ============================================
     // ХЕЛПЕРЫ
     // ============================================
 
-    /**
-     * Получить собеседника (Адаптировано под новую БД).
-     * Твой принцип: Модель не должна знать о текущем запросе, передаем ID явно.
-     */
     public function getPartner(int $userId): ?User
     {
-        // Если юзеры загружены через eager loading, берем из коллекции
         if ($this->relationLoaded('users')) {
             return $this->users->firstWhere('id', '!=', $userId);
         }
         
-        // Иначе делаем легкий запрос через сводную таблицу
         return $this->users()->where('user_id', '!=', $userId)->first();
     }
 
@@ -90,9 +77,6 @@ class Chat extends Model
     // БИЗНЕС-ЛОГИКА (СОЗДАНИЕ ЧАТОВ)
     // ============================================
 
-    /**
-     * Создать или получить приватный чат между двумя юзерами.
-     */
     public static function getOrCreateBetween(int $userAId, int $userBId): self
     {
         $hash = md5(min($userAId, $userBId) . '-' . max($userAId, $userBId));
@@ -100,7 +84,7 @@ class Chat extends Model
         try {
             $chat = self::create([
                 'participants_hash' => $hash,
-                'type' => 'private',
+                'type' => self::TYPE_PRIVATE,
                 'last_message_at' => now()
             ]);
             self::ensureParticipantsExist($chat, $userAId, $userBId);
@@ -112,27 +96,29 @@ class Chat extends Model
             throw $e;
         }
     }
-    /**
-     * Создать или получить чат поддержки.
-     */
+    
     public static function getOrCreateSupportChat(int $adminId, int $userId): self
     {
-        $chat = self::where('type', 'support')
-            ->whereHas('participants', fn($q) => $q->where('user_id', $userId))
-            ->first();
+        // ФИКС: Используем уникальный хэш для саппорт-чата, чтобы избежать race condition
+        // Формат хэша: md5('support-' . $userId)
+        $hash = md5('support-' . $userId);
 
-        if (!$chat) {
-            $chat = self::create(['type' => 'support', 'last_message_at' => now()]);
+        try {
+            $chat = self::create([
+                'type' => self::TYPE_SUPPORT,
+                'participants_hash' => $hash, // Обязательно прописываем хэш!
+                'last_message_at' => now()
+            ]);
             self::ensureParticipantsExist($chat, $adminId, $userId);
+            return $chat;
+        } catch (\Illuminate\Database\QueryException $e) {
+            if ($e->errorInfo[1] === 23505) { // Дубль! Саппорт-чат уже создан параллельно
+                return self::where('participants_hash', $hash)->firstOrFail();
+            }
+            throw $e;
         }
-
-        return $chat;
     }
 
-    /**
-     * Внутренний метод для создания участников чата (Твоя идея).
-     * Гарантирует, что записи в pivot таблице существуют.
-     */
     private static function ensureParticipantsExist(self $chat, int $user1Id, int $user2Id): void
     {
         ChatParticipant::firstOrCreate(

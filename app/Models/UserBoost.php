@@ -7,8 +7,12 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class UserBoost extends Model
 {
+    // КОНСТАНТЫ СТАТУСОВ
+    public const STATUS_ACTIVE = 'active';
+    public const STATUS_EXPIRED = 'expired';
+   
     protected $fillable = [
-        'user_id', 'boost_plan_id', 'transaction_id', 'type', 'starts_at', 'ends_at', 'status'
+        'user_id', 'transaction_id', 'photo_id', 'type', 'starts_at', 'ends_at', 'status'
     ];
 
     protected $casts = [
@@ -16,15 +20,42 @@ class UserBoost extends Model
         'ends_at' => 'datetime',
     ];
 
+    // ============================================
+    // СВЯЗИ
+    // ============================================
+
     public function user(): BelongsTo { return $this->belongsTo(User::class); }
-    public function plan(): BelongsTo { return $this->belongsTo(BoostPlan::class, 'boost_plan_id'); }
-    public function transaction(): BelongsTo { return $this->belongsTo(Transaction::class); }
-
-    public function scopeActive($query) { return $query->where('status', 'active')->where('ends_at', '>', now()); }
-    public function scopeOverdue($query) { return $query->where('status', 'active')->where('ends_at', '<=', now()); }
-
-    public function isActive(): bool { return $this->status === 'active' && $this->ends_at->isFuture(); }
     
-    public function expire(): bool { return $this->update(['status' => 'expired']); }
-}
+    // Убрали связь plan() - таблицы планов больше нет
+    
+    public function transaction(): BelongsTo { return $this->belongsTo(Transaction::class); }
+    
+    public function photo(): BelongsTo
+    {
+        return $this->belongsTo(Photo::class);
+    }
 
+    // ============================================
+    // СКОПЫ И ХЕЛПЕРЫ
+    // ============================================
+
+    public function scopeActive($query) 
+    { 
+        return $query->where('status', self::STATUS_ACTIVE)->where('ends_at', '>', now()); 
+    }
+
+    public function scopeOverdue($query) 
+    { 
+        return $query->where('status', self::STATUS_ACTIVE)->where('ends_at', '<=', now()); 
+    }
+
+    public function isActive(): bool 
+    { 
+        return $this->status === self::STATUS_ACTIVE && $this->ends_at->isFuture(); 
+    }
+    
+    public function expire(): bool 
+    { 
+        return $this->update(['status' => self::STATUS_EXPIRED]); 
+    }
+}
