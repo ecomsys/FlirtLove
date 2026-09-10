@@ -27,7 +27,7 @@ new #[Layout('layouts.admin')] class extends Component
         $role = auth()->user()->role;
         $data = [];
 
-        // 1. БАЗОВЫЕ ЖИВЫЕ ДАННЫЕ (Для всех ролей) - Кэшируем на 1 минуту для скорости!
+        // 1. БАЗОВЫЕ ЖИВЫЕ ДАННЫЕ (Для всех ролей) - Кэшируем на 1 минуту
         $liveData = Cache::remember('admin_dashboard_live_v2', 60, function () {
             return [
                 'onlineUsers' => User::excludeStaff()->where('last_seen', '>=', now()->subMinutes(5))->count(),
@@ -50,7 +50,7 @@ new #[Layout('layouts.admin')] class extends Component
         $data = array_merge($data, $liveData);
         $data['moderationQueue'] = $data['pendingPhotos'] + $data['pendingPhotoComments'] + $data['pendingDiaries'] + $data['pendingDiaryComments'] + $data['pendingReports'];
 
-        // ФИКС: Жадная загрузка фоток для аватарок, чтобы не словить N+1
+        // ФИКС: Жадная загрузка фоток для аватарок (уже было правильно)
         $data['recentUsers'] = User::excludeStaff()
             ->select('id', 'name', 'created_at', 'last_seen')
             ->with(['photos' => fn($q) => $q->select('id', 'user_id', 'path_thumb', 'is_primary', 'status')->where('status', 'approved')->orderByDesc('is_primary')->limit(1)])
@@ -59,7 +59,6 @@ new #[Layout('layouts.admin')] class extends Component
             ->get();
 
         if (in_array($role, ['admin', 'support'])) {
-            // ФИКС: Подгружаем админа и его фотку для аватарки
             $data['recentLogs'] = AdminLog::with(['admin' => fn($q) => $q->select('id', 'name', 'last_seen')->with(['photos' => fn($sq) => $sq->select('id', 'user_id', 'path_thumb', 'is_primary', 'status')->orderByDesc('is_primary')->limit(1)])])
                 ->latest()
                 ->limit(8)
@@ -67,7 +66,10 @@ new #[Layout('layouts.admin')] class extends Component
         }
 
         if (in_array($role, ['admin', 'moderator'])) {
-            $data['activityData'] = $this->getActivityData();
+            // ФИКС: Кэшируем активность на 10 минут! Иначе 3 тяжелых GROUP BY убьют базу при каждом заходе.
+            $data['activityData'] = Cache::remember('admin_dashboard_activity_v1', 600, function () {
+                return $this->getActivityData();
+            });
         }
 
         if ($role === 'admin') {
@@ -103,6 +105,8 @@ new #[Layout('layouts.admin')] class extends Component
             Cache::forget('admin_dashboard_metrics_v8');
         }
         Cache::forget('admin_dashboard_live_v2');
+        Cache::forget('admin_dashboard_activity_v1'); // ФИКС: Сбрасываем кэш активности
+        
         $this->chartKey = uniqid(); 
         $this->dispatch('show-toast', type: 'success', message: 'Данные обновлены!');
     }
