@@ -3,116 +3,96 @@
 namespace App\Services\Search;
 
 use App\Models\User;
-use App\Models\UserProfile;
-use App\Models\Swipe;
-use App\Models\UserBlock;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Support\Facades\DB;
-
-// Как это использовать в Контроллере?
-// В твоем контроллере поиска (например, SearchController) логика станет максимально тонкой:
-
-// public function index(Request $request, UserSearchService $searchService)
-// {
-//     $filters = $request->validate([
-//         'gender' => 'nullable|in:male,female,any',
-//         'age_from' => 'nullable|integer|min:18',
-//         'age_to' => 'nullable|integer|max:99',
-//         'city_id' => 'nullable|integer|exists:cities,id',
-//         'lat' => 'nullable|numeric',
-//         'lng' => 'nullable|numeric',
-//         'radius_km' => 'nullable|integer|min:1|max:500',
-//         'interests' => 'nullable|array',
-//         'interests.*' => 'string', // ['music', 'sport']
-//         // ... другие фильтры
-//     ]);
-
-//     $users = $searchService->search(auth()->user(), $filters);
-
-//     return response()->json($users);
-// }
+use Illuminate\Support\Carbon;
 
 class UserSearchService
 {
     /**
-     * Основной метод поиска анкет
+     * Основной метод поиска анкет (Поддерживает гостей!)
      *
-     * @param User $user Юзер, который ищет
+     * @param User|null $user Юзер, который ищет (или null, если гость)
      * @param array $filters Фильтры (пол, возраст, гео, теги и т.д.)
      * @return LengthAwarePaginator
      */
-    public function search(User $user, array $filters = []): LengthAwarePaginator
+    public function search(?User $user, array $filters = []): LengthAwarePaginator
     {
-        // 1. Собираем ID юзеров, которых мы не хотим видеть в выдаче
-        // (Те, кого мы свайпнули, и те, кого мы заблокировали)
-        $excludedIds = $this->getExcludedUserIds($user);
-
-        // 2. Начинаем сборку запроса. Делаем JOIN, чтобы фильтровать по таблице профилей сразу
+        // 1. Начинаем сборку запроса. Делаем JOIN, чтобы фильтровать по таблице профилей сразу
         $query = User::query()
-            ->select('users.*') // Берем только данные таблицы users, чтобы не было конфликтов колонок
+            ->select('users.*') // Берем только данные таблицы users
             ->join('user_profiles', 'users.id', '=', 'user_profiles.user_id')
-            ->join('user_preferences', 'users.id', '=', 'user_preferences.user_id')
-            ->where('users.id', '!=', $user->id) // Исключаем себя
-            ->whereNotIn('users.id', $excludedIds) // Исключаем свайпнутых и заблокированных
             ->where('users.status', 'active') // Только активные
-            ->where('users.role', 'user') // Исключаем админов и модераторов из поиска
-            ->where('user_preferences.hide_from_search', false); // Исключаем тех, кто скрылся
-        
-        // ФИЛЬТР "КТО ВИДИТ МОЮ АНКЕТУ" (Premium-фича)
-        // Исключаем тех, кто скрыл свою анкету от текущего юзера (по полу и возрасту)
-        $userGender = $user->profile->gender ?? 'male';
-        $userAge = $user->profile->age ?? 18;
+            ->where('users.role', 'user') // Исключаем админов из поиска
+            ->whereNotNull('user_profiles.gender') // Исключаем пустые анкеты (онбординг не пройден)
+            ->whereNotNull('user_profiles.birth_date');
 
-        $query->where(function ($q) use ($userGender, $userAge) {
-            // Условие 1: Анкета видна всем (any) ИЛИ анкета видна текущему полу юзера
-            $q->where('user_preferences.visibility_gender', 'any')
-              ->orWhere('user_preferences.visibility_gender', $userGender);
-            
-            // Условие 2: Возраст текущего юзера попадает в разрешенный диапазон
-            // (Это применяется внутри того же замыкания, работает как AND для каждого OR выше)
-        })
-        ->where('user_preferences.visibility_age_min', '<=', $userAge)
-        ->where('user_preferences.visibility_age_max', '>=', $userAge);
+        // 2. ЛОГИКА ДЛЯ АВТОРИЗОВАННОГО ЮЗЕРА
+        if ($user) {
+            $query->where('users.id', '!=', $user->id);
 
-        // 4. БАЗОВЫЕ ФИЛЬТРЫ (Пол, Возраст, Город)
-        $this->applyBaseFilters($query, $filters);
+            // ФИКС: Subquery вместо pluck()->toArray(). Это спасет память на миллионнике!
+            // База сама отбросит тех, кого мы свайпнули
+            $query->whereNotIn('users.id', function ($q) use ($user) {
+                $q->select('target_user_id')->from('swipes')->where('user_id', $user->id);
+            });
 
-        // 3. БАЗОВЫЕ ФИЛЬТРЫ (Используют индексы)
+            // И тех, кого мы заблокировали
+            $query->whereNotIn('users.id', function ($q) use ($user) {
+                $q->select('blocked_id')->from('user_blocks')->where('blocker_id', $user->id);
+            });
+
+            // Исключаем тех, кто скрылся из поиска (hide_from_search)
+            $query->join('user_preferences', 'users.id', '=', 'user_preferences.user_id')
+                  ->where('user_preferences.hide_from_search', false);
+
+            // ФИЛЬТР "КТО ВИДИТ МОЮ АНКЕТУ" (Premium-фича)
+            $userGender = $user->profile->gender ?? 'male';
+            $userAge = $user->profile->age ?? 18;
+
+            $query->where(function ($q) use ($userGender, $userAge) {
+                $q->where('user_preferences.visibility_gender', 'any')
+                  ->orWhere('user_preferences.visibility_gender', $userGender);
+            })
+            ->where('user_preferences.visibility_age_min', '<=', $userAge)
+            ->where('user_preferences.visibility_age_max', '>=', $userAge);
+        }
+
+        // 3. БАЗОВЫЕ ФИЛЬТРЫ (Пол, Возраст, Город)
         $this->applyBaseFilters($query, $filters);
 
         // 4. ГЕОЛОКАЦИЯ (Использует spatialIndex)
         $this->applyLocationFilter($query, $filters);
 
-        // 5. РАСШИРЕННЫЕ ФИЛЬТРЫ (Множественный выбор через JSONB GIN)
+        // 5. РАСШИРЕННЫЕ ФИЛЬТРЫ
         $this->applyAdvancedFilters($query, $filters);
 
-        // 6. СОРТИРОВКА И ПАГИНАЦИЯ
-        $sort = $filters['sort'] ?? 'last_seen';
-        $this->applySorting($query, $sort);
+        // 6. СОРТИРОВКА
+        $query->orderByDesc('users.last_seen'); // По умолчанию: кто был онлайн недавно
 
-        // Жадная загрузка связей, чтобы не было проблемы N+1 при выводе в карточках
-        return $query->with(['profile', 'photos' => function($q) {
-            $q->where('status', 'approved')->orderBy('is_primary', 'desc');
-        }])->paginate(20); // По 20 анкет на страницу
+        // Жадная загрузка связей, чтобы не было проблемы N+1
+        return $query->with(['profile.city', 'photos' => function($q) {
+            $q->where('status', 'approved')->orderByDesc('is_primary')->limit(4);
+        }])->paginate(20);
     }
 
-    /**
-     * Базовые фильтры (Пол, Возраст, Город)
-     */
     private function applyBaseFilters(Builder $query, array $filters): void
     {
-        // Пол (использует составной индекс [gender, age])
+        // Пол
         if (!empty($filters['gender']) && $filters['gender'] !== 'any') {
             $query->where('user_profiles.gender', $filters['gender']);
         }
 
-        // Возраст (использует составной индекс [gender, age])
+        // ФИКС: Возраст (Конвертируем в дату рождения, чтобы использовать индекс birth_date!)
         $ageFrom = $filters['age_from'] ?? 18;
         $ageTo = $filters['age_to'] ?? 99;
-        $query->whereBetween('user_profiles.age', [$ageFrom, $ageTo]);
+        
+        $maxDate = Carbon::now()->subYears($ageFrom)->format('Y-m-d'); // Самая поздняя дата рождения (самые молодые)
+        $minDate = Carbon::now()->subYears($ageTo)->format('Y-m-d'); // Самая ранняя дата рождения (самые старые)
+        
+        $query->whereBetween('user_profiles.birth_date', [$minDate, $maxDate]);
 
-        // Город (использует индекс city_id)
+        // Город
         if (!empty($filters['city_id'])) {
             $query->where('user_profiles.city_id', $filters['city_id']);
         }
@@ -132,24 +112,19 @@ class UserSearchService
             $query->where('users.is_verified', true);
         }
 
-        // Только с премиумом
+        // ФИКС: Только с премиумом (используем дату, а не несуществующий флаг is_premium)
         if (!empty($filters['premium_only']) && $filters['premium_only'] === true) {
-            $query->where('users.is_premium', true);
+            $query->where('users.premium_expires_at', '>', now());
         }
     }
 
-    /**
-     * Фильтр по геолокации (Радиус)
-     */
     private function applyLocationFilter(Builder $query, array $filters): void
     {
-        // Если включен поиск по GPS
         if (!empty($filters['lat']) && !empty($filters['lng']) && !empty($filters['radius_km'])) {
             $lat = (float) $filters['lat'];
             $lng = (float) $filters['lng'];
-            $radiusMeters = (int) $filters['radius_km'] * 1000; // Переводим км в метры
+            $radiusMeters = (int) $filters['radius_km'] * 1000;
 
-            // PostGIS запрос на поиск в радиусе. Использует spatialIndex!
             $query->whereNotNull('user_profiles.location')
                   ->whereRaw(
                       "ST_DWithin(user_profiles.location, ST_SetSRID(ST_MakePoint(?, ?), 4326)::geography, ?)",
@@ -158,16 +133,9 @@ class UserSearchService
         }
     }
 
-    /**
-     * Расширенные фильтры (JSONB массивы и TINYINT)
-     */
     private function applyAdvancedFilters(Builder $query, array $filters): void
     {
-        // Одиночные поля (TINYINT)
-        $simpleFilters = [
-            'body_type', 'smoking', 'alcohol', 'relationship_status', 
-            'children_status', 'housing', 'has_car'
-        ];
+        $simpleFilters = ['body_type', 'smoking', 'alcohol', 'relationship_status', 'children_status', 'housing', 'has_car'];
 
         foreach ($simpleFilters as $field) {
             if (isset($filters[$field]) && $filters[$field] !== null && $filters[$field] !== 'any') {
@@ -175,7 +143,6 @@ class UserSearchService
             }
         }
 
-        // Рост (Диапазон)
         if (!empty($filters['height_from'])) {
             $query->where('user_profiles.height', '>=', $filters['height_from']);
         }
@@ -183,54 +150,11 @@ class UserSearchService
             $query->where('user_profiles.height', '<=', $filters['height_to']);
         }
 
-        // JSONB Массивы (Множественный выбор) - использует GIN индексы!
         $jsonFilters = ['interests', 'languages', 'sports'];
-
         foreach ($jsonFilters as $field) {
             if (!empty($filters[$field]) && is_array($filters[$field])) {
-                // whereJsonContains транслируется в @> оператор Postgres, который летает благодаря GIN
                 $query->whereJsonContains("user_profiles.{$field}", $filters[$field]);
             }
-        }
-    }
-
-    /**
-     * Исключение юзеров (Свайпы и Блокировки)
-     * ВЫНОСИТСЯ В ПОДЗАПРОС, чтобы не грузить память массивами ID
-     */
-    private function getExcludedUserIds(User $user): array
-    {
-        // Получаем ID тех, кого лайкнули/дизлайкнули
-        $swipedIds = Swipe::where('user_id', $user->id)->pluck('target_user_id')->toArray();
-        
-        // Получаем ID тех, кого заблокировали
-        $blockedIds = UserBlock::where('blocker_id', $user->id)->pluck('blocked_id')->toArray();
-
-        return array_merge($swipedIds, $blockedIds);
-    }
-
-    /**
-     * Применение сортировки
-     */
-    private function applySorting(Builder $query, string $sort): void
-    {
-        switch ($sort) {
-            case 'new_faces':
-                // Сначала новые регистрации
-                $query->orderBy('users.created_at', 'desc');
-                break;
-            case 'popular':
-                // Можно добавить колонку likes_count в таблицу users и кэшировать её
-                // Пока заглушка: сортировка по верификации и премиуму
-                $query->orderByDesc('users.is_premium')
-                      ->orderByDesc('users.is_verified')
-                      ->orderByDesc('users.last_seen');
-                break;
-            case 'last_seen':
-            default:
-                // По умолчанию: кто был онлайн недавно (Использует индекс last_seen)
-                $query->orderBy('users.last_seen', 'desc');
-                break;
         }
     }
 }

@@ -4,14 +4,29 @@ use App\Models\User;
 use App\Models\PhotoComment;
 use App\Notifications\CommentModerated;
 
+use App\Livewire\Web\Feed;
+use App\Livewire\Web\BlogIndex;
+use App\Livewire\Web\BlogShow;
+
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
 use Livewire\Volt\Volt;
+use App\Http\Controllers\Auth\SocialAuthController;
 
-// Главная страница (Лендинг)
-Route::get('/', function () {
-    return view('landing');
-})->name('home');
+// === ГЛАВНАЯ СТРАНИЦА (Лента анкет) ===
+// Volt::route ищет файл resources/views/livewire/front/feed.blade.php
+// Никаких middleware 'auth' здесь нет, поэтому гости видят ленту без редиректа!
+
+// Главная страница (Лента анкет)
+Route::get('/', Feed::class)->name('home');
+
+// Регистрация и авторизация через соцсети
+Route::get('/auth/{provider}/redirect', [SocialAuthController::class, 'redirect'])->where('provider', 'vkontakte|odnoklassniki|mailru|yandex|google')->name('social.redirect');
+Route::get('/auth/{provider}/callback', [SocialAuthController::class, 'callback'])->where('provider', 'vkontakte|odnoklassniki|mailru|yandex|google')->name('social.callback');
+
+// === БЛОГ ===
+Route::get('/blog', BlogIndex::class)->name('blog.index');
+Route::get('/blog/{post:slug}', BlogShow::class)->name('blog.show');
 
 // Маршруты для авторизованных юзеров
 Route::middleware(['auth', 'verified', 'role:user', 'onboarding'])->group(function () {
@@ -85,7 +100,6 @@ Route::middleware(['auth', 'verified'])->prefix('admin')->name('admin.')->group(
         Volt::route('/system/settings', 'admin.system.settings')->name('system.settings');
 
         // Страницы
-        // Volt::route('/system/pages', 'admin.system.pages')->name('system.pages');
         Volt::route('/system/pages', 'admin.system.pages.index')->name('system.pages.index');
         Volt::route('/system/pages/create', 'admin.system.pages.form')->name('system.pages.create');
         Volt::route('/system/pages/{page}/edit', 'admin.system.pages.form')->name('system.pages.edit');

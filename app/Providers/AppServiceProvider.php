@@ -5,6 +5,13 @@ namespace App\Providers;
 use App\Models\User;
 use App\Models\Photo;
 
+use Illuminate\Support\Facades\Event;
+use SocialiteProviders\Manager\SocialiteWasCalled;
+use SocialiteProviders\VKontakte\VKontakteExtendSocialite;
+use SocialiteProviders\Odnoklassniki\OdnoklassnikiExtendSocialite;
+use SocialiteProviders\MailRu\MailRuExtendSocialite;
+use SocialiteProviders\Yandex\YandexExtendSocialite;
+
 use App\Services\GeoIPBlockService;
 use App\Services\StopWordsFilterService;
 
@@ -16,7 +23,6 @@ use App\Observers\PhotoObserver;
 
 
 use Illuminate\Auth\Events\Login;
-use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Session;
 use Illuminate\Support\Facades\Auth;
 
@@ -50,6 +56,14 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void        
     {   
+      // Правильная регистрация SocialiteProviders
+        Event::listen(function (\SocialiteProviders\Manager\SocialiteWasCalled $event) {
+            $event->extendSocialite('vkontakte', \SocialiteProviders\VKontakte\Provider::class);
+            $event->extendSocialite('odnoklassniki', \SocialiteProviders\Odnoklassniki\Provider::class);
+            $event->extendSocialite('yandex', \SocialiteProviders\Yandex\Provider::class);
+            $event->extendSocialite('mailru', \SocialiteProviders\Mailru\Provider::class);
+        });
+        
         // выкидуем из старых сессий при новом входе а аккаунт
          Event::listen(Login::class, InvalidateOldSessions::class);
 

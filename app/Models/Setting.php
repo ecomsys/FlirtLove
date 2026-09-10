@@ -38,17 +38,29 @@ class Setting extends Model
 
     public static function getAllCached(): Collection
     {
-        return Cache::rememberForever('settings_all', function () {
-            return static::all()->keyBy('key');
+        // Кэшируем ТОЛЬКО массив. Это 100% защищает от __PHP_Incomplete_Class.
+        $cachedArray = Cache::rememberForever('settings_v1', function () {
+            return static::all()->keyBy('key')->map(function ($item) {
+                return $item->getAttributes();
+            })->toArray();
         });
+        
+        // Возвращаем Collection, собранную из массива на лету
+        return collect($cachedArray);
     }
 
     public static function flushCache(): void
     {
-        Cache::forget('settings_all');
+        // Чистим только один актуальный ключ
+        Cache::forget('settings_v1');
+        
+        // Подчищаем старые ключи от прошлых итераций (один раз при следующем сохранении)
+        // Cache::forget('settings_all');
+        // Cache::forget('settings_all_v2');
+        // Cache::forget('settings_array_v1');
     }
 
-        // ============================================
+    // ============================================
     // ПОЛУЧЕНИЕ ЗНАЧЕНИЙ ПО УМОЛЧАНИЮ ИЗ КОНФИГА
     // ============================================
 
@@ -77,7 +89,6 @@ class Setting extends Model
      */
     public static function set(string $key, mixed $value, array $attributes = []): self
     {
-        // ФИКС: Если тип json, кодируем массив в строку перед сохранением
         $type = $attributes['type'] ?? self::TYPE_TEXT;
         if ($type === self::TYPE_JSON && is_array($value)) {
             $value = json_encode($value);
@@ -94,27 +105,30 @@ class Setting extends Model
 
     public static function getGroup(string $group): Collection
     {
-        return static::getAllCached()->filter(fn($item) => $item->group === $group);
+        return static::getAllCached()->filter(fn($item) => $item['group'] === $group);
     }
 
     public static function getPublic(): array
     {
         return static::getAllCached()
-            ->filter(fn($item) => $item->is_public)
-            ->mapWithKeys(fn($item) => [$item->key => self::castValue($item)])
+            ->filter(fn($item) => $item['is_public'])
+            ->mapWithKeys(fn($item) => [$item['key'] => self::castValue($item)])
             ->toArray();
     }
 
     /**
-     * Внутренний хелпер для приведения типа (чтобы не дублировать код)
+     * Внутренний хелпер для приведения типа (работает с массивом)
      */
-    private static function castValue(self $setting): mixed
+    private static function castValue(array $setting): mixed
     {
-        return match ($setting->type) {
-            self::TYPE_BOOLEAN => filter_var($setting->value, FILTER_VALIDATE_BOOLEAN),
-            self::TYPE_INTEGER => (int) $setting->value,
-            self::TYPE_JSON    => json_decode($setting->value, true),
-            default           => $setting->value,
+        $value = $setting['value'] ?? null;
+        $type = $setting['type'] ?? self::TYPE_TEXT;
+
+        return match ($type) {
+            self::TYPE_BOOLEAN => filter_var($value, FILTER_VALIDATE_BOOLEAN),
+            self::TYPE_INTEGER => (int) $value,
+            self::TYPE_JSON    => json_decode($value, true),
+            default           => $value,
         };
     }
 

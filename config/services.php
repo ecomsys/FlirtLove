@@ -35,4 +35,30 @@ return [
         ],
     ],
 
+    'vkontakte' => [
+        'client_id' => env('VKONTAKTE_CLIENT_ID'),
+        'client_secret' => env('VKONTAKTE_CLIENT_SECRET'),
+        'redirect' => env('APP_URL') . '/auth/vkontakte/callback',
+    ],
+    'odnoklassniki' => [
+        'client_id' => env('ODNOKLASSNIKI_CLIENT_ID'),
+        'client_secret' => env('ODNOKLASSNIKI_CLIENT_SECRET'),
+        'redirect' => env('APP_URL') . '/auth/odnoklassniki/callback',
+    ],
+    'mailru' => [
+        'client_id' => env('MAILRU_CLIENT_ID'),
+        'client_secret' => env('MAILRU_CLIENT_SECRET'),
+        'redirect' => env('APP_URL') . '/auth/mailru/callback',
+    ],
+    'yandex' => [
+        'client_id' => env('YANDEX_CLIENT_ID'),
+        'client_secret' => env('YANDEX_CLIENT_SECRET'),
+        'redirect' => env('APP_URL') . '/auth/yandex/callback',
+    ],
+    'google' => [
+        'client_id' => env('GOOGLE_CLIENT_ID'),
+        'client_secret' => env('GOOGLE_CLIENT_SECRET'),
+        'redirect' => env('APP_URL') . '/auth/google/callback',
+    ],
+
 ];
