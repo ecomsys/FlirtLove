@@ -2,6 +2,7 @@
 
 use App\Livewire\Forms\LoginForm;
 use Illuminate\Support\Facades\Session;
+use Illuminate\Support\Facades\Auth;
 use Livewire\Attributes\Layout;
 use Livewire\Volt\Component;
 
@@ -26,13 +27,14 @@ new #[Layout('layouts.guest')] class extends Component
             'last_login_ip' => request()->ip(),
         ]);
 
-         // Если вошел админ — кидаем его сразу в админку
-        if (Auth::user()->is_admin) {
+         // Если вошел персонал — кидаем его сразу в админку
+        if ($user->isStaff()) {
             $this->redirect(route('admin.dashboard'), navigate: true);
             return;
         }
 
-        $this->redirectIntended(default: route('dashboard', absolute: false), navigate: true);
+        // Обычных юзеров кидаем на главную (ленту анкет)
+        $this->redirectIntended(default: route('home'), navigate: true);
     }
 }; ?>
 

@@ -1,45 +1,41 @@
+@php
+    $isAuth = auth()->check();
+    $dbTheme = $isAuth ? (auth()->user()->preferences?->theme ?? 'light') : null;
+    
+    // Все роуты, где нужна простая шапка auth-navigation (независимо от статуса авторизации)
+    $isAuthPage = request()->routeIs('register', 'login', 'password.request', 'password.reset', 'verification.notice', 'verification.verify', 'password.confirm');
+@endphp
+
 <!DOCTYPE html>
-<html lang="{{ str_replace('_', '-', app()->getLocale()) }}" class="scroll-smooth">
+<html lang="{{ str_replace('_', '-', app()->getLocale()) }}" 
+      class="scroll-smooth {{ $dbTheme === 'dark' ? 'dark' : '' }}"
+      data-auth="{{ $isAuth ? '1' : '0' }}">
 
 <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1"  x-data
-      @theme-toggled.window="
-          const newTheme = $event.detail.theme;
-          if (newTheme === 'dark') {
-              document.documentElement.classList.add('dark');
-          } else {
-              document.documentElement.classList.remove('dark');
-          }
-          localStorage.setItem('theme', newTheme);
-      ">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="csrf-token" content="{{ csrf_token() }}">
 
-    <title>{{ config('app.name', 'Laravel') }}</title>
+    <title>{{ config('app.name', 'FlirtLove') }}</title>
 
     <link rel="preconnect" href="https://fonts.bunny.net">
     <link href="https://fonts.bunny.net/css?family=instrument-sans:400,500,600,700&display=swap" rel="stylesheet" />
 
-    <script>
+   <script>
         (function() {
-            // 1. Определяем, что говорит БД (через PHP). Если гость - dbTheme пустой.
-            const dbTheme = '{{ Auth::check() ? (Auth::user()->preferences?->theme ?? "light") : "" }}';
-            
-            // 2. Определяем, что говорит localStorage
-            const localTheme = localStorage.getItem('theme') || 'light';
-            
-            // 3. Выбираем источник истины: БД приоритетнее для авторизованных!
-            const theme = dbTheme || localTheme;
-
-            // 4. Применяем класс
-            if (theme === 'dark') {
-                document.documentElement.classList.add('dark');
+            const dbTheme = '{{ $dbTheme }}';
+            if (dbTheme) {
+                // Синхронизируем БД с ключом 'theme:mode', чтобы blatui-core.js не сбрасывал тему при загрузке
+                localStorage.setItem('theme:mode', dbTheme);
             } else {
-                document.documentElement.classList.remove('dark');
+                // Для гостей
+                const localTheme = localStorage.getItem('theme:mode') || 'light';
+                if (localTheme === 'dark') {
+                    document.documentElement.classList.add('dark');
+                } else {
+                    document.documentElement.classList.remove('dark');
+                }
             }
-            
-            // 5. Синхроним localStorage с выбранным состоянием (для будущих перезагрузок)
-            localStorage.setItem('theme', theme);
         })();
     </script>
 
@@ -48,8 +44,18 @@
 
 <body class="font-sans antialiased bg-background text-foreground min-h-screen">
     <div class="min-h-screen flex flex-col">
-        <!-- Единая навигация (она сама адаптируется под гостя/авторизованного) -->
-        <livewire:layout.navigation />
+        
+        <!-- УМНАЯ НАВИГАЦИЯ -->
+        @if ($isAuthPage)
+            <!-- 1. Страницы авторизации (вход, регистрация, пароль, подтверждение email) -->
+            <livewire:layout.guest.auth-navigation />
+        @elseif ($isAuth)
+            <!-- 2. Авторизованный юзер на основном сайте (шапка с кошельком, VIP, профилем) -->
+            <livewire:layout.inapp.navigation />
+        @else
+            <!-- 3. Гость на основном сайте (шапка с бургер-меню) -->
+            <livewire:layout.guest.home-navigation />
+        @endif
 
         <!-- Page Content -->
         <main class="flex-1">
@@ -60,7 +66,13 @@
         <livewire:layout.footer />
     </div>
 
+    
+     <!-- Наша модалка логина -->
+    <livewire:web.modals.login-modal />
+
+    <!-- ФИКС: Модалка восстановления пароля -->
+    <livewire:web.modals.forgot-password-modal />
+
     <x-ui.sonner expand="true" />
 </body>
-
 </html>

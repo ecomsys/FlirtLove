@@ -2,8 +2,8 @@ import "./bootstrap.js";
 import { registerBlatUI } from './blatui-core.js'
 import { registerCharts } from './blatui-charts.js';
 
-import { initApllyTheme } from "./modules/theme.js";
 import { initShowToast } from "./modules/show-toast.js";
+import { initApllyTheme } from "./modules/theme.js";
 
 import playToastSound from "./modules/play-toast-sound.js";
 
@@ -25,4 +25,5 @@ document.addEventListener('alpine:init', () => {
 
 initShowToast();
 initApllyTheme();
+
 

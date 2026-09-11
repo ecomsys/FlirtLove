@@ -26,8 +26,8 @@ return Application::configure(basePath: dirname(__DIR__))
             LoadUserRelations::class,   
             
             \App\Http\Middleware\MakeViteUrlsRelative::class,
-        ]);        
-        
+        ]);    
+              
         
         $middleware->alias([                 
             'role' => \App\Http\Middleware\EnsureUserHasRole::class,    

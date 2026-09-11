@@ -94,6 +94,24 @@ return [
         'is_public' => false,
     ],
 
+    // ===== Мобильные приложения =====
+    'appstore_url' => [
+        'default' => '#',
+        'group' => 'store',
+        'label' => 'App Store',
+        'description' => 'Ссылка на приложение в App Store',
+        'type' => 'text',
+        'is_public' => true,
+    ],
+    'googleplay_url' => [
+        'default' => '#',
+        'group' => 'store',
+        'label' => 'Google Play',
+        'description' => 'Ссылка на приложение в Google Play',
+        'type' => 'text',
+        'is_public' => true,
+    ],
+
     // ===== Безопасность =====
     'min_password_length' => [
         'default' => '8',
@@ -113,22 +131,30 @@ return [
     ],
 
     // ===== Социальные сети =====
+      'vkontakte_url' => [
+        'default' => 'https://vk.com/durov',
+        'group' => 'social',
+        'label' => 'Вконтаке',
+        'description' => 'Ссылка на официальную страницу',
+        'type' => 'text',
+        'is_public' => true,
+    ],
+    'odnoklassniki_url' => [
+        'default' => 'https://ok.ru',
+        'group' => 'social',
+        'label' => 'Одноклассники',
+        'description' => 'Ссылка на официальную страницу',
+        'type' => 'text',
+        'is_public' => true,
+    ],
     'telegram_url' => [
-        'default' => 'https://t.me/FlirtLove',
+        'default' => 'https://t.me/durov',
         'group' => 'social',
         'label' => 'Telegram',
-        'description' => 'Ссылка на официальный канал',
+        'description' => 'Ссылка на официальную страницу',
         'type' => 'text',
         'is_public' => true,
-    ],
-    'instagram_url' => [
-        'default' => 'https://instagram.com/FlirtLove',
-        'group' => 'social',
-        'label' => 'Instagram',
-        'description' => 'Ссылка на официальный профиль',
-        'type' => 'text',
-        'is_public' => true,
-    ],
+    ],  
 
     // ===== Рассылки =====
     'broadcast_max_per_day' => [
