@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Livewire\Web;
+namespace App\Livewire\Web\Modals;
 
 use App\Services\CaptchaService;
 use Livewire\Component;
@@ -10,10 +10,9 @@ use Illuminate\Validation\ValidationException;
 
 class LoginModal extends Component
 {
-    public bool $showModal = false;
     public string $email = '';
     public string $password = '';
-    public bool $remember = false; // НОВОЕ СВОЙСТВО (Чужой компьютер)
+    public bool $remember = false; 
     
     public string $captchaImage = ''; 
     public string $captchaInput = ''; 
@@ -32,9 +31,8 @@ class LoginModal extends Component
 
     public function openModal(): void
     {
-        $this->captchaInput = '';
+        $this->reset(['email', 'password', 'captchaInput', 'remember']); // Очищаем поля при открытии
         $this->generateCaptcha();
-        $this->showModal = true;
     }
 
     public function openModalWithCreds($email = '', $password = ''): void
@@ -43,7 +41,6 @@ class LoginModal extends Component
         $this->password = $password;
         $this->captchaInput = '';
         $this->generateCaptcha();
-        $this->showModal = true;
     }
 
     public function generateCaptcha(): void
@@ -73,8 +70,6 @@ class LoginModal extends Component
             return;
         }
 
-        // ФИКС: Передаем $this->remember в Auth::attempt
-        // Если "Чужой компьютер" включен, remember будет false, и Laravel не запомнит сессию надолго
         if (!Auth::attempt(['email' => $this->email, 'password' => $this->password], $this->remember)) {
             throw ValidationException::withMessages([
                 'email' => 'Неверный email или пароль.',
@@ -99,6 +94,6 @@ class LoginModal extends Component
 
     public function render()
     {
-        return view('livewire.web.login-modal');
+        return view('livewire.web.modals.login-modal');
     }
 }

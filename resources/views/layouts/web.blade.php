@@ -1,45 +1,54 @@
+@php
+    $isAuth = auth()->check();
+    $dbTheme = $isAuth ? (auth()->user()->preferences?->theme ?? 'light') : null;
+@endphp
+
 <!DOCTYPE html>
-<html lang="{{ str_replace('_', '-', app()->getLocale()) }}" class="scroll-smooth" x-data
-      @theme-toggled.window="
-          const newTheme = $event.detail.theme;
-          if (newTheme === 'dark') {
-              document.documentElement.classList.add('dark');
-          } else {
-              document.documentElement.classList.remove('dark');
-          }
-          localStorage.setItem('theme', newTheme);
-      ">
+<html lang="{{ str_replace('_', '-', app()->getLocale()) }}" 
+      class="scroll-smooth {{ $dbTheme === 'dark' ? 'dark' : '' }}"
+      data-auth="{{ $isAuth ? '1' : '0' }}">
 
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="csrf-token" content="{{ csrf_token() }}">
-    <title>{{ config('app.name', 'FlirtLove') }}</title>
+    <title>Admin Panel - {{ config('app.name', 'App') }}</title>
     <link rel="preconnect" href="https://fonts.bunny.net">
     <link href="https://fonts.bunny.net/css?family=instrument-sans:400,500,600,700&display=swap" rel="stylesheet" />
-
+      
+    @stack('styles')      
+    <style>[x-cloak] { display: none !important; }</style>    
+    
     <script>
         (function() {
-            const dbTheme = '{{ Auth::check() ? (Auth::user()->preferences?->theme ?? "light") : "" }}';
-            const localTheme = localStorage.getItem('theme') || 'light';
-            const theme = dbTheme || localTheme;
-            if (theme === 'dark') {
-                document.documentElement.classList.add('dark');
+            const dbTheme = '{{ $dbTheme }}';
+            if (dbTheme) {
+                // Синхронизируем БД с ключом 'theme:mode', чтобы blatui-core.js не сбрасывал тему при загрузке
+                localStorage.setItem('theme:mode', dbTheme);
             } else {
-                document.documentElement.classList.remove('dark');
+                // Для гостей
+                const localTheme = localStorage.getItem('theme:mode') || 'light';
+                if (localTheme === 'dark') {
+                    document.documentElement.classList.add('dark');
+                } else {
+                    document.documentElement.classList.remove('dark');
+                }
             }
-            localStorage.setItem('theme', theme);
         })();
     </script>
-
+    
     @vite(['resources/css/app.css', 'resources/js/app.js'])
 </head>
 
 <body class="font-sans antialiased bg-background text-foreground min-h-screen flex flex-col">
     <div class="min-h-screen flex flex-col w-full">
         
-        <!-- 1. ШАПКА (Динамическая) -->
-        <livewire:layout.navigation />
+        <!-- 1. ШАПКА (Динамическая) -->        
+        @guest
+            <livewire:layout.guest.home-navigation />
+        @else
+            <livewire:layout.inapp.navigation />
+        @endguest
 
         <!-- 2. ЛЕНТА БУСТОВ (Горизонтальная плашка под шапкой) -->
         <div class="w-full bg-card/50 border-b border-border backdrop-blur-sm">
@@ -80,12 +89,14 @@
         <livewire:layout.footer />
     </div>
 
-      <!-- Наша модалка логина -->
-    <livewire:web.login-modal />
+    <!-- Наша модалка логина -->
+    <livewire:web.modals.login-modal />
 
-        <!-- ФИКС: Модалка восстановления пароля -->
-    <livewire:web.forgot-password-modal />
+    <!-- ФИКС: Модалка восстановления пароля -->
+    <livewire:web.modals.forgot-password-modal />
 
     <x-ui.sonner expand="true" />
+    
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fancyapps/ui@5.0/dist/fancybox/fancybox.css" />
 </body>
 </html>

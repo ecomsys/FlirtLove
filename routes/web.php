@@ -1,12 +1,8 @@
 <?php
 
-use App\Models\User;
-use App\Models\PhotoComment;
-use App\Notifications\CommentModerated;
-
-use App\Livewire\Web\Feed;
-use App\Livewire\Web\BlogIndex;
-use App\Livewire\Web\BlogShow;
+use App\Livewire\Web\Home;
+use App\Livewire\Web\Blog\BlogIndex;
+use App\Livewire\Web\Blog\BlogShow;
 
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
@@ -14,11 +10,7 @@ use Livewire\Volt\Volt;
 use App\Http\Controllers\Auth\SocialAuthController;
 
 // === ГЛАВНАЯ СТРАНИЦА (Лента анкет) ===
-// Volt::route ищет файл resources/views/livewire/front/feed.blade.php
-// Никаких middleware 'auth' здесь нет, поэтому гости видят ленту без редиректа!
-
-// Главная страница (Лента анкет)
-Route::get('/', Feed::class)->name('home');
+Route::get('/', Home::class)->name('home');
 
 // Регистрация и авторизация через соцсети
 Route::get('/auth/{provider}/redirect', [SocialAuthController::class, 'redirect'])->where('provider', 'vkontakte|odnoklassniki|mailru|yandex|google')->name('social.redirect');
@@ -28,9 +20,9 @@ Route::get('/auth/{provider}/callback', [SocialAuthController::class, 'callback'
 Route::get('/blog', BlogIndex::class)->name('blog.index');
 Route::get('/blog/{post:slug}', BlogShow::class)->name('blog.show');
 
-// Маршруты для авторизованных юзеров
-Route::middleware(['auth', 'verified', 'role:user', 'onboarding'])->group(function () {
-    Route::view('dashboard', 'dashboard')->name('dashboard');
+// Маршруты для авторизованных юзеров (только профиль, без дашборда!)
+// Убрали 'role:user', чтобы админ тоже мог зайти в свой профиль, если кликнет по ссылке
+Route::middleware(['auth', 'verified', 'onboarding'])->group(function () {
     Route::view('profile', 'profile')->name('profile');
 });
 
@@ -42,20 +34,13 @@ Volt::route('/photo-setup', 'register-photo-setup')
 // ============================================
 // АДМИНКА (ВСЁ НА VOLT)
 // ============================================
-
 Route::middleware(['auth', 'verified'])->prefix('admin')->name('admin.')->group(function () {
-
-    // ============================================
-    // ЗОНА 1: Доступно ВСЕМ сотрудникам (Admin, Moderator, Support)
-    // ============================================
+    
+    // ЗОНА 1
     Route::middleware('role:admin,moderator,support')->group(function () {
         Volt::route('/', 'admin.dashboard.index')->name('dashboard');
-        
-        // Базовый просмотр юзеров (саппорт должен видеть профиль, чтобы помочь)
         Volt::route('/users', 'admin.users.index')->name('users.index');
         Volt::route('/users/{user}', 'admin.users.show')->name('users.show');
-
-        // Саппорт-чат
         Volt::route('/communication/support', 'admin.communication.support')->name('communication.support');
         Volt::route('/communication/templates', 'admin.communication.templates')->name('communication.templates');
     });

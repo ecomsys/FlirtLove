@@ -1,4 +1,5 @@
-<div x-data="{ modalOpen: @entangle('showModal') }">
+<div x-data="{ modalOpen: false }" 
+     @open-forgot-password-modal.window="modalOpen = true">
     
     <!-- Затемненный фон (Flex-center + Скролл без ползунка) -->
     <div x-show="modalOpen" x-cloak 
@@ -33,7 +34,7 @@
                     <x-lucide-mail-check class="w-12 h-12 mx-auto text-green-500" />
                     <h4 class="text-lg font-semibold">Письмо отправлено!</h4>
                     <p class="text-sm text-muted-foreground">Мы отправили ссылку для сброса пароля на email: <strong>{{ $email }}</strong>. Проверьте вашу почту.</p>
-                    <x-ui.button @click="modalOpen = false; $dispatch('open-login-modal')" class="w-full">
+                    <x-ui.button @click="modalOpen = false; Livewire.dispatch('open-login-modal')" class="w-full">
                         Вернуться ко входу
                     </x-ui.button>
                 </div>
@@ -92,7 +93,7 @@
                     </form>
 
                     <div class="text-center">
-                        <button type="button" @click="modalOpen = false; $dispatch('open-login-modal', { email: $wire.email })" class="text-xs text-primary hover:underline">
+                        <button type="button" @click="modalOpen = false; Livewire.dispatch('open-login-modal', { email: $wire.email })" class="text-xs text-primary hover:underline">
                             Я вспомнил пароль. Вернуться ко входу
                         </button>
                     </div>
@@ -103,7 +104,7 @@
                     <h4 class="font-semibold text-lg">У вас ещё нет анкеты?</h4>
                     <p class="text-sm text-muted-foreground">Вы найдете множество интересных людей из вашего города. Начните общаться прямо сейчас.</p>
                     <p class="text-xs text-muted-foreground pb-2">Регистрация займет меньше минуты.</p>
-                    <x-ui.button as="a" href="/register" class="w-full">
+                    <x-ui.button as="a" href="/register" wire:navigate class="w-full">
                         Регистрация
                     </x-ui.button>
                 </div>

@@ -1,4 +1,6 @@
 
+# Tunel start
+ssh -p 443 -R0:localhost:5173 a.pinggy.io
 
 # FlirtLove — Admin Panel (High-Load Architecture)
 
@@ -15,6 +17,8 @@
 5.Prettier — для форматирования JS/JSON/CSS. 
 6.ESLint
 ```
+
+
 
 ## Минималоьный список расширений раскомментированных рсширений в php.ini
 
@@ -90,6 +94,7 @@ CACHE_STORE=file
 
 ```bash
 php artisan db:rebuild
+php artisan storage:link
 ```
 
 ## В корне проекта есть скрипт dev.php. Он запускает все необходимые сервисы одной командой:

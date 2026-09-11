@@ -1,16 +1,14 @@
 @props(['breadcrumbs' => []])
 
+@php
+    $isAuth = auth()->check();
+    $dbTheme = $isAuth ? (auth()->user()->preferences?->theme ?? 'light') : null;
+@endphp
+
 <!DOCTYPE html>
-<html lang="{{ str_replace('_', '-', app()->getLocale()) }}" class="scroll-smooth"  x-data
-      @theme-toggled.window="
-          const newTheme = $event.detail.theme;
-          if (newTheme === 'dark') {
-              document.documentElement.classList.add('dark');
-          } else {
-              document.documentElement.classList.remove('dark');
-          }
-          localStorage.setItem('theme', newTheme);
-      ">
+<html lang="{{ str_replace('_', '-', app()->getLocale()) }}" 
+      class="scroll-smooth {{ $dbTheme === 'dark' ? 'dark' : '' }}"
+      data-auth="{{ $isAuth ? '1' : '0' }}">
 
 <head>
     <meta charset="utf-8">
@@ -23,37 +21,31 @@
     <link rel="preconnect" href="https://fonts.bunny.net">
     <link href="https://fonts.bunny.net/css?family=instrument-sans:400,500,600,700&display=swap" rel="stylesheet" />
 
-    <!-- Скрипт для мгновенного применения темы -->
-       <script>
+    <script>
         (function() {
-            // 1. Определяем, что говорит БД (через PHP). Если гость - dbTheme пустой.
-            const dbTheme = '{{ Auth::check() ? (Auth::user()->preferences?->theme ?? "light") : "" }}';
-            
-            // 2. Определяем, что говорит localStorage
-            const localTheme = localStorage.getItem('theme') || 'light';
-            
-            // 3. Выбираем источник истины: БД приоритетнее для авторизованных!
-            const theme = dbTheme || localTheme;
-
-            // 4. Применяем класс
-            if (theme === 'dark') {
-                document.documentElement.classList.add('dark');
+            const dbTheme = '{{ $dbTheme }}';
+            if (dbTheme) {
+                // Синхронизируем БД с ключом 'theme:mode', чтобы blatui-core.js не сбрасывал тему при загрузке
+                localStorage.setItem('theme:mode', dbTheme);
             } else {
-                document.documentElement.classList.remove('dark');
+                // Для гостей
+                const localTheme = localStorage.getItem('theme:mode') || 'light';
+                if (localTheme === 'dark') {
+                    document.documentElement.classList.add('dark');
+                } else {
+                    document.documentElement.classList.remove('dark');
+                }
             }
-            
-            // 5. Синхроним localStorage с выбранным состоянием (для будущих перезагрузок)
-            localStorage.setItem('theme', theme);
         })();
     </script>
-
+    
     @vite(['resources/css/app.css', 'resources/js/app.js'])
 </head>
 
 <body class="font-sans antialiased bg-background text-foreground min-h-screen">
     <div class="min-h-screen flex flex-col">
         <!-- Единая навигация -->
-        <livewire:layout.navigation />
+        <livewire:layout.inapp.navigation />
 
         <!-- Page Heading -->
         @if (isset($header))

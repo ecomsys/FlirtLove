@@ -14,14 +14,28 @@ class VerifyEmailController extends Controller
      */
     public function __invoke(EmailVerificationRequest $request): RedirectResponse
     {
-        if ($request->user()->hasVerifiedEmail()) {
-            return redirect()->intended(route('dashboard', absolute: false).'?verified=1');
+        $user = $request->user();
+
+        if ($user->hasVerifiedEmail()) {
+            return redirect()->intended($this->getRedirectUrl($user).'?verified=1');
         }
 
-        if ($request->user()->markEmailAsVerified()) {
-            event(new Verified($request->user()));
+        if ($user->markEmailAsVerified()) {
+            event(new Verified($user));
         }
 
-        return redirect()->intended(route('dashboard', absolute: false).'?verified=1');
+        return redirect()->intended($this->getRedirectUrl($user).'?verified=1');
+    }
+
+    /**
+     * Определяем, куда кидать юзера после верификации (вместо старого dashboard)
+     */
+    private function getRedirectUrl($user): string
+    {
+        if (in_array($user->role, ['admin', 'moderator', 'support'])) {
+            return route('admin.dashboard');
+        }
+
+        return route('home');
     }
 }

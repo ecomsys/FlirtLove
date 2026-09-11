@@ -1,4 +1,6 @@
-<div x-data="{ modalOpen: @entangle('showModal'), showPassword: false }" >
+<div x-data="{ modalOpen: false, showPassword: false }" 
+     @open-login-modal.window="modalOpen = true"
+     @open-login-modal-with-creds.window="modalOpen = true">
     
     <!-- Затемненный фон (Flex-center + Скролл без ползунка) -->
     <div x-show="modalOpen" x-cloak 
@@ -58,7 +60,7 @@
 
                         <!-- Строка: Напомнить пароль и Чужой компьютер -->
                         <div class="flex items-center justify-between pt-1">
-                            <button type="button" @click="modalOpen = false; $dispatch('open-forgot-password-modal', { email: $wire.email })" class="text-xs text-primary hover:underline">
+                            <button type="button" @click="modalOpen = false; Livewire.dispatch('open-forgot-password-modal', { email: $wire.email })" class="text-xs text-primary hover:underline">
                                 Напомнить пароль
                             </button>
                             <x-ui.label class="flex items-center gap-2 text-xs font-normal cursor-pointer">
@@ -102,7 +104,7 @@
                     <h4 class="font-semibold text-lg">У вас ещё нет анкеты?</h4>
                     <p class="text-sm text-muted-foreground">Вы найдете множество интересных людей из вашего города. Начните общаться прямо сейчас.</p>
                     <p class="text-xs text-muted-foreground pb-2">Регистрация займет меньше минуты.</p>
-                    <x-ui.button as="a" href="/register" class="w-full">
+                    <x-ui.button as="a" href="/register" wire:navigate class="w-full">
                         Регистрация
                     </x-ui.button>
                 </div>

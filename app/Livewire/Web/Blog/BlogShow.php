@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Livewire\Web;
+namespace App\Livewire\Web\Blog;
 
 use App\Models\BlogPost;
 use Livewire\Component;
@@ -26,6 +26,6 @@ class BlogShow extends Component
 
     public function render()
     {
-        return view('livewire.web.blog-show');
+        return view('livewire.web.blog.show');
     }
 }

@@ -46,7 +46,7 @@ new #[Layout('layouts.admin')] class extends Component
 
         public function mount(): void
     {
-        abort_unless(in_array(auth()->user()?->role, [User::ROLE_ADMIN, User::ROLE_MODERATOR]), 403);
+        abort_unless(in_array(auth()->user()?->role, [User::ROLE_ADMIN, User::ROLE_MODERATOR, User::ROLE_SUPPORT]), 403);
 
         $previousUrl = url()->previous();
         $this->backUrl = ($previousUrl && $previousUrl !== url()->current()) 

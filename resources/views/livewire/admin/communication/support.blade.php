@@ -377,7 +377,7 @@ new #[Layout('layouts.admin')] class extends Component
                 <x-ui.button title="Нерочитаннные чаты" wire:click="setFilter('unread')" variant="{{ $chatFilter === 'unread' ? 'default' : 'secondary' }}" size="sm" class="flex-1" wire:key="btn-filter-unread">
                     <span class="flex items-center justify-center gap-1">
                         Непр.
-                        <x-ui.badge variant="{{ $this->stats['unread'] > 0 ? 'destructive' : 'secondary' }}" size="xs" class="{{ $this->stats['unread'] > 0 ? '' : 'bg-muted-foreground/10' }}">{{ $this->stats['unread'] }}</x-ui.badge>
+                        <x-ui.badge variant="{{ $this->stats['unread'] > 0 ? 'destructive' : 'secondary' }}" size="xs" class="{{ $this->stats['unread'] > 0 ? '' : 'bg-muted-foreground/10 text-white' }}">{{ $this->stats['unread'] }}</x-ui.badge>
                     </span>
                 </x-ui.button>
                 

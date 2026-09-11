@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Livewire\Web;
+namespace App\Livewire\Web\Blog;
 
 use App\Models\BlogPost;
 use Livewire\Component;
@@ -19,7 +19,7 @@ class BlogIndex extends Component
                     ->latest()
                     ->paginate(9);
 
-        return view('livewire.web.blog-index', [
+        return view('livewire.web.blog.index', [
             'posts' => $posts
         ]);
     }
