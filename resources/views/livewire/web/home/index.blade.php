@@ -3,7 +3,7 @@
     @guest
         @include('livewire.web.sidebar.guest')
     @else
-        @include('livewire.web.sidebar.auth')
+        @include('livewire.web.sidebar.inapp')
     @endguest
 </x-slot:sidebar>
 

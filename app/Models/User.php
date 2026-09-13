@@ -58,6 +58,27 @@ class User extends Authenticatable implements MustVerifyEmail
         ];
     }
 
+
+    public function hasCompletedOnboarding(): bool
+    {
+        // Персонал не гоняем по онбордингу — иначе админ без фото
+        // навсегда застрянет в редиректах на /photo-setup
+        if ($this->isStaff()) {
+            return true;
+        }
+
+        if ($this->has_completed_onboarding) {
+            return true;
+        }
+
+        // Если photos уже загружены (LoadUserRelations) — не делаем лишний запрос
+        if ($this->relationLoaded('photos')) {
+            return $this->photos->isNotEmpty();
+        }
+
+        return $this->photos()->exists();
+    }
+
     // ============================================
     // СВЯЗИ (ОТНОШЕНИЯ)
     // ============================================

@@ -1,9 +1,10 @@
 <?php
 
-namespace App\Livewire\Web\Modals;
+namespace App\Livewire\Modals;
 
 use App\Services\CaptchaService;
 use Livewire\Component;
+use Livewire\Attributes\On;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Session;
 use Illuminate\Validation\ValidationException;
@@ -23,18 +24,16 @@ class LoginModal extends Component
     {
         $this->captchaService = $captchaService;
     }
+  
 
-    protected $listeners = [
-        'open-login-modal' => 'openModal',
-        'open-login-modal-with-creds' => 'openModalWithCreds'
-    ];
-
+    #[On('open-login-modal')]
     public function openModal(): void
     {
-        $this->reset(['email', 'password', 'captchaInput', 'remember']); // Очищаем поля при открытии
+        $this->reset(['email', 'password', 'captchaInput', 'remember']);
         $this->generateCaptcha();
     }
 
+    #[On('open-login-modal-with-creds')]
     public function openModalWithCreds($email = '', $password = ''): void
     {
         $this->email = $email;
@@ -71,6 +70,9 @@ class LoginModal extends Component
         }
 
         if (!Auth::attempt(['email' => $this->email, 'password' => $this->password], $this->remember)) {
+            // ФИКС: Обязательно обновляем капчу, так как предыдущая уже "сгорела" при валидации
+            $this->refreshCaptcha();
+            
             throw ValidationException::withMessages([
                 'email' => 'Неверный email или пароль.',
             ]);
@@ -89,11 +91,16 @@ class LoginModal extends Component
             return;
         }
 
+        if (! $user->hasCompletedOnboarding()) {
+            $this->redirect(route('onboarding.index', absolute: false), navigate: true);
+            return;
+        }
+
         $this->redirectIntended(default: route('home'), navigate: true);
     }
 
     public function render()
     {
-        return view('livewire.web.modals.login-modal');
+        return view('livewire.modals.login-modal');
     }
 }

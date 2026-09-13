@@ -2,33 +2,24 @@
 
 namespace App\Providers;
 
-use App\Models\User;
 use App\Models\Photo;
-
-use Illuminate\Support\Facades\Event;
-use SocialiteProviders\Manager\SocialiteWasCalled;
-use SocialiteProviders\VKontakte\VKontakteExtendSocialite;
-use SocialiteProviders\Odnoklassniki\OdnoklassnikiExtendSocialite;
-use SocialiteProviders\MailRu\MailRuExtendSocialite;
-use SocialiteProviders\Yandex\YandexExtendSocialite;
+use App\Models\UserSubscription;
 
 use App\Services\GeoIPBlockService;
 use App\Services\StopWordsFilterService;
 
-use App\Listeners\InvalidateOldSessions;
-
-use App\Models\UserSubscription;
 use App\Observers\UserSubscriptionObserver;
 use App\Observers\PhotoObserver;
 
+use App\Listeners\InvalidateOldSessions;
+use App\Listeners\MigrateGuestTheme;
 
 use Illuminate\Auth\Events\Login;
-use Illuminate\Support\Facades\Session;
-use Illuminate\Support\Facades\Auth;
-
 use Illuminate\Support\ServiceProvider;
-
-use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Facades\View;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Session;
 
 
 class AppServiceProvider extends ServiceProvider
@@ -56,6 +47,32 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+
+        // делаем доступными во всех лейаутах переменные
+        View::composer('*', function ($view) {
+            // Теперь isAuth проверяется прямо перед рендером страницы!
+            $isAuth = Auth::check();
+
+            $dbTheme = $isAuth ? Auth::user()?->preferences?->theme : null;
+            if (!in_array($dbTheme, ['light', 'dark'], true)) {
+                $dbTheme = null;
+            }
+
+            $cookieTheme = request()->cookie('theme');
+            if (!in_array($cookieTheme, ['light', 'dark'], true)) {
+                $cookieTheme = null;
+            }
+
+            // Отдаем обе переменные в шаблон
+            $view->with([
+                'isAuth' => $isAuth,
+                'theme'  => $dbTheme ?? $cookieTheme ?? 'light',
+            ]);
+        });
+
+        // Перенос темы из браузера в БД при регистрации
+        Event::listen(Login::class, MigrateGuestTheme::class);
+
         // Правильная регистрация SocialiteProviders
         Event::listen(function (\SocialiteProviders\Manager\SocialiteWasCalled $event) {
             $event->extendSocialite('vkontakte', \SocialiteProviders\VKontakte\Provider::class);
@@ -69,7 +86,6 @@ class AppServiceProvider extends ServiceProvider
 
         // счетчик непрочитанных сообшений
         \App\Models\Message::observe(\App\Observers\MessageObserver::class);
-
 
         // наблюдаем за измененимя чтобы сразу обновлять таблицу
         Photo::observe(PhotoObserver::class);

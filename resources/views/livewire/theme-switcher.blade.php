@@ -7,14 +7,25 @@ use App\Models\UserPreference;
 new class extends Component {
     public string $theme = 'light';
 
-    public function mount(): void
-    {
-        if (Auth::check()) {
-            $this->theme = Auth::user()->preferences?->theme ?? 'light';
-        } else {
-            $this->theme = 'light';
+   public function mount(): void
+{
+    if (Auth::check()) {
+        // Тот же приоритет, что в лейауте: БД → cookie → 'light'
+        $theme = Auth::user()->preferences?->theme;
+
+        if (! in_array($theme, ['light', 'dark'], true)) {
+            $theme = request()->cookie('theme');
         }
+
+        if (! in_array($theme, ['light', 'dark'], true)) {
+            $theme = 'light';
+        }
+
+        $this->theme = $theme;
+    } else {
+        $this->theme = 'light';
     }
+}
 
     public function toggleTheme(): void
     {
@@ -32,8 +43,7 @@ new class extends Component {
 @if(auth()->check())
     <!-- КНОПКА ДЛЯ АВТОРИЗОВАННЫХ (LIVEWIRE) -->
     <button 
-        wire:click="toggleTheme" 
-        onclick="document.documentElement.classList.toggle('dark'); localStorage.setItem('theme:mode', document.documentElement.classList.contains('dark') ? 'dark' : 'light')"
+        wire:click="toggleTheme" onclick="window.toggleAppTheme()"
         type="button"
         class="flex items-center gap-1 p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         aria-label="Toggle theme"
@@ -51,7 +61,7 @@ new class extends Component {
 @else
     <!-- КНОПКА ДЛЯ ГОСТЕЙ (ЧИСТЫЙ JS) -->
     <button 
-        onclick="document.documentElement.classList.toggle('dark'); localStorage.setItem('theme:mode', document.documentElement.classList.contains('dark') ? 'dark' : 'light')"
+        onclick="window.toggleAppTheme()"
         type="button"
         class="flex items-center gap-1 p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         aria-label="Toggle theme"
