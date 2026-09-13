@@ -6,10 +6,11 @@
     'required'     => false,
     'disabled'     => false,
     'error'        => null,
-    'variant'      => 'primary', // primary | destructive | success | warning | info | transparent
-    'size'         => 'md',      // sm | md | lg
-    'class'        => null,      // Класс для самого визуального квадратика
-    'wrapperClass' => null,      // Класс для внешней обёртки (label)
+    'variant'      => 'primary',
+    'size'         => 'md',
+    'class'        => null,
+    'wrapperClass' => null,
+    'labelClass'   => null, // Добавили класс для текста
 ])
 
 @php
@@ -54,17 +55,17 @@
     ];
     $currentSize = $sizeClasses[$size] ?? $sizeClasses['md'];
 
-    // Все wire:* атрибуты идут строго в input
+    $hasAlpineModel = $attributes->has('x-model') || $attributes->has('wire:model');
+    $hasAlpineValue = $attributes->has('x-bind:value') || $attributes->has(':value');
+
     $inputAttributes = $attributes->except([
         'class', 'wrapperClass', 'variant', 'size', 'error', 'checked', 
-        'id', 'name', 'value', 'required', 'disabled'
+        'id', 'name', 'value', 'required', 'disabled', 'labelClass'
     ]);
     
-    // Атрибуты для внешней обёртки (label)
     $wrapperAttributes = $attributes->only(['class', 'wrapperClass']);
 @endphp
 
-<!-- ЗАМЕНА DIV НА LABEL с атрибутом for - это и есть магия клика! -->
 <label
     for="{{ $id }}"
     {{ $wrapperAttributes->class([
@@ -76,12 +77,20 @@
     <input
         type="checkbox"
         id="{{ $id }}"
-        name="{{ $name }}"
-        value="{{ $value }}"
-        {{ $isChecked ? 'checked' : '' }}
+        @if($name) name="{{ $name }}" @endif
+        @if($hasAlpineValue)
+            {{-- Alpine сам подставит value --}}
+        @else
+            value="{{ $value }}"
+        @endif
+        
+        @if(!$hasAlpineModel)
+            {{ $isChecked ? 'checked' : '' }}
+        @endif
+
         {{ $disabled ? 'disabled' : '' }}
         {{ $required ? 'required' : '' }}
-        {{ $inputAttributes }} {{-- Здесь все wire:model, wire:change и т.д. --}}
+        {{ $inputAttributes }}
         aria-required="{{ $required ? 'true' : 'false' }}"
         @if($hasError) aria-invalid="true" @endif
         class="peer sr-only"
@@ -104,18 +113,17 @@
         "
     >
         <svg
-            class="
-                {{ $currentSize['icon'] }}
-                {{ $currentColors['icon'] }}
-                opacity-0 scale-50
-                transition-all duration-150
-            "
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-            stroke-width="3"
+            class="{{ $currentSize['icon'] }} {{ $currentColors['icon'] }} opacity-0 scale-50 transition-all duration-150"
+            fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="3"
         >
             <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
         </svg>
     </span>
+
+    {{-- ЕСЛИ ЕСТЬ ТЕКСТ ВНУТРИ КОМПОНЕНТА, ВЫВОДИМ ЕГО --}}
+    @if (isset($slot) && trim($slot) !== '')
+        <span class="ml-2 text-xs font-medium cursor-pointer select-none {{ $labelClass ?? '' }}">
+            {{ $slot }}
+        </span>
+    @endif
 </label>

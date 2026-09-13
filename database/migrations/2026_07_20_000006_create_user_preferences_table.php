@@ -14,7 +14,7 @@ return new class extends Migration
 
             // === 1. ЛОКАЛИЗАЦИЯ И ИНТЕРФЕЙС ===
             $table->string('locale', 5)->default('ru');
-            $table->string('theme', 10)->default('light');
+             $table->string('theme', 10)->nullable();
             $table->boolean('chat_widget_enabled')->default(true); // Плавающий виджет чата
             $table->boolean('chat_sound_enabled')->default(true);  // Звук чата
 

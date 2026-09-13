@@ -1,14 +1,14 @@
 <?php
 
-namespace App\Livewire\Web\Modals;
+namespace App\Livewire\Modals;
 
 use App\Services\CaptchaService;
 use Livewire\Component;
+use Livewire\Attributes\On;
 use Illuminate\Support\Facades\Password;
 
 class ForgotPasswordModal extends Component
 {
-    // Убрали $showModal
     public string $email = '';
     public string $captchaImage = ''; 
     public string $captchaInput = ''; 
@@ -21,15 +21,44 @@ class ForgotPasswordModal extends Component
         $this->captchaService = $captchaService;
     }
 
-    protected $listeners = ['open-forgot-password-modal' => 'openModal'];
-
+    // Современный синтаксис Livewire 3
+    #[On('open-forgot-password-modal')]
     public function openModal($email = ''): void
     {
         $this->email = $email;
         $this->captchaInput = '';
         $this->emailSent = false;
         $this->generateCaptcha(); 
-        // Убрали $this->showModal = true;
+    }
+
+    /**
+     * Киллер-фича: определяем URL для веб-почты на основе введенного домена
+     */
+    public function getEmailProviderUrlProperty(): string
+    {
+        if (empty($this->email)) return '#';
+        
+        $domain = substr(strrchr($this->email, "@"), 1);
+        if (!$domain) return '#';
+
+        $providers = [
+            'gmail.com' => 'https://mail.google.com',
+            'googlemail.com' => 'https://mail.google.com',
+            'mail.ru' => 'https://e.mail.ru/inbox',
+            'inbox.ru' => 'https://e.mail.ru/inbox',
+            'list.ru' => 'https://e.mail.ru/inbox',
+            'bk.ru' => 'https://e.mail.ru/inbox',
+            'yandex.ru' => 'https://mail.yandex.ru',
+            'yandex.by' => 'https://mail.yandex.ru',
+            'ya.ru' => 'https://mail.yandex.ru',
+            'outlook.com' => 'https://outlook.live.com/mail/0/inbox',
+            'hotmail.com' => 'https://outlook.live.com/mail/0/inbox',
+            'live.com' => 'https://outlook.live.com/mail/0/inbox',
+            'icloud.com' => 'https://www.icloud.com/mail',
+            'rambler.ru' => 'https://mail.rambler.ru/',
+        ];
+
+        return $providers[$domain] ?? 'https://' . $domain;
     }
 
     public function generateCaptcha(): void
@@ -73,6 +102,6 @@ class ForgotPasswordModal extends Component
 
     public function render()
     {
-        return view('livewire.web.modals.forgot-password-modal');
+        return view('livewire.modals.forgot-password-modal');
     }
 }

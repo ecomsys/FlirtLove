@@ -17,6 +17,7 @@ return [
     'continue' => 'Continue',
     'confirm' => 'Confirm',
     'sure' => 'Are you sure?',
+    'processing' => 'Processing...',
     
     'admin' => 'Admin',
     'home' => 'Home',

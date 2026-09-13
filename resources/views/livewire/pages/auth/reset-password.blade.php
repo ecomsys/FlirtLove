@@ -10,7 +10,7 @@ use Livewire\Attributes\Layout;
 use Livewire\Attributes\Locked;
 use Livewire\Volt\Component;
 
-new #[Layout('layouts.guest')] class extends Component
+new #[Layout('components.layouts.guest')] class extends Component
 {
     #[Locked]
     public string $token = '';
@@ -56,11 +56,13 @@ new #[Layout('layouts.guest')] class extends Component
         }
 
         Session::flash('status', __($status));
-        $this->redirectRoute('login', navigate: true);
+        
+        // Редирект на главную с открытием модалки логина
+        $this->redirect(route('home', ['login' => 1]), navigate: true);
     }
 }; ?>
 
-<div class="w-full max-w-md mx-auto p-4 bg-background text-foreground h-[calc(100vh-4rem)] flex flex-col justify-center">
+<div class="w-full max-w-md mx-auto p-4 bg-background text-foreground min-h-[calc(100dvh-4rem)] flex flex-col justify-center">
 
     <!-- Заголовок -->
     <div class="text-center mb-4">
@@ -70,7 +72,7 @@ new #[Layout('layouts.guest')] class extends Component
 
     <form wire:submit="resetPassword" class="space-y-5">
 
-        <!-- Email Address (скрытый или readonly) -->
+        <!-- Email Address (readonly) -->
         <div class="space-y-2">
             <x-ui.label for="email" class="text-sm font-medium text-muted-foreground">
                 {{ __('auth.email') }}
@@ -82,7 +84,6 @@ new #[Layout('layouts.guest')] class extends Component
                 type="email" 
                 required 
                 readonly
-                autofocus
                 autocomplete="username"
                 class="w-full bg-muted/50 border-border cursor-not-allowed opacity-75 focus-visible:ring-ring"
             />
@@ -102,6 +103,7 @@ new #[Layout('layouts.guest')] class extends Component
                 name="password" 
                 type="password" 
                 required 
+                autofocus 
                 autocomplete="new-password"
                 class="w-full bg-input border-border focus-visible:ring-ring autofill:bg-input autofill:text-foreground autofill:shadow-none"
                 placeholder="{{ __('auth.enter_new_password') }}"
@@ -135,8 +137,14 @@ new #[Layout('layouts.guest')] class extends Component
         <x-ui.button 
             type="submit" 
             class="w-full py-3 bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+            wire:loading.attr="disabled"
+            wire:target="resetPassword"
         >
-            {{ __('auth.reset_password') }}
+            <span wire:loading.remove.delay wire:target="resetPassword">{{ __('auth.reset_password') }}</span>
+            <span wire:loading.delay wire:target="resetPassword" class="flex items-center justify-center gap-2">
+                <x-lucide-loader-2 class="w-5 h-5 animate-spin inline"/>
+                {{ __('common.processing') }}
+            </span>
         </x-ui.button>
     </form>
 </div>

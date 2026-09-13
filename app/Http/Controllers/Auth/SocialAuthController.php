@@ -33,8 +33,18 @@ class SocialAuthController extends Controller
         $user = User::where('email', $socialUser->getEmail())->first();
 
         if ($user) {
-            // Логинем существующего
             Auth::login($user, true);
+
+            // Тот же порядок приоритетов, что в LoginModal:
+            // персонал → в админку, онбординг → на загрузку фото, и только потом intended
+            if ($user->isStaff()) {
+                return redirect()->route('admin.dashboard');
+            }
+
+            if (! $user->hasCompletedOnboarding()) {
+                return redirect()->route('photo.setup');
+            }
+
             return redirect()->intended('/');
         }
 

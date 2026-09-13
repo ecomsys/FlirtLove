@@ -3,12 +3,11 @@
 use App\Livewire\Actions\Logout;
 use App\Models\User;
 use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Session;
 use Illuminate\Validation\Rule;
 use Livewire\Attributes\Layout;
 use Livewire\Volt\Component;
 
-new #[Layout('layouts.guest')] class extends Component 
+new #[Layout('components.layouts.guest')] class extends Component 
 {
     // Свойства для формы смены почты
     public bool $showEmailForm = false;
@@ -48,7 +47,8 @@ new #[Layout('layouts.guest')] class extends Component
     public function sendVerification(): void
     {
         if (Auth::user()->hasVerifiedEmail()) {
-            $this->redirectIntended(default: route('dashboard', absolute: false), navigate: true);
+            // ФИКС: редирект на home, так как dashboard не существует
+            $this->redirectIntended(default: route('home', absolute: false), navigate: true);
             return;
         }
 
@@ -93,18 +93,20 @@ new #[Layout('layouts.guest')] class extends Component
 
 <section class="w-full">
     <div class="bg-card text-card-foreground px-4">
-        <div class="relative max-w-md mx-auto px-6 py-10 bg-card text-card-foreground ">
-            <div class="hidden md:flex absolute -left-30 top-10 w-24 h-24 rounded-full bg-primary/10 items-center justify-center">
-                <svg class="w-14 h-14 text-primary" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+        <!-- Убрал -left-30, так как это может вылезти за экран на некоторых мониторах. Пусть будет стандартное позиционирование -->
+        <div class="relative max-w-md mx-auto px-6 py-10 bg-card text-card-foreground flex items-center gap-4">
+            <div class="hidden md:flex w-20 h-20 shrink-0 rounded-full bg-primary/10 items-center justify-center">
+                <svg class="w-10 h-10 text-primary" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25m19.5 0v.243a2.25 2.25 0 01-1.07 1.916l-7.5 4.615a2.25 2.25 0 01-2.36 0L3.32 8.91a2.25 2.25 0 01-1.07-1.916V6.75" />
                 </svg>
             </div>
-            <h1 class="text-2xl font-semibold mb-6">{{ __('auth.check_email') }}</h1>
-
-            <p>
-                <span>{{ __('auth.check_email_desc') }}</span>
-                <span class="text-primary font-medium"> {{ Auth::user()->email }}</span>
-            </p>
+            <div>
+                <h1 class="text-2xl font-semibold mb-2">{{ __('auth.check_email') }}</h1>
+                <p class="text-sm text-muted-foreground">
+                    <span>{{ __('auth.check_email_desc') }}</span>
+                    <span class="text-primary font-medium"> {{ Auth::user()->email }}</span>
+                </p>
+            </div>
         </div>
     </div>
 
@@ -120,8 +122,13 @@ new #[Layout('layouts.guest')] class extends Component
                 </a>
             </x-ui.button>
 
-            <x-ui.button variant="outline" wire:click="sendVerification" class="w-full">
-                {{ __('auth.resend_email') }}
+            <!-- Кнопка повторной отправки со спиннером -->
+            <x-ui.button variant="outline" wire:click="sendVerification" wire:loading.attr="disabled" wire:target="sendVerification" class="w-full">
+                <span wire:loading.remove.delay wire:target="sendVerification">{{ __('auth.resend_email') }}</span>
+                <span wire:loading.delay wire:target="sendVerification" class="flex items-center justify-center gap-2">                    
+                     <x-lucide-loader-2 class="w-5 h-5 animate-spin inline"/> 
+                    {{ __('common.processing') }}
+                </span>
             </x-ui.button>
 
             @if (session('status') == 'verification-link-sent')
@@ -158,23 +165,30 @@ new #[Layout('layouts.guest')] class extends Component
             </div>
         </div>
 
-        <!-- Блок смены почты -->
-        <div class="max-w-[18rem] mx-auto" x-data="{ showForm: @entangle('showEmailForm') }">
+        <!-- Блок смены почты (убрали Alpine, используем чистый Livewire) -->
+        <div class="max-w-[18rem] mx-auto">
             
             @if (!$showEmailForm)
-                <x-ui.button variant="outline" wire:click="$set('showEmailForm', true)" class="w-full">
+                <x-ui.button variant="outline" wire:click="$toggle('showEmailForm')" class="w-full">
                     {{ __('auth.change_email') }}
                 </x-ui.button>
             @else
                 <form wire:submit="changeEmail" class="space-y-3">
                     <div>
                         <x-ui.label for="newEmail" class="text-xs text-muted-foreground">{{ __('auth.new_email_address') }}</x-ui.label>
-                        <x-ui.input wire:model="newEmail" id="newEmail" type="email" class="mt-1 block w-full" placeholder="new@example.com" />
+                        <!-- Добавлен autofocus -->
+                        <x-ui.input wire:model="newEmail" id="newEmail" type="email" autofocus class="mt-1 block w-full" placeholder="new@example.com" />
                         @error('newEmail') <p class="text-xs text-destructive mt-1">{{ $message }}</p> @enderror
                     </div>
                     
                     <div class="flex gap-2">
-                        <x-ui.button type="submit" class="flex-1">{{ __('auth.save_and_send') }}</x-ui.button>
+                        <!-- Кнопка сохранения со спиннером -->
+                        <x-ui.button type="submit" wire:loading.attr="disabled" wire:target="changeEmail" class="flex-1">
+                            <span wire:loading.remove.delay wire:target="changeEmail">{{ __('auth.save_and_send') }}</span>
+                            <span wire:loading.delay wire:target="changeEmail" class="flex items-center justify-center gap-2">                                
+                                <x-lucide-loader-2 class="w-5 h-5 animate-spin inline"/>
+                            </span>
+                        </x-ui.button>
                         <x-ui.button type="button" variant="outline" wire:click="$set('showEmailForm', false)" class="flex-1">{{ __('common.cancel') }}</x-ui.button>
                     </div>
                 </form>

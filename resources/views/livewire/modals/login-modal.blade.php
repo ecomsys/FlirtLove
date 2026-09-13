@@ -1,8 +1,8 @@
-<div x-data="{ modalOpen: false, showPassword: false }" 
+<div x-data="{ modalOpen: new URLSearchParams(window.location.search).has('login') }" 
      @open-login-modal.window="modalOpen = true"
      @open-login-modal-with-creds.window="modalOpen = true">
     
-    <!-- Затемненный фон (Flex-center + Скролл без ползунка) -->
+    <!-- Затемненный фон -->
     <div x-show="modalOpen" x-cloak 
          @click.self="modalOpen = false" 
          class="fixed inset-0 z-50 overflow-y-auto bg-black/50 backdrop-blur-sm scrollbar-hidden flex justify-center py-8 px-4"
@@ -13,7 +13,7 @@
          x-transition:leave-start="opacity-100"
          x-transition:leave-end="opacity-0">
          
-        <!-- Сама модалка (my-auto центрирует её, а при нехватке места отступ схлопывается) -->
+        <!-- Сама модалка -->
         <div class="bg-card border border-border rounded-lg shadow-2xl max-w-2xl w-full my-auto"
              x-show="modalOpen" 
              x-transition:enter="transition ease-out duration-300"
@@ -47,14 +47,16 @@
                         <!-- Email -->
                         <div class="space-y-1.5">
                             <x-ui.label for="login-email">Ваш Email</x-ui.label>
-                            <x-ui.input id="login-email" wire:model="email" type="email" placeholder="dimainweb@gmail.com" />
+                            <x-ui.input id="login-email" wire:model="email" type="email" autocomplete="username" placeholder="example@gmail.com" />
                             @error('email') <p class="text-xs text-destructive mt-1">{{ $message }}</p> @enderror
                         </div>
 
-                        <!-- Пароль -->
+                        <!-- Пароль (добавили кнопку показа пароля) -->
                         <div class="space-y-1.5">
                             <x-ui.label for="login-password">Пароль</x-ui.label>                        
-                            <x-ui.input id="login-password" wire:model="password" placeholder="Введите пароль" class="pr-10" />                                                   
+                            <div class="relative">
+                                <x-ui.input id="login-password" wire:model="password" type="password" autocomplete="current-password" placeholder="Введите пароль" />                                
+                            </div>                                                   
                             @error('password') <p class="text-xs text-destructive mt-1">{{ $message }}</p> @enderror
                         </div>
 
@@ -68,16 +70,16 @@
                             </x-ui.label>
                         </div>
 
-                        <!-- Капча (Картинка и кнопка сверху, инпут снизу) -->
+                        <!-- Капча -->
                         <div class="space-y-1.5 pt-2">
-                            <x-ui.label>Цифры на картинке</x-ui.label>
+                            <x-ui.label>Символы на картинке</x-ui.label>
                             <div class="space-y-2">
                                 <div class="flex items-center gap-2">
-                                    <img src="{{ $captchaImage }}" alt="Captcha" class="flex-1 h-10 rounded border border-border bg-white">
-                                    <x-ui.button type="button" class="shrink-0" variant="outline" size="icon" wire:click="refreshCaptcha" wire:loading.attr="disabled" wire:target="refreshCaptcha" title="Обновить картинку">
-                                        <x-lucide-refresh-cw class="w-4 h-4" wire:loading.remove wire:target="refreshCaptcha" />
-                                        <x-lucide-loader-2 class="w-4 h-4 animate-spin inline" wire:loading wire:target="refreshCaptcha" />
-                                    </x-ui.button>
+                                    <img src="{{ $captchaImage }}" alt="Captcha" class="flex-1 h-10 rounded border border-border bg-[#dcdee4] object-contain">
+                                    <button type="button" class="shrink-0 h-10 w-10 flex items-center justify-center" wire:click="refreshCaptcha" wire:loading.attr="disabled" wire:target="refreshCaptcha" title="Обновить картинку">
+                                        <x-lucide-refresh-cw class="w-6 h-6" wire:loading.remove.delay wire:target="refreshCaptcha" />
+                                        <x-lucide-loader-2 class="w-6 h-6 animate-spin inline" wire:loading.delay wire:target="refreshCaptcha" />
+                                    </button>
                                 </div>
                                 <x-ui.input wire:model="captchaInput" placeholder="Введите код" class="w-full" />
                             </div>
@@ -86,8 +88,8 @@
 
                         <!-- Кнопка Войти -->
                         <x-ui.button type="submit" wire:loading.attr="disabled" wire:target="login" class="w-full">
-                            <span wire:loading.remove wire:target="login">Войти</span>
-                            <span wire:loading wire:target="login" class="flex items-center gap-2">
+                            <span wire:loading.remove.delay wire:target="login">Войти</span>
+                            <span wire:loading.delay wire:target="login" class="flex items-center gap-2">
                                 <x-lucide-loader-2 class="w-4 h-4 animate-spin inline" /> Вход...
                             </span>
                         </x-ui.button>
@@ -99,12 +101,14 @@
                     </form>
                 </div>
 
-                <!-- ПРАВАЯ КОЛОНКА: Плашка регистрации -->
+                <!-- ПРАВАЯ КОЛОНКА: Плашка регистрации -->              
                 <div class="bg-muted/30 border-t border-border md:border-t-0 md:border-l p-6 text-center space-y-2 flex flex-col">
                     <h4 class="font-semibold text-lg">У вас ещё нет анкеты?</h4>
                     <p class="text-sm text-muted-foreground">Вы найдете множество интересных людей из вашего города. Начните общаться прямо сейчас.</p>
                     <p class="text-xs text-muted-foreground pb-2">Регистрация займет меньше минуты.</p>
-                    <x-ui.button as="a" href="/register" wire:navigate class="w-full">
+                    
+                    <!-- Добавляем @click="modalOpen = false" для мгновенного закрытия -->
+                    <x-ui.button as="a" href="{{ route('register') }}" wire:navigate @click="modalOpen = false" class="w-full">
                         Регистрация
                     </x-ui.button>
                 </div>

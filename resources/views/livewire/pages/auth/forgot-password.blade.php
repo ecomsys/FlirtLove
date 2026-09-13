@@ -4,7 +4,7 @@ use Illuminate\Support\Facades\Password;
 use Livewire\Attributes\Layout;
 use Livewire\Volt\Component;
 
-new #[Layout('layouts.guest')] class extends Component
+new #[Layout('components.layouts.guest')] class extends Component
 {
     public string $email = '';
 
@@ -31,7 +31,7 @@ new #[Layout('layouts.guest')] class extends Component
     }
 }; ?>
 
-<div class="w-full max-w-md mx-auto p-4 bg-background text-foreground h-[calc(100vh-4rem)] flex flex-col justify-center">
+<div class="w-full max-w-md mx-auto p-4 bg-background text-foreground min-h-[calc(100dvh-4rem)] flex flex-col justify-center">
 
     <!-- Заголовок -->
     <div class="text-center mb-4">
@@ -68,17 +68,25 @@ new #[Layout('layouts.guest')] class extends Component
             @enderror
         </div>
 
-        <!-- Submit Button -->
+        <!-- Submit Button with Loading State -->
         <x-ui.button 
             type="submit" 
             class="w-full py-3 bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+            wire:loading.attr="disabled"
+            wire:target="sendPasswordResetLink"
         >
-            {{ __('auth.send_reset_link') }}
+            <span wire:loading.remove wire:target="sendPasswordResetLink">
+                {{ __('auth.send_reset_link') }}
+            </span>
+            <span wire:loading wire:target="sendPasswordResetLink" class="flex items-center justify-center gap-3">
+                <x-lucide-loader-2 class="w-5 h-5 animate-spin inline"/>
+                {{ __('common.processing') }}
+            </span>
         </x-ui.button>
 
         <!-- Back to Login Link -->
         <p class="text-center text-sm text-muted-foreground mt-4">
-            <a href="{{ route('login') }}" wire:navigate class="text-primary hover:text-primary/80 transition-colors font-medium">
+            <a href="{{ route('home') }}?login=1" wire:navigate class="text-primary hover:text-primary/80 transition-colors font-medium">
                 {{ __('auth.back_to_login') }}
             </a>
         </p>

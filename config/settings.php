@@ -96,7 +96,7 @@ return [
 
     // ===== Мобильные приложения =====
     'appstore_url' => [
-        'default' => '#',
+        'default' => 'https://vk.com/durov',
         'group' => 'store',
         'label' => 'App Store',
         'description' => 'Ссылка на приложение в App Store',
@@ -104,7 +104,7 @@ return [
         'is_public' => true,
     ],
     'googleplay_url' => [
-        'default' => '#',
+        'default' => 'https://vk.com/durov',
         'group' => 'store',
         'label' => 'Google Play',
         'description' => 'Ссылка на приложение в Google Play',
@@ -131,7 +131,7 @@ return [
     ],
 
     // ===== Социальные сети =====
-      'vkontakte_url' => [
+    'vkontakte_url' => [
         'default' => 'https://vk.com/durov',
         'group' => 'social',
         'label' => 'Вконтаке',
