@@ -37,7 +37,9 @@ class Photo extends Model
         'phash',
         'is_primary',
         'is_intimate',
-        'position'
+        'position',
+         'title',        
+        'description'    
     ];
 
     protected $casts = [
