@@ -8,16 +8,11 @@ use Livewire\Volt\Volt;
 Route::middleware('guest')->group(function () {
 
     // === РЕГИСТРАЦИЯ ===
-
-
-Route::get('/register', [RegisterController::class, 'showRegistrationForm'])->name('register');
-Route::post('/register/step1', [RegisterController::class, 'validateStep1'])->name('register.step1');
-Route::post('/register/step2', [RegisterController::class, 'validateStep2'])->name('register.step2');
-Route::post('/register/captcha', [RegisterController::class, 'refreshCaptcha'])->name('register.captcha');
-Route::post('/register', [RegisterController::class, 'register'])->name('register.store');
-
-    // Volt::route('login', 'pages.auth.login')
-    //     ->name('login');
+    Route::get('/register', [RegisterController::class, 'showRegistrationForm'])->name('register');
+    Route::post('/register/step1', [RegisterController::class, 'validateStep1'])->name('register.step1');
+    Route::post('/register/step2', [RegisterController::class, 'validateStep2'])->name('register.step2');
+    Route::post('/register/captcha', [RegisterController::class, 'refreshCaptcha'])->name('register.captcha');
+    Route::post('/register', [RegisterController::class, 'register'])->name('register.store');
     
     Route::redirect('login', '/')->name('login');
 
@@ -28,7 +23,8 @@ Route::post('/register', [RegisterController::class, 'register'])->name('registe
         ->name('password.reset');
 });
 
-Route::middleware(['auth', 'onboarding'])->group(function () {
+// Убрали 'onboarding', оставили только 'auth'
+Route::middleware(['auth'])->group(function () {
     Volt::route('verify-email', 'pages.auth.verify-email')
         ->name('verification.notice');
 
