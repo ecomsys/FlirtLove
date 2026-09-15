@@ -34,7 +34,9 @@
         x-transition:leave="transition ease-in duration-100"
         x-transition:leave-start="opacity-100 scale-100"
         x-transition:leave-end="opacity-0 scale-95"
-        {{ $attributes->twMerge('bg-popover text-popover-foreground fixed z-50 max-h-96 min-w-[8rem] origin-top overflow-x-hidden overflow-y-auto rounded-md border shadow-md') }}
+        {{-- x-effect задаёт ширину только когда открывается, а при закрытии оставляет её как есть, убирая скачок --}}
+        x-effect="open && $refs.trigger && ($el.style.minWidth = $refs.trigger.offsetWidth + 'px')"
+        {{ $attributes->twMerge('bg-popover text-popover-foreground fixed z-50 max-h-96 min-w-[8rem] origin-top overflow-x-hidden overflow-y-auto little-scroll rounded-md border shadow-md') }}
     >
         <div data-slot="select-viewport" class="p-1">
             {{ $slot }}

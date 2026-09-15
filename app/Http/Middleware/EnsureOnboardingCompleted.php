@@ -12,19 +12,35 @@ class EnsureOnboardingCompleted
     {
         $user = Auth::user();
 
-        if (! $user || $user->hasCompletedOnboarding()) {
+        // 1. Если гость — просто пропускаем. Главные страницы работают для всех!
+        if (! $user) {
             return $next($request);
         }
 
-        // Защита от цикла на случай, если мидлварь когда-нибудь
-        // повесят глобально или на сам photo-setup
-        if ($request->routeIs('onboarding.index')) {
+        // 2. Персонал (админ/модератор) не мучается верификацией на клиенте
+        if (in_array($user->role, ['admin', 'moderator', 'support'])) {
             return $next($request);
         }
 
-        // Запоминаем, куда юзер хотел — после онбординга можно вернуть
-        redirect()->setIntendedUrl($request->url());
+        // 3. Если юзер залогинен, но НЕ подтвердил email
+        // Пускаем его ТОЛЬКО на страницы верификации, выхода и онбординга.
+        // Любая другая ссылка (даже на главную) кидает его обратно на verify-email
+        if (! $user->hasVerifiedEmail()) {
+            if (! $request->routeIs('verification.*') && ! $request->routeIs('logout') && ! $request->routeIs('onboarding.*')) {
+                return redirect()->route('verification.notice');
+            }
+            return $next($request);
+        }
 
-        return redirect()->route('onboarding.index');
+        // 4. Если email подтвержден, но онбординг не пройден
+        // Пускаем только на онбординг, выход и верификацию
+        if (! $user->hasCompletedOnboarding()) {
+            if (! $request->routeIs('onboarding.*') && ! $request->routeIs('logout') && ! $request->routeIs('verification.*')) {
+                return redirect()->route('onboarding.index');
+            }
+        }
+
+        // 5. Если всё пройдено — пропускаем
+        return $next($request);
     }
 }

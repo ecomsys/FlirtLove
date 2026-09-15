@@ -3,50 +3,35 @@
 namespace App\Services\Search;
 
 use App\Models\User;
-use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 
 class UserSearchService
 {
-    /**
-     * Основной метод поиска анкет (Поддерживает гостей!)
-     *
-     * @param User|null $user Юзер, который ищет (или null, если гость)
-     * @param array $filters Фильтры (пол, возраст, гео, теги и т.д.)
-     * @return LengthAwarePaginator
-     */
-    public function search(?User $user, array $filters = []): LengthAwarePaginator
+    public function search(?User $user, array $filters = []): Builder
     {
-        // 1. Начинаем сборку запроса. Делаем JOIN, чтобы фильтровать по таблице профилей сразу
         $query = User::query()
-            ->select('users.*') // Берем только данные таблицы users
+            ->select('users.*')
             ->join('user_profiles', 'users.id', '=', 'user_profiles.user_id')
-            ->where('users.status', 'active') // Только активные
-            ->where('users.role', 'user') // Исключаем админов из поиска
-            ->whereNotNull('user_profiles.gender') // Исключаем пустые анкеты (онбординг не пройден)
-            ->whereNotNull('user_profiles.birth_date');
+            ->join('user_preferences', 'users.id', '=', 'user_preferences.user_id')
+            ->where('users.status', 'active')
+            ->where('users.role', 'user')
+            ->whereNotNull('user_profiles.gender')
+            ->whereNotNull('user_profiles.birth_date')
+            ->where('user_preferences.hide_from_search', false); // Скрывшихся не видят ни гости, ни юзеры
 
-        // 2. ЛОГИКА ДЛЯ АВТОРИЗОВАННОГО ЮЗЕРА
         if ($user) {
             $query->where('users.id', '!=', $user->id);
 
-            // ФИКС: Subquery вместо pluck()->toArray(). Это спасет память на миллионнике!
-            // База сама отбросит тех, кого мы свайпнули
             $query->whereNotIn('users.id', function ($q) use ($user) {
                 $q->select('target_user_id')->from('swipes')->where('user_id', $user->id);
             });
 
-            // И тех, кого мы заблокировали
             $query->whereNotIn('users.id', function ($q) use ($user) {
                 $q->select('blocked_id')->from('user_blocks')->where('blocker_id', $user->id);
             });
 
-            // Исключаем тех, кто скрылся из поиска (hide_from_search)
-            $query->join('user_preferences', 'users.id', '=', 'user_preferences.user_id')
-                  ->where('user_preferences.hide_from_search', false);
-
-            // ФИЛЬТР "КТО ВИДИТ МОЮ АНКЕТУ" (Premium-фича)
             $userGender = $user->profile->gender ?? 'male';
             $userAge = $user->profile->age ?? 18;
 
@@ -58,66 +43,20 @@ class UserSearchService
             ->where('user_preferences.visibility_age_max', '>=', $userAge);
         }
 
-        // 3. БАЗОВЫЕ ФИЛЬТРЫ (Пол, Возраст, Город)
         $this->applyBaseFilters($query, $filters);
-
-        // 4. ГЕОЛОКАЦИЯ (Использует spatialIndex)
         $this->applyLocationFilter($query, $filters);
-
-        // 5. РАСШИРЕННЫЕ ФИЛЬТРЫ
         $this->applyAdvancedFilters($query, $filters);
 
-        // 6. СОРТИРОВКА
-        $query->orderByDesc('users.last_seen'); // По умолчанию: кто был онлайн недавно
+        $query->orderByDesc('users.last_seen');
 
-        // Жадная загрузка связей, чтобы не было проблемы N+1
+        // Возвращаем Builder, а контроллер сам сделает paginate()
         return $query->with(['profile.city', 'photos' => function($q) {
-            $q->where('status', 'approved')->orderByDesc('is_primary')->limit(4);
-        }])->paginate(20);
+            $q->where('status', 'approved')->orderByDesc('is_primary')->limit(1);
+        }])->withCount(['photos' => function($q) {
+            $q->where('status', 'approved');
+        }]);
     }
-
-    private function applyBaseFilters(Builder $query, array $filters): void
-    {
-        // Пол
-        if (!empty($filters['gender']) && $filters['gender'] !== 'any') {
-            $query->where('user_profiles.gender', $filters['gender']);
-        }
-
-        // ФИКС: Возраст (Конвертируем в дату рождения, чтобы использовать индекс birth_date!)
-        $ageFrom = $filters['age_from'] ?? 18;
-        $ageTo = $filters['age_to'] ?? 99;
-        
-        $maxDate = Carbon::now()->subYears($ageFrom)->format('Y-m-d'); // Самая поздняя дата рождения (самые молодые)
-        $minDate = Carbon::now()->subYears($ageTo)->format('Y-m-d'); // Самая ранняя дата рождения (самые старые)
-        
-        $query->whereBetween('user_profiles.birth_date', [$minDate, $maxDate]);
-
-        // Город
-        if (!empty($filters['city_id'])) {
-            $query->where('user_profiles.city_id', $filters['city_id']);
-        }
-
-        // Цель знакомства
-        if (!empty($filters['dating_goal'])) {
-            $query->where('user_profiles.dating_goal', $filters['dating_goal']);
-        }
-
-        // Только онлайн
-        if (!empty($filters['online_only']) && $filters['online_only'] === true) {
-            $query->where('users.last_seen', '>=', now()->subMinutes(5));
-        }
-
-        // Только верифицированные
-        if (!empty($filters['verified_only']) && $filters['verified_only'] === true) {
-            $query->where('users.is_verified', true);
-        }
-
-        // ФИКС: Только с премиумом (используем дату, а не несуществующий флаг is_premium)
-        if (!empty($filters['premium_only']) && $filters['premium_only'] === true) {
-            $query->where('users.premium_expires_at', '>', now());
-        }
-    }
-
+  
     private function applyLocationFilter(Builder $query, array $filters): void
     {
         if (!empty($filters['lat']) && !empty($filters['lng']) && !empty($filters['radius_km'])) {
@@ -130,27 +69,76 @@ class UserSearchService
                       "ST_DWithin(user_profiles.location, ST_SetSRID(ST_MakePoint(?, ?), 4326)::geography, ?)",
                       [$lng, $lat, $radiusMeters]
                   );
+
+            // Считаем дистанцию в км и добавляем в выборку, чтобы вывести в карточке
+            $query->selectRaw(
+                "ROUND(ST_DistanceSphere(user_profiles.location, ST_SetSRID(ST_MakePoint(?, ?), 4326)::geometry) / 1000, 1) as distance",
+                [$lng, $lat]
+            );
+        } else {
+            // Если координатов нет, возвращаем null чтобы фронтенд не упал
+            $query->selectRaw('NULL as distance');
+        }
+    }
+
+           private function applyBaseFilters(Builder $query, array $filters): void
+    {
+        if (!empty($filters['gender']) && $filters['gender'] !== 'any') {
+            $query->where('user_profiles.gender', $filters['gender']);
+        }
+
+        $ageFrom = $filters['age_from'] ?? 18;
+        $ageTo = $filters['age_to'] ?? 99;
+        $maxDate = Carbon::now()->subYears($ageFrom)->format('Y-m-d');
+        $minDate = Carbon::now()->subYears($ageTo)->format('Y-m-d');
+        $query->whereBetween('user_profiles.birth_date', [$minDate, $maxDate]);
+
+        if (!empty($filters['city_id'])) {
+            $query->where('user_profiles.city_id', $filters['city_id']);
+        }
+
+        if (!empty($filters['dating_goal']) && $filters['dating_goal'] !== 'any') {
+            $query->where('user_profiles.dating_goal', $filters['dating_goal']);
+        }
+
+        if (!empty($filters['activity'])) {
+            if ($filters['activity'] === 'online') {
+                $query->where('users.last_seen', '>=', now()->subMinutes(5));
+            } elseif ($filters['activity'] === 'recently') {
+                $query->where('users.last_seen', '>=', now()->subDays(1));
+            }
+        }
+
+        // ФИКС: Используем filter_var для корректной работы со строками "true"/"false" из URL
+        if (isset($filters['is_new']) && filter_var($filters['is_new'], FILTER_VALIDATE_BOOLEAN)) {
+            $query->where('users.created_at', '>=', now()->subDays(7));
+        }
+
+        if (isset($filters['verified_only']) && filter_var($filters['verified_only'], FILTER_VALIDATE_BOOLEAN)) {
+            $query->where('users.is_verified', true);
         }
     }
 
     private function applyAdvancedFilters(Builder $query, array $filters): void
     {
-        $simpleFilters = ['body_type', 'smoking', 'alcohol', 'relationship_status', 'children_status', 'housing', 'has_car'];
+        // Слайдеры (Рост и Вес)
+        if (isset($filters['height_from']) && isset($filters['height_to'])) {
+            $query->whereBetween('user_profiles.height', [$filters['height_from'], $filters['height_to']]);
+        }
+        if (isset($filters['weight_from']) && isset($filters['weight_to'])) {
+            $query->whereBetween('user_profiles.weight', [$filters['weight_from'], $filters['weight_to']]);
+        }
 
-        foreach ($simpleFilters as $field) {
-            if (isset($filters[$field]) && $filters[$field] !== null && $filters[$field] !== 'any') {
-                $query->where("user_profiles.{$field}", $filters[$field]);
+        // Обычные поля (whereIn для массивов из чекбоксов)
+        $arrayFilters = ['body_type', 'eye_color', 'hair_color', 'relationship_status', 'children_status', 'pets', 'housing', 'has_car', 'education_level', 'income', 'smoking', 'alcohol', 'zodiac_sign'];
+        foreach ($arrayFilters as $field) {
+            if (!empty($filters[$field]) && is_array($filters[$field])) {
+                $query->whereIn("user_profiles.{$field}", $filters[$field]);
             }
         }
 
-        if (!empty($filters['height_from'])) {
-            $query->where('user_profiles.height', '>=', $filters['height_from']);
-        }
-        if (!empty($filters['height_to'])) {
-            $query->where('user_profiles.height', '<=', $filters['height_to']);
-        }
-
-        $jsonFilters = ['interests', 'languages', 'sports'];
+        // JSON массивы (где multiple choice)
+        $jsonFilters = ['interests', 'languages', 'sports', 'body_decorations'];
         foreach ($jsonFilters as $field) {
             if (!empty($filters[$field]) && is_array($filters[$field])) {
                 $query->whereJsonContains("user_profiles.{$field}", $filters[$field]);

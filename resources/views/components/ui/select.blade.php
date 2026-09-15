@@ -101,9 +101,10 @@
             <x-ui.select-trigger :class="'w-full'.($multiple ? ' data-[size=default]:h-auto min-h-9 py-1' : '')" :ariaLabel="$placeholder !== '' ? $placeholder : 'Select option'">
                 <x-ui.select-value :placeholder="$placeholder" />
             </x-ui.select-trigger>
+            {{-- Убрал class="w-full" --}}
             <x-ui.select-content :indicator="$indicator">
                 @foreach ($normalized as $val => $lab)
-                    <x-ui.select-item :value="$val">{{ $lab }}</x-ui.select-item>
+                    <x-ui.select-item  :value="$val">{{ $lab }}</x-ui.select-item>
                 @endforeach
             </x-ui.select-content>
         @else

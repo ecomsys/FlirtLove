@@ -27,14 +27,13 @@ return Application::configure(basePath: dirname(__DIR__))
             SetLocale::class,
             UpdateLastSeen::class,
             LoadUserRelations::class,
-
+            \App\Http\Middleware\EnsureOnboardingCompleted::class, 
             \App\Http\Middleware\MakeViteUrlsRelative::class,
         ]);
 
 
         $middleware->alias([
-            'role' => \App\Http\Middleware\EnsureUserHasRole::class,
-            'onboarding' => \App\Http\Middleware\EnsureOnboardingCompleted::class,
+            'role' => \App\Http\Middleware\EnsureUserHasRole::class,           
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

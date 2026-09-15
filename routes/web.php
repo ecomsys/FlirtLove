@@ -8,10 +8,18 @@ use App\Http\Controllers\Auth\SocialAuthController;
 use Illuminate\Support\Facades\Route;
 use Livewire\Volt\Volt;
 
+use App\Http\Controllers\Web\HomeController;
+use App\Http\Controllers\Web\FeedController; 
 // === ГЛАВНАЯ СТРАНИЦА ===
-Route::get('/', Home::class)
-    ->middleware('onboarding') // Теперь безопасно для гостей после фикса middleware
-    ->name('home');
+// Route::get('/', Home::class)
+//     ->middleware('onboarding') // Теперь безопасно для гостей после фикса middleware
+//     ->name('home');
+
+// === ГЛАВНАЯ СТРАНИЦА ===
+Route::get('/', [HomeController::class, 'index'])->name('home');
+
+// API для ленты (переведено на FeedController)
+Route::get('/api/users/search', [FeedController::class, 'search'])->name('api.users.search');
 
 // === АВТОРИЗАЦИЯ ЧЕРЕЗ СОЦСЕТИ ===
 Route::get('/auth/{provider}/redirect', [SocialAuthController::class, 'redirect'])
@@ -40,7 +48,7 @@ Route::post('/onboarding/skip', [OnboardingController::class, 'skip'])
     ->name('onboarding.skip');
 
 // === АВТОРИЗОВАННЫЕ МАРШРУТЫ ===
-Route::middleware(['auth', 'verified', 'onboarding'])->group(function () {
+Route::middleware(['auth', 'verified'])->group(function () {
     Route::view('profile', 'profile')->name('profile');
 });
 

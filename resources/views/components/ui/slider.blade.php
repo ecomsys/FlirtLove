@@ -97,6 +97,13 @@
         bumpHigh(d) { if (this.disabled) return; this.high = this.clamp(this.high + d * this.step, this.low, this.max); },
         page(d) { if (this.disabled) return; this.value = this.clamp(this.value + d * Math.max(this.step, (this.max - this.min) / 10), this.min, this.max); }
     }"
+   x-effect="
+        if (range) {
+            $dispatch('input', [low, high]);
+        } else {
+            $dispatch('input', value);
+        }
+    "    
     @pointermove.window="move($event)"
     @pointerup.window="stop()"
     {{ $attributes->twMerge($containerCls) }}
