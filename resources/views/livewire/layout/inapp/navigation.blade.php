@@ -33,7 +33,7 @@ new class extends Component {
                     <a href="#" wire:navigate class="flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors">
                         <x-lucide-heart class="w-5 h-5" /> Знакомства
                     </a>
-                    <a href="#" wire:navigate class="flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors">
+                    <a href="/search" wire:navigate class="flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors">
                         <x-lucide-search class="w-5 h-5" /> Поиск
                     </a>
                     <a href="#" wire:navigate class="flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors">

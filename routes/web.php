@@ -10,6 +10,7 @@ use Livewire\Volt\Volt;
 
 use App\Http\Controllers\Web\HomeController;
 use App\Http\Controllers\Web\FeedController; 
+use App\Http\Controllers\Web\UserController;
 // === ГЛАВНАЯ СТРАНИЦА ===
 // Route::get('/', Home::class)
 //     ->middleware('onboarding') // Теперь безопасно для гостей после фикса middleware
@@ -17,9 +18,14 @@ use App\Http\Controllers\Web\FeedController;
 
 // === ГЛАВНАЯ СТРАНИЦА ===
 Route::get('/', [HomeController::class, 'index'])->name('home');
+Route::get('/user/{id}', [UserController::class, 'show'])->name('user.profile');
 
+
+
+Route::get('/search', [HomeController::class, 'searchPage'])->name('search.page');
 // API для ленты (переведено на FeedController)
 Route::get('/api/users/search', [FeedController::class, 'search'])->name('api.users.search');
+
 
 // === АВТОРИЗАЦИЯ ЧЕРЕЗ СОЦСЕТИ ===
 Route::get('/auth/{provider}/redirect', [SocialAuthController::class, 'redirect'])

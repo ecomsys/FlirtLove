@@ -56,7 +56,7 @@ new class extends Component
     public function getOptionLabel(string $type, int|string|null $value): ?string
     {
         if (is_null($value) || $value === '') return 'Нет ответа';
-        return config("profile_options.{$type}.{$value}", 'Нет ответа');
+        return config("profile_fields.options.{$type}.{$value}", 'Нет ответа');
     }
 
     public function getArrayLabels(string $type, ?array $values): array

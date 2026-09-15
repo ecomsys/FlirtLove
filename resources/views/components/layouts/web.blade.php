@@ -52,7 +52,7 @@
                 
                 <!-- ЛЕВАЯ КОЛОНКА (Сайдбар) -->
                 @isset($sidebar)
-                    <aside class="w-full md:w-64 lg:w-72 shrink-0">
+                    <aside class="w-full md:w-64 shrink-0">
                         <!-- Сайдбар липкий, чтобы он ехал вместе со скроллом ленты -->
                         <div class="space-y-4">
                             {{ $sidebar }}

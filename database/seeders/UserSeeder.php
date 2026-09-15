@@ -10,12 +10,17 @@ use App\Models\Album;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 class UserSeeder extends Seeder
 {
     public function run(): void
     {
         $this->command->info('👤 Создаем обычных пользователей...');
+
+        // Массивы с нормальными мужскими и женскими именами
+        $maleNames = ['Александр', 'Михаил', 'Иван', 'Артём', 'Дмитрий', 'Максим', 'Сергей', 'Андрей', 'Алексей', 'Роман', 'Егор', 'Денис', 'Владимир', 'Павел', 'Кирилл', 'Никита', 'Илья', 'Тимур', 'Глеб', 'Виктор', 'Антон', 'Игорь', 'Олег'];
+        $femaleNames = ['Анна', 'Мария', 'Елена', 'Ольга', 'Наталья', 'Татьяна', 'Юлия', 'Ирина', 'Светлана', 'Екатерина', 'Анастасия', 'Дарья', 'Виктория', 'Полина', 'Алина', 'Ксения', 'София', 'Валерия', 'Маргарита', 'Кристина', 'Алиса', 'Вера', 'Надежда'];
 
         $genders = ['male', 'female'];
         $goals = ['friends', 'romantic', 'family', 'casual', 'travel'];
@@ -37,7 +42,7 @@ class UserSeeder extends Seeder
         $activities = ["IT", "Медицина", "Маркетинг", "Финансы", "Дизайн", "Образование", "Продажи"];
         $positions = ["Разработчик", "Менеджер проекта", "Врач-терапевт", "Учитель", "Дизайнер интерфейсов", "Бухгалтер", "Маркетолог"];
 
-        $options = config('profile_options', [
+        $options = config('profile_fields.options', [
             'body_type' => [1 => 'Среднее', 2 => 'Спортивное', 3 => 'Полное'],
             'eye_color' => [1 => 'Карие', 2 => 'Голубые'],
             'hair_color' => [1 => 'Блонд', 2 => 'Брюнет'],
@@ -64,18 +69,20 @@ class UserSeeder extends Seeder
         $russia = DB::table('countries')->where('iso2', 'RU')->first();
         $cityIds = DB::table('cities')->where('country_id', $russia->id ?? 0)->pluck('id')->toArray();
 
-        for ($i = 1; $i <= 30; $i++) {
+        for ($i = 1; $i <= 60; $i++) {
             $year = rand(1984, 2006);
             $month = rand(1, 12);
             $day = rand(1, 28);
             $birthDate = "{$year}-{$month}-{$day}";
             
-            // Убрали вычисление возраста, Postgres/PHP сделает это сам
+            // Определяем пол заранее, чтобы подобрать имя
+            $gender = $genders[array_rand($genders)];
+            $name = $gender === 'male' 
+                ? $maleNames[array_rand($maleNames)] 
+                : $femaleNames[array_rand($femaleNames)];
 
             $isPremium = rand(1, 10) <= 3;
             $premiumExpires = $isPremium ? now()->addDays(rand(10, 365)) : null;
-
-            $gender = $genders[array_rand($genders)];
 
             if (in_array($i, [8, 9, 10])) {
                 $ip = '185.23.44.12'; 
@@ -85,17 +92,16 @@ class UserSeeder extends Seeder
                 $status = User::STATUS_ACTIVE;
             }
 
-            // 1. Создаем Юзера (отключив события, чтобы избежать авто-создания пустых связей)
-            $user = User::withoutEvents(function () use ($i, $status, $ip, $isPremium, $premiumExpires) {
+            // 1. Создаем Юзера (Передаем $name в use)
+            $user = User::withoutEvents(function () use ($i, $name, $status, $ip, $isPremium, $premiumExpires) {
                 return User::updateOrCreate(
                     ['email' => 'user' . $i . '@test.com'],
                     [
-                        'name' => 'Пользователь ' . $i,
+                        'name' => $name, // Подставляем нормальное имя
                         'password' => Hash::make('password'),
                         'email_verified_at' => now(),
                         'role' => User::ROLE_USER,
                         'status' => $status,
-                        // Убрали is_premium
                         'premium_expires_at' => $premiumExpires,
                         'is_verified' => (bool) rand(0, 1),
                         'has_completed_onboarding' => true,
@@ -116,7 +122,6 @@ class UserSeeder extends Seeder
                     ['user_id' => $user->id],
                     [
                         'gender' => $gender,
-                        // Убрали 'age' => $age
                         'birth_date' => $birthDate,
                         'dating_goal' => $goals[array_rand($goals)],
                         'city_id' => !empty($cityIds) ? $cityIds[array_rand($cityIds)] : null,
@@ -162,7 +167,7 @@ class UserSeeder extends Seeder
                     'sub_popular' => (bool) rand(0, 1),
                 ];
 
-                                UserPreference::updateOrCreate(
+                UserPreference::updateOrCreate(
                     ['user_id' => $user->id],
                     [
                         'locale' => 'ru',
@@ -171,9 +176,9 @@ class UserSeeder extends Seeder
                         'preferred_age_max' => rand(30, 45),
                         'preferred_gender' => $genders[array_rand($genders)],
                         'preferred_distance_km' => rand(10, 100),
-                        'search_filters' => null, // null оставляем как есть
+                        'search_filters' => null,
                         'chat_filter_enabled' => $isPremium ? (bool) rand(0, 1) : false,
-                        'chat_filter_settings' => null, // null оставляем
+                        'chat_filter_settings' => null,
                         'is_invisible' => $isPremium ? (bool) rand(0, 1) : false,
                         'hide_intimate' => (bool) rand(0, 1),
                         'disable_photo_comments' => (bool) rand(0, 1),
@@ -189,7 +194,6 @@ class UserSeeder extends Seeder
                         'allow_auto_messages' => (bool) rand(0, 1),
                         'chat_widget_enabled' => true,
                         'chat_sound_enabled' => true,
-                        // ФИКС: Оборачиваем массивы в json_encode для PostgreSQL
                         'email_settings' => json_encode($emailSettings), 
                     ]
                 );

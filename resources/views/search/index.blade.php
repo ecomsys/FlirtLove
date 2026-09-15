@@ -1,5 +1,5 @@
 <x-layouts.web>
-    <!-- === САЙДБАР === -->
+    <!-- === САЙДБАР (Левая колонка) === -->
     <x-slot:sidebar>
         @guest
             @include('livewire.web.sidebar.guest')
@@ -10,12 +10,13 @@
 
     <!-- === ОСНОВНОЙ КОНТЕНТ === -->
     <div class="space-y-12">
-        <!-- is-search-page не передаём, по умолчанию false -->
+        <!-- Передаём is-search-page="true" -->
         <x-home.feed 
             :search-config="$searchConfig" 
             :adv-filters="$advFilters"  
             :default-search-gender="$defaultSearchGender" 
             :auto-open-login="$autoOpenLogin" 
+            is-search-page="true"
         />
     </div>
 </x-layouts.web>

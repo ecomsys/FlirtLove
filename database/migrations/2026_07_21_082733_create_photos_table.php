@@ -31,6 +31,9 @@ return new class extends Migration
             $table->boolean('is_primary')->default(false);
             $table->boolean('is_intimate')->default(false);
             $table->unsignedInteger('position')->default(0);
+            
+            $table->string('title')->nullable();
+            $table->text('description')->nullable();
 
             $table->string('phash', 16)->nullable()->index(); 
 

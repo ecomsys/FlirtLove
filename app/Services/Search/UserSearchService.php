@@ -81,20 +81,22 @@ class UserSearchService
         }
     }
 
-           private function applyBaseFilters(Builder $query, array $filters): void
+    private function applyBaseFilters(Builder $query, array $filters): void
     {
         if (!empty($filters['gender']) && $filters['gender'] !== 'any') {
             $query->where('user_profiles.gender', $filters['gender']);
         }
 
-        $ageFrom = $filters['age_from'] ?? 18;
-        $ageTo = $filters['age_to'] ?? 99;
+        // ПРИВОДИМ К INT (для базы данных)
+        $ageFrom = (int)($filters['age_from'] ?? 18);
+        $ageTo = (int)($filters['age_to'] ?? 99);
+        
         $maxDate = Carbon::now()->subYears($ageFrom)->format('Y-m-d');
         $minDate = Carbon::now()->subYears($ageTo)->format('Y-m-d');
         $query->whereBetween('user_profiles.birth_date', [$minDate, $maxDate]);
 
         if (!empty($filters['city_id'])) {
-            $query->where('user_profiles.city_id', $filters['city_id']);
+            $query->where('user_profiles.city_id', (int)$filters['city_id']);
         }
 
         if (!empty($filters['dating_goal']) && $filters['dating_goal'] !== 'any') {
@@ -109,7 +111,6 @@ class UserSearchService
             }
         }
 
-        // ФИКС: Используем filter_var для корректной работы со строками "true"/"false" из URL
         if (isset($filters['is_new']) && filter_var($filters['is_new'], FILTER_VALIDATE_BOOLEAN)) {
             $query->where('users.created_at', '>=', now()->subDays(7));
         }
@@ -121,27 +122,30 @@ class UserSearchService
 
     private function applyAdvancedFilters(Builder $query, array $filters): void
     {
-        // Слайдеры (Рост и Вес)
+        // Слайдеры (Рост и Вес) - приводим к INT
         if (isset($filters['height_from']) && isset($filters['height_to'])) {
-            $query->whereBetween('user_profiles.height', [$filters['height_from'], $filters['height_to']]);
+            $query->whereBetween('user_profiles.height', [(int)$filters['height_from'], (int)$filters['height_to']]);
         }
         if (isset($filters['weight_from']) && isset($filters['weight_to'])) {
-            $query->whereBetween('user_profiles.weight', [$filters['weight_from'], $filters['weight_to']]);
+            $query->whereBetween('user_profiles.weight', [(int)$filters['weight_from'], (int)$filters['weight_to']]);
         }
 
         // Обычные поля (whereIn для массивов из чекбоксов)
         $arrayFilters = ['body_type', 'eye_color', 'hair_color', 'relationship_status', 'children_status', 'pets', 'housing', 'has_car', 'education_level', 'income', 'smoking', 'alcohol', 'zodiac_sign'];
         foreach ($arrayFilters as $field) {
             if (!empty($filters[$field]) && is_array($filters[$field])) {
-                $query->whereIn("user_profiles.{$field}", $filters[$field]);
+                // ЖЁСТКО ПРИВОДИМ ЗНАЧЕНИЯ К ЧИСЛАМ ДЛЯ POSTGRESQL
+                $intValues = array_map('intval', $filters[$field]);
+                $query->whereIn("user_profiles.{$field}", $intValues);
             }
         }
 
-        // JSON массивы (где multiple choice)
+        // JSON массивы (где multiple choice) - тоже приводим к INT
         $jsonFilters = ['interests', 'languages', 'sports', 'body_decorations'];
         foreach ($jsonFilters as $field) {
             if (!empty($filters[$field]) && is_array($filters[$field])) {
-                $query->whereJsonContains("user_profiles.{$field}", $filters[$field]);
+                $intValues = array_map('intval', $filters[$field]);
+                $query->whereJsonContains("user_profiles.{$field}", $intValues);
             }
         }
     }
