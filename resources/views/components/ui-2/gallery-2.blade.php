@@ -26,16 +26,16 @@
 <!-- Добавили x-data с проверкой авторизации -->
 <div x-data="{ isAuth: {{ auth()->check() ? 'true' : 'false' }} }" class="w-full flex flex-col gap-4">
     
-    <!-- Контейнер с рамкой VIP -->
-    <div class="relative rounded-sm @if($isPremium) border-5 border-yellow-400 shadow-lg shadow-yellow-400/30 @endif">
+    <!-- Контейнер с рамкой Premium (Вешаем скругление и обрезку сюда) -->
+    <div class="relative rounded-sm overflow-hidden @if($isPremium) border-5 border-yellow-400 shadow-lg shadow-yellow-400/30 @endif">
         
-        <!-- Главное фото -->
+        <!-- Главное фото (Убрали rounded-sm и overflow-hidden) -->
         <div 
-            class="aspect-[3/4] bg-muted relative rounded-sm cursor-pointer" 
+            class="aspect-[3/4] bg-muted relative cursor-pointer" 
             @click="isAuth ? $dispatch('open-lightbox', { id: {{ $initialPhoto->id ?? 0 }} }) : $dispatch('open-login-modal')"
         >
-            @if($initialPhoto)
-                <img src="{{ $initialPhoto->large_url }}" alt="{{ $name }}" class="absolute inset-0 w-full h-full object-cover">
+            @if($initialPhoto)               
+                <img src="{{ $initialPhoto->large_url }}" alt="{{ $name }}" class="absolute inset-0 w-full h-full object-cover">               
             @else
                 <div class="w-full h-full flex items-center justify-center text-muted-foreground">
                     <svg xmlns="http://www.w3.org/2000/svg" class="h-16 w-16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
