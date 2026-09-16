@@ -11,8 +11,7 @@
     <title>{{ config('app.name', 'App') }}</title>
     <link rel="preconnect" href="https://fonts.bunny.net">
     <link href="https://fonts.bunny.net/css?family=instrument-sans:400,500,600,700&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fancyapps/ui@5.0/dist/fancybox/fancybox.css" />
-
+    
     @stack('styles')
     <style>[x-cloak] { display: none !important; }</style>
 
@@ -79,12 +78,10 @@
     <livewire:modals.login-modal />
 
     <!-- ФИКС: Модалка восстановления пароля -->
-    <livewire:modals.forgot-password-modal />
+    <livewire:modals.forgot-password-modal />    
 
-    
+    <x-ui.sonner expand="true" />            
 
-    <x-ui.sonner expand="true" />
-    
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fancyapps/ui@5.0/dist/fancybox/fancybox.css" />
+  
 </body>
 </html>

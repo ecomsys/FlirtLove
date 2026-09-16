@@ -4,13 +4,15 @@ use App\Http\Controllers\Web\OnboardingController;
 use App\Livewire\Web\Home;
 use App\Livewire\Web\Blog\BlogIndex;
 use App\Livewire\Web\Blog\BlogShow;
+use App\Http\Controllers\Web\ProfileActionController;
 use App\Http\Controllers\Auth\SocialAuthController;
 use Illuminate\Support\Facades\Route;
 use Livewire\Volt\Volt;
 
+use App\Http\Controllers\SwipeController;
 use App\Http\Controllers\Web\HomeController;
 use App\Http\Controllers\Web\FeedController; 
-use App\Http\Controllers\Web\UserController;
+use App\Http\Controllers\Web\ProfileController;
 // === ГЛАВНАЯ СТРАНИЦА ===
 // Route::get('/', Home::class)
 //     ->middleware('onboarding') // Теперь безопасно для гостей после фикса middleware
@@ -18,7 +20,7 @@ use App\Http\Controllers\Web\UserController;
 
 // === ГЛАВНАЯ СТРАНИЦА ===
 Route::get('/', [HomeController::class, 'index'])->name('home');
-Route::get('/user/{id}', [UserController::class, 'show'])->name('user.profile');
+Route::get('/user/{id}', [ProfileController::class, 'show'])->name('user.profile');
 
 
 
@@ -56,6 +58,17 @@ Route::post('/onboarding/skip', [OnboardingController::class, 'skip'])
 // === АВТОРИЗОВАННЫЕ МАРШРУТЫ ===
 Route::middleware(['auth', 'verified'])->group(function () {
     Route::view('profile', 'profile')->name('profile');
+});
+
+
+
+Route::middleware('auth')->group(function () {
+    Route::post('/user/{user}/swipe', [SwipeController::class, 'store'])->name('user.swipe');
+
+    Route::post('/user/{user}/chat', [ProfileActionController::class, 'chat'])->name('user.chat');
+    Route::post('/user/{user}/favorite', [ProfileActionController::class, 'toggleFavorite'])->name('user.favorite');
+    Route::post('/user/{user}/block', [ProfileActionController::class, 'toggleBlock'])->name('user.block');
+    Route::post('/user/{user}/report', [ProfileActionController::class, 'report'])->name('user.report');
 });
 
 // === АДМИНКА ===

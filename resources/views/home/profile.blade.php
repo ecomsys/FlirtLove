@@ -10,6 +10,11 @@
 
     <!-- === ОСНОВНОЙ КОНТЕНТ === -->
     <div class="space-y-6">
-        <x-home.user :user="$user" />
+        <x-home.profile 
+            :user="$user" 
+            :is-favorited="$isFavorited" 
+            :is-blocked="$isBlocked" 
+            :is-reported="$isReported" 
+        />
     </div>
 </x-layouts.web>

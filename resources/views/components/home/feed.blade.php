@@ -95,8 +95,7 @@
                         </div>
                         <div class="grid md:grid-cols-3 gap-6">
                             <!-- Колонка 1 -->
-                            <div class="space-y-3">
-                                <x-ui-2.select-2 x-model="filters.adv1" :options="$advFilters" exclude-values="[filters.adv2, filters.adv3]" placeholder="Дополнительное поле" />
+                            <div class="space-y-3">                                
                                 <template x-if="filters.adv1 === 'weight'">
                                     <div class="p-4 border border-border rounded-lg bg-muted/20 space-y-2">
                                         <div class="flex items-center justify-between"><label class="text-sm font-medium text-muted-foreground">Вес</label><span class="text-sm font-medium text-muted-foreground" x-text="filters.weight[0] + ' - ' + filters.weight[1] + ' кг'"></span></div>
