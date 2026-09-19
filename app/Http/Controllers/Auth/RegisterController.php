@@ -34,7 +34,7 @@ class RegisterController extends Controller
 
         $captchaImage = $this->captchaService->generate('register_captcha');
 
-        return view('auth.register', compact('months', 'days', 'years', 'captchaImage'));
+        return view('pages.auth.register', compact('months', 'days', 'years', 'captchaImage'));
     }
 
     // Общий метод для жёсткого возврата JSON ошибок

@@ -16,6 +16,8 @@
     @stack('styles')
     <style>[x-cloak] { display: none !important; }</style>
 
+    <script>window.LIVEWIRE_ENABLED = false;</script>
+
     {{-- хелпер для определения темы --}}
      @include('partials.theme-bootstrap')
 
@@ -26,20 +28,19 @@
 <body class="font-sans antialiased bg-background text-foreground">
     <div class="min-h-screen flex flex-col">
         <!-- Простая шапка -->
-        <livewire:layout.onboarding.navigation />
+        <x-layout.onboarding.navigation />
 
         <main class="flex-1">
             {{ $slot }}
         </main>
-
-        <!-- Подключаем наш футер -->
-        <livewire:layout.footer />
+       
     </div>
 
     <!-- Глобальный спиннер для wire:navigate -->
     <x-navigate-loader />
 
     <x-ui.sonner expand="true" />
+    @stack('scripts')
 </body>
 
 </html>

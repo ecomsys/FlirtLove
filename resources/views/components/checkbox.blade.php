@@ -10,14 +10,18 @@
     'size'         => 'md',
     'class'        => null,
     'wrapperClass' => null,
-    'labelClass'   => null, // Добавили класс для текста
+    'labelClass'   => null,
 ])
 
 @php
     $id = $id ?? 'checkbox-' . uniqid();
     $hasError = !empty($error);
+    
+    // Безопасное определение состояния (понимает строки "true", "1", "false", "0" и булевы)
     $isMultiple = is_array($checked);
-    $isChecked = $isMultiple ? in_array($value, $checked ?? []) : (bool)$checked;
+    $isChecked = $isMultiple 
+        ? in_array($value, $checked ?? []) 
+        : filter_var($checked, FILTER_VALIDATE_BOOLEAN);
 
     $variantClasses = [
         'primary' => [
@@ -58,34 +62,29 @@
     $hasAlpineModel = $attributes->has('x-model') || $attributes->has('wire:model');
     $hasAlpineValue = $attributes->has('x-bind:value') || $attributes->has(':value');
 
+    // Оставляем только то, что не объявлено в @props, чтобы передать в <input>
     $inputAttributes = $attributes->except([
         'class', 'wrapperClass', 'variant', 'size', 'error', 'checked', 
         'id', 'name', 'value', 'required', 'disabled', 'labelClass'
     ]);
-    
-    $wrapperAttributes = $attributes->only(['class', 'wrapperClass']);
 @endphp
 
 <label
     for="{{ $id }}"
-    {{ $wrapperAttributes->class([
-        'inline-flex items-center',
-        $disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer',
-        $wrapperClass ?? ''
-    ]) }}
+    class="inline-flex items-center {{ $disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer' }} {{ $wrapperClass ?? '' }}"
 >
     <input
         type="checkbox"
         id="{{ $id }}"
         @if($name) name="{{ $name }}" @endif
         @if($hasAlpineValue)
-            {{-- Alpine сам подставит value --}}
+            {{-- Alpine/Livewire сами подставят значение --}}
         @else
             value="{{ $value }}"
         @endif
         
         @if(!$hasAlpineModel)
-            {{ $isChecked ? 'checked' : '' }}
+            @if($isChecked) checked @endif
         @endif
 
         {{ $disabled ? 'disabled' : '' }}

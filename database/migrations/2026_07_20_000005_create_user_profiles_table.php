@@ -15,10 +15,7 @@ return new class extends Migration
 
             // === БАЗОВАЯ ИНФА ===
             $table->enum('gender', ['male', 'female'])->nullable()->index();
-            
-            // Храним только дату рождения. Индекс на ней дает максимальную скорость для фильтров
             $table->date('birth_date')->nullable()->index(); 
-            
             $table->enum('dating_goal', ['friends', 'romantic', 'family', 'casual', 'travel'])->nullable()->index();
             
             // === СПРАВОЧНИКИ ===
@@ -57,7 +54,12 @@ return new class extends Migration
             $table->jsonb('sports')->nullable();
 
             // === РАБОТА И ОБРАЗОВАНИЕ ===
-            $table->string('education')->nullable();           
+            // ИЗМЕНЕНО: education -> education_level (тип TinyInteger для совпадения с конфигом)
+            $table->unsignedTinyInteger('education_level')->default(0);
+            
+            // ДОБАВЛЕНО: income
+            $table->unsignedTinyInteger('income')->default(0);
+            
             $table->string('institution')->nullable();
             $table->unsignedSmallInteger('institution_year')->nullable();
             $table->string('activity')->nullable();
@@ -71,16 +73,18 @@ return new class extends Migration
         });
 
         // === КРИТИЧЕСКИ ВАЖНЫЕ ИНДЕКСЫ ===
-        
-        // Составной индекс для ленты свайпов (Пол + Дата рождения)
-        // База будет фильтровать по birth_date вместо age, что работает в 100 раз быстрее!
         DB::statement('CREATE INDEX user_profiles_gender_birthdate_index ON user_profiles (gender, birth_date)');
 
         // Индексы для частых фильтров
         DB::statement('CREATE INDEX user_profiles_body_type_index ON user_profiles (body_type)');
         DB::statement('CREATE INDEX user_profiles_smoking_index ON user_profiles (smoking)');
         DB::statement('CREATE INDEX user_profiles_relationship_status_index ON user_profiles (relationship_status)');
-        DB::statement('CREATE INDEX user_profiles_education_index ON user_profiles (education)');
+        
+        // ИЗМЕНЕНО: Индекс переименован под новую колонку
+        DB::statement('CREATE INDEX user_profiles_education_level_index ON user_profiles (education_level)');
+        
+        // ДОБАВЛЕНО: Индекс на доход
+        DB::statement('CREATE INDEX user_profiles_income_index ON user_profiles (income)');
         
         // Пространственный индекс для геолокации
         DB::statement('CREATE INDEX user_profiles_location_sidx ON user_profiles USING GIST (location)');

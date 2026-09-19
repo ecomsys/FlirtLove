@@ -16,7 +16,10 @@ class SwipeController extends Controller
             'type' => 'required|in:like,dislike,superlike'
         ]);
 
-        $authId = auth()->id();
+        /** @var \App\Models\User $authUser */
+        $authUser = $request->user();
+        
+        $authId = $authUser->id;
         $targetId = $user->id;
 
         if ($authId === $targetId) {
@@ -68,6 +71,7 @@ class SwipeController extends Controller
                 $user1Id = min($authId, $targetId);
                 $user2Id = max($authId, $targetId);
 
+                /** @var UserMatch|null $existingMatch */
                 $existingMatch = UserMatch::where('user1_id', $user1Id)
                     ->where('user2_id', $user2Id)
                     ->active() // Проверяем только активные мэтчи

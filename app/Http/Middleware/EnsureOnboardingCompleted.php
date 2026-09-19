@@ -12,35 +12,42 @@ class EnsureOnboardingCompleted
     {
         $user = Auth::user();
 
-        // 1. Если гость — просто пропускаем. Главные страницы работают для всех!
+        // 1. Если гость — просто пропускаем
         if (! $user) {
             return $next($request);
         }
 
-        // 2. Персонал (админ/модератор) не мучается верификацией на клиенте
+        // 2. Персонал не мучается верификацией на клиенте
         if (in_array($user->role, ['admin', 'moderator', 'support'])) {
             return $next($request);
         }
 
-        // 3. Если юзер залогинен, но НЕ подтвердил email
-        // Пускаем его ТОЛЬКО на страницы верификации, выхода и онбординга.
-        // Любая другая ссылка (даже на главную) кидает его обратно на verify-email
+        // 3. ВАЖНО: Пропускаем AJAX, Livewire и API запросы!
+        // Без этого фронтенд ломается (не работает выход, смена темы и т.д.),
+        // потому что fetch() получает HTML редирект вместо JSON ответа.
+        if ($request->ajax() || $request->is('livewire/*') || $request->is('api/*')) {
+            return $next($request);
+        }
+
+        // Маршруты, которые доступны ВСЕГДА
+        $allowedRoutes = ['verification.*', 'logout', 'onboarding.*'];
+
+        // 4. Если юзер залогинен, но НЕ подтвердил email
         if (! $user->hasVerifiedEmail()) {
-            if (! $request->routeIs('verification.*') && ! $request->routeIs('logout') && ! $request->routeIs('onboarding.*')) {
+            if (! $request->routeIs($allowedRoutes)) {
                 return redirect()->route('verification.notice');
             }
             return $next($request);
         }
 
-        // 4. Если email подтвержден, но онбординг не пройден
-        // Пускаем только на онбординг, выход и верификацию
+        // 5. Если email подтвержден, но онбординг не пройден
         if (! $user->hasCompletedOnboarding()) {
-            if (! $request->routeIs('onboarding.*') && ! $request->routeIs('logout') && ! $request->routeIs('verification.*')) {
+            if (! $request->routeIs($allowedRoutes)) {
                 return redirect()->route('onboarding.index');
             }
         }
 
-        // 5. Если всё пройдено — пропускаем
+        // 6. Если всё пройдено — пропускаем
         return $next($request);
     }
 }

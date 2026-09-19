@@ -1,4 +1,4 @@
-<?php 
+<?php
 
 namespace Database\Seeders;
 
@@ -10,6 +10,7 @@ use App\Models\Album;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 class AdminSeeder extends Seeder
 {
@@ -39,14 +40,14 @@ class AdminSeeder extends Seeder
         $founderIds = [];
 
         foreach ($founders as $founderData) {
-            
+
             // Используем withoutEvents, чтобы избежать вызова User::booted() 
-            // и автоматического создания пустых профилей, которые могут вызывать ошибку с 'age'
             $admin = User::withoutEvents(function () use ($founderData) {
                 return User::updateOrCreate(
                     ['email' => $founderData['email']],
                     [
                         'name' => $founderData['name'],
+                        'slug' => Str::slug($founderData['name']) . '-' . Str::lower(Str::random(8)),
                         'password' => Hash::make($founderData['password']),
                         'role' => User::ROLE_ADMIN,
                         'status' => User::STATUS_ACTIVE,
@@ -62,17 +63,16 @@ class AdminSeeder extends Seeder
                 );
             });
 
-            // Теперь вручную и безопасно создаем все связи в транзакции
             DB::transaction(function () use ($admin, $founderData, $russia, $moscow) {
-                
+
                 UserProfile::updateOrCreate(
                     ['user_id' => $admin->id],
                     [
                         'gender' => 'male',
-                        'birth_date' => '1990-01-01', // Возраст вычислится сам через аксессор
+                        'birth_date' => '1990-01-01',
                         'dating_goal' => 'friends',
-                        'city_id' => $moscow->id ?? null, 
-                        'country_id' => $russia->id ?? null, 
+                        'city_id' => $moscow->id ?? null,
+                        'country_id' => $russia->id ?? null,
                         'headline' => $founderData['name'] . ' сайта',
                         'bio' => 'Я тут главный! Если есть вопросы - пишите в поддержку. 😎',
                         'looking_for' => 'Помогаем пользователям находить любовь ❤️',
@@ -89,10 +89,13 @@ class AdminSeeder extends Seeder
                         'has_car' => 1,
                         'smoking' => 1,
                         'alcohol' => 1,
-                        'zodiac_sign' => 10, 
-                        'languages' => [1, 2], 
+                        'zodiac_sign' => 10,
+                        'languages' => [1, 2],
                         'sports' => [1, 2],
-                        'education' => 'Высшее',                   
+                        // ИЗМЕНЕНО: education -> education_level (6 = Высшее)
+                        'education_level' => 6,
+                        // ДОБАВЛЕНО: income (4 = На всё хватает и остаётся)
+                        'income' => 4,
                         'institution' => 'МГУ',
                         'institution_year' => 2012,
                         'activity' => 'IT',
@@ -113,7 +116,7 @@ class AdminSeeder extends Seeder
                         'is_invisible' => false,
                         'hide_intimate' => false,
                         'disable_photo_comments' => false,
-                        'hide_from_search' => true, 
+                        'hide_from_search' => true,
                         'push_enabled' => true,
                         'email_enabled' => true,
                         'visibility_gender' => 'any',
@@ -145,7 +148,7 @@ class AdminSeeder extends Seeder
                         'name' => 'Фото владельца',
                         'description' => 'Скрытые фотографии',
                         'is_private' => false,
-                        'photos_count' => 0, 
+                        'photos_count' => 0,
                     ]
                 );
             });

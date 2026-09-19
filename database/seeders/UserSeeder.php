@@ -24,7 +24,7 @@ class UserSeeder extends Seeder
 
         $genders = ['male', 'female'];
         $goals = ['friends', 'romantic', 'family', 'casual', 'travel'];
-        
+
         $bios = [
             "Люблю путешествия и активный отдых. Ищу единомышленников.",
             "Ищу серьезные отношения. Ценю честность и юмор.",
@@ -38,10 +38,38 @@ class UserSeeder extends Seeder
             "Мечтаю о семье и уюте. Хочу детей в будущем.",
             "Просто хочу найти классных людей для общения."
         ];
+
+        // ДОБАВИ ЭТО: Короткие и длинные автопортреты для теста аккордеона
+        $shortPortraits = [
+            "Скромный, люблю пиццу и котиков.",
+            "Ищу приключений и хорошего настроения.",
+            "Работаю, отдыхаю, живу на полную.",
+            "Ценю честность и хороший юмор."
+        ];
+
+        $longPortraits = [
+            [
+                "Я человек разносторонний. Обожаю путешествия, особенно спонтанные. Был в 15 странах, но всегда возвращаюсь домой.",
+                "В людях ценю искренность и умение держать слово. Не люблю драму, предпочитаю решать проблемы по мере поступления.",
+                "В свободное время хожу в горы, читаю фантастику и учу испанский. Ищу человека, с которым можно обсудить всё на свете за чашкой кофе."
+            ],
+            [
+                "С детства мечтал стать архитектором, и вот я здесь. Проектирую дома, а в свободное время рисую комиксы.",
+                "Считаю, что главное в жизни — это баланс. Поэтому стараюсь уделять время и работе, и хобби, и близким.",
+                "Ищу девушку, которая разделяет мои интересы или готова разделить свои. Обещаю не скучать и кормить вкусными завтраками!"
+            ],
+            [
+                "Привет! Я считаю, что идеальных людей нет, но есть те, кто идеально подходят друг другу.",
+                "Я люблю долгие прогулки по вечернему городу, вкусную еду и хорошие фильмы. Не терплю ложь и предательство.",
+                "Если ты ищешь стабильность, заботу и море внимания — напиши мне. Обещаю, будет интересно!"
+            ]
+        ];
+
         $institutions = ["МГУ", "СПбГУ", "Кембридж", "МГТУ им. Баумана", "МГИМО", "ВШЭ"];
         $activities = ["IT", "Медицина", "Маркетинг", "Финансы", "Дизайн", "Образование", "Продажи"];
         $positions = ["Разработчик", "Менеджер проекта", "Врач-терапевт", "Учитель", "Дизайнер интерфейсов", "Бухгалтер", "Маркетолог"];
 
+        // Обновили фолбэк, добавили income
         $options = config('profile_fields.options', [
             'body_type' => [1 => 'Среднее', 2 => 'Спортивное', 3 => 'Полное'],
             'eye_color' => [1 => 'Карие', 2 => 'Голубые'],
@@ -57,9 +85,10 @@ class UserSeeder extends Seeder
             'languages' => [1 => 'Русский', 2 => 'Английский'],
             'sports' => [1 => 'Бег', 2 => 'Шахматы'],
             'education_level' => [1 => 'Среднее', 2 => 'Высшее'],
+            'income' => [2 => 'Средний', 3 => 'Выше среднего', 4 => 'Высокий'],
         ]);
 
-        $getRandomIds = function(array $options, int $min = 1, int $max = 3): array {
+        $getRandomIds = function (array $options, int $min = 1, int $max = 3): array {
             $keys = array_keys($options);
             shuffle($keys);
             $count = rand($min, min($max, count($keys)));
@@ -74,30 +103,31 @@ class UserSeeder extends Seeder
             $month = rand(1, 12);
             $day = rand(1, 28);
             $birthDate = "{$year}-{$month}-{$day}";
-            
+
             // Определяем пол заранее, чтобы подобрать имя
             $gender = $genders[array_rand($genders)];
-            $name = $gender === 'male' 
-                ? $maleNames[array_rand($maleNames)] 
+            $name = $gender === 'male'
+                ? $maleNames[array_rand($maleNames)]
                 : $femaleNames[array_rand($femaleNames)];
 
             $isPremium = rand(1, 10) <= 3;
             $premiumExpires = $isPremium ? now()->addDays(rand(10, 365)) : null;
 
             if (in_array($i, [8, 9, 10])) {
-                $ip = '185.23.44.12'; 
+                $ip = '185.23.44.12';
                 $status = User::STATUS_SHADOWBANNED;
             } else {
                 $ip = rand(100, 220) . '.' . rand(10, 250) . '.' . rand(1, 255) . '.' . rand(1, 255);
                 $status = User::STATUS_ACTIVE;
             }
 
-            // 1. Создаем Юзера (Передаем $name в use)
+            // 1. Создаем Юзера
             $user = User::withoutEvents(function () use ($i, $name, $status, $ip, $isPremium, $premiumExpires) {
                 return User::updateOrCreate(
                     ['email' => 'user' . $i . '@test.com'],
                     [
-                        'name' => $name, // Подставляем нормальное имя
+                        'name' => $name,
+                        'slug' => Str::slug($name) . '-' . Str::lower(Str::random(8)), 
                         'password' => Hash::make('password'),
                         'email_verified_at' => now(),
                         'role' => User::ROLE_USER,
@@ -106,18 +136,18 @@ class UserSeeder extends Seeder
                         'is_verified' => (bool) rand(0, 1),
                         'has_completed_onboarding' => true,
                         'last_login_at' => now()->subDays(rand(0, 30)),
-                        'last_login_ip' => $ip, 
+                        'last_login_ip' => $ip,
                         'last_seen' => now()->subMinutes(rand(1, 4320)),
                     ]
                 );
             });
 
-            $lat = 55.5 + (rand(0, 100) / 100); 
-            $lng = 37.3 + (rand(0, 100) / 100); 
+            $lat = 55.5 + (rand(0, 100) / 100);
+            $lng = 37.3 + (rand(0, 100) / 100);
 
             // 2. Создаем связи в транзакции
-            DB::transaction(function () use ($user, $gender, $genders, $birthDate, $month, $day, $goals, $cityIds, $russia, $bios, $lookingFors, $options, $getRandomIds, $institutions, $activities, $positions, $lng, $lat, $isPremium) {
-                
+            DB::transaction(function () use ($user, $gender, $genders, $birthDate, $month, $day, $goals, $cityIds, $russia, $bios, $lookingFors, $options, $getRandomIds, $institutions, $activities, $positions, $lng, $lat, $isPremium, $shortPortraits, $longPortraits) {
+
                 UserProfile::updateOrCreate(
                     ['user_id' => $user->id],
                     [
@@ -129,8 +159,7 @@ class UserSeeder extends Seeder
                         'headline' => $bios[array_rand($bios)],
                         'bio' => $bios[array_rand($bios)],
                         'looking_for' => $lookingFors[array_rand($lookingFors)],
-                        'interests' => ['музыка', 'кино', 'спорт', 'путешествия', 'книги'],
-                        'self_portrait' => null,
+                        'interests' => ['музыка', 'кино', 'спорт', 'путешествия', 'книги'],                        
                         'body_type' => array_rand($options['body_type']),
                         'eye_color' => array_rand($options['eye_color']),
                         'hair_color' => array_rand($options['hair_color']),
@@ -147,12 +176,19 @@ class UserSeeder extends Seeder
                         'body_decorations' => $getRandomIds($options['body_decorations'], 0, 2),
                         'languages' => $getRandomIds($options['languages'], 1, 3),
                         'sports' => $getRandomIds($options['sports'], 0, 4),
-                        'education' => array_rand($options['education_level']),                    
+
+                        'education_level' => array_rand($options['education_level']),
+
+                        'income' => array_rand($options['income']),
                         'institution' => $institutions[array_rand($institutions)],
                         'institution_year' => rand(2005, (int) date('Y') - 1),
                         'activity' => $activities[array_rand($activities)],
                         'position' => $positions[array_rand($positions)],
                         'location' => DB::raw("ST_SetSRID(ST_MakePoint({$lng}, {$lat}), 4326)::geography"),
+
+                        'self_portrait' => (rand(0, 1) === 1)
+                            ? [$shortPortraits[array_rand($shortPortraits)]]
+                            : $longPortraits[array_rand($longPortraits)],
                     ]
                 );
 
@@ -194,7 +230,7 @@ class UserSeeder extends Seeder
                         'allow_auto_messages' => (bool) rand(0, 1),
                         'chat_widget_enabled' => true,
                         'chat_sound_enabled' => true,
-                        'email_settings' => json_encode($emailSettings), 
+                        'email_settings' => json_encode($emailSettings),
                     ]
                 );
 
@@ -229,22 +265,22 @@ class UserSeeder extends Seeder
     private function getZodiacSign(int $month, int $day): int
     {
         $zodiacs = [
-            1 => ['start' => '03-21', 'end' => '04-19'], 
-            2 => ['start' => '04-20', 'end' => '05-20'], 
-            3 => ['start' => '05-21', 'end' => '06-20'], 
-            4 => ['start' => '06-21', 'end' => '07-22'], 
-            5 => ['start' => '07-23', 'end' => '08-22'], 
-            6 => ['start' => '08-23', 'end' => '09-22'], 
-            7 => ['start' => '09-23', 'end' => '10-22'], 
-            8 => ['start' => '10-23', 'end' => '11-21'], 
-            9 => ['start' => '11-22', 'end' => '12-21'], 
-            10 => ['start' => '12-22', 'end' => '01-19'], 
-            11 => ['start' => '01-20', 'end' => '02-18'], 
-            12 => ['start' => '02-19', 'end' => '03-20'], 
+            1 => ['start' => '03-21', 'end' => '04-19'],
+            2 => ['start' => '04-20', 'end' => '05-20'],
+            3 => ['start' => '05-21', 'end' => '06-20'],
+            4 => ['start' => '06-21', 'end' => '07-22'],
+            5 => ['start' => '07-23', 'end' => '08-22'],
+            6 => ['start' => '08-23', 'end' => '09-22'],
+            7 => ['start' => '09-23', 'end' => '10-22'],
+            8 => ['start' => '10-23', 'end' => '11-21'],
+            9 => ['start' => '11-22', 'end' => '12-21'],
+            10 => ['start' => '12-22', 'end' => '01-19'],
+            11 => ['start' => '01-20', 'end' => '02-18'],
+            12 => ['start' => '02-19', 'end' => '03-20'],
         ];
 
         $date = sprintf('%02d-%02d', $month, $day);
-        
+
         foreach ($zodiacs as $signId => $dates) {
             if ($signId === 10) {
                 if ($date >= $dates['start'] || $date <= $dates['end']) {
@@ -257,6 +293,6 @@ class UserSeeder extends Seeder
             }
         }
 
-        return 1; 
+        return 1;
     }
 }
