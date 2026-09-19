@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Illuminate\Support\Str;
 use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
@@ -17,7 +18,7 @@ class User extends Authenticatable implements MustVerifyEmail
 {
     use HasApiTokens, HasFactory, Notifiable, SoftDeletes;
 
-       // === КОНСТАНТЫ РОЛЕЙ ===
+    // === КОНСТАНТЫ РОЛЕЙ ===
     public const ROLE_USER = 'user';
     public const ROLE_ADMIN = 'admin';
     public const ROLE_MODERATOR = 'moderator';
@@ -31,15 +32,26 @@ class User extends Authenticatable implements MustVerifyEmail
 
 
     protected $fillable = [
-        'name', 'email', 'password', 'phone',
-        'role', 'status', 'ban_reason', 'banned_until',
-        'premium_expires_at', 'vip_expires_at', 
-        'is_verified', 'has_completed_onboarding',
-        'last_seen', 'last_login_at', 'last_login_ip' 
+        'name',
+        'email',
+        'password',
+        'phone',
+        'role',
+        'status',
+        'ban_reason',
+        'banned_until',
+        'premium_expires_at',
+        'vip_expires_at',
+        'is_verified',
+        'has_completed_onboarding',
+        'last_seen',
+        'last_login_at',
+        'last_login_ip'
     ];
 
     protected $hidden = [
-        'password', 'remember_token',
+        'password',
+        'remember_token',
     ];
 
     protected function casts(): array
@@ -49,12 +61,12 @@ class User extends Authenticatable implements MustVerifyEmail
             'email_verified_at' => 'datetime',
             'phone_verified_at' => 'datetime',
             'last_login_at' => 'datetime',
-            'last_seen' => 'datetime',            
+            'last_seen' => 'datetime',
             'banned_until' => 'datetime',
             'premium_expires_at' => 'datetime', // Убрали boolean is_premium
             'vip_expires_at' => 'datetime',      // Убрали boolean is_vip
             'is_verified' => 'boolean',
-            'has_completed_onboarding' => 'boolean',            
+            'has_completed_onboarding' => 'boolean',
         ];
     }
 
@@ -82,26 +94,68 @@ class User extends Authenticatable implements MustVerifyEmail
     // ============================================
     // СВЯЗИ (ОТНОШЕНИЯ)
     // ============================================
-    public function subscriptions(): HasMany { return $this->hasMany(UserSubscription::class); }
-    public function boosts(): HasMany { return $this->hasMany(UserBoost::class); }
+    public function subscriptions(): HasMany
+    {
+        return $this->hasMany(UserSubscription::class);
+    }
+    public function boosts(): HasMany
+    {
+        return $this->hasMany(UserBoost::class);
+    }
 
-    public function diaryLikes(): HasMany { return $this->hasMany(DiaryLike::class); }
+    public function diaryLikes(): HasMany
+    {
+        return $this->hasMany(DiaryLike::class);
+    }
 
-    public function favorites(): HasMany { return $this->hasMany(UserFavorite::class, 'user_id'); }
-    public function favoritedBy(): HasMany { return $this->hasMany(UserFavorite::class, 'favorite_user_id'); }
+    public function favorites(): HasMany
+    {
+        return $this->hasMany(UserFavorite::class, 'user_id');
+    }
+    public function favoritedBy(): HasMany
+    {
+        return $this->hasMany(UserFavorite::class, 'favorite_user_id');
+    }
 
-    public function diaryCommentLikes(): HasMany { return $this->hasMany(DiaryCommentLike::class); }
-    public function adminLogs(): HasMany { return $this->hasMany(AdminLog::class, 'admin_id'); }
+    public function diaryCommentLikes(): HasMany
+    {
+        return $this->hasMany(DiaryCommentLike::class);
+    }
+    public function adminLogs(): HasMany
+    {
+        return $this->hasMany(AdminLog::class, 'admin_id');
+    }
 
-    public function profile(): HasOne { return $this->hasOne(UserProfile::class); }
-    public function preferences(): HasOne { return $this->hasOne(UserPreference::class); }
-    public function balance(): HasOne { return $this->hasOne(UserBalance::class); }
+    public function profile(): HasOne
+    {
+        return $this->hasOne(UserProfile::class);
+    }
+    public function preferences(): HasOne
+    {
+        return $this->hasOne(UserPreference::class);
+    }
+    public function balance(): HasOne
+    {
+        return $this->hasOne(UserBalance::class);
+    }
 
-    public function albums(): HasMany { return $this->hasMany(Album::class); }
-    public function defaultAlbum(): HasOne { return $this->hasOne(Album::class)->where('is_default', true); }
+    public function albums(): HasMany
+    {
+        return $this->hasMany(Album::class);
+    }
+    public function defaultAlbum(): HasOne
+    {
+        return $this->hasOne(Album::class)->where('is_default', true);
+    }
 
-    public function photos(): HasMany { return $this->hasMany(Photo::class); }
-    public function comments(): HasMany { return $this->hasMany(PhotoComment::class); }
+    public function photos(): HasMany
+    {
+        return $this->hasMany(Photo::class);
+    }
+    public function comments(): HasMany
+    {
+        return $this->hasMany(PhotoComment::class);
+    }
 
     public function chats(): BelongsToMany
     {
@@ -110,22 +164,64 @@ class User extends Authenticatable implements MustVerifyEmail
             ->withTimestamps();
     }
 
-    public function messages(): HasMany { return $this->hasMany(Message::class, 'sender_id'); }
-    public function giftsSent(): HasMany { return $this->hasMany(UserGift::class, 'sender_id'); }
-    public function giftsReceived(): HasMany { return $this->hasMany(UserGift::class, 'receiver_id'); }
-    public function transactions(): HasMany { return $this->hasMany(Transaction::class); }  
-    public function reportsMade(): HasMany { return $this->hasMany(Report::class, 'reporter_id'); }
-    public function reportsAgainst(): HasMany { return $this->hasMany(Report::class, 'reported_id'); }
-    public function swipesGiven(): HasMany { return $this->hasMany(Swipe::class, 'user_id'); }
-    public function swipesReceived(): HasMany { return $this->hasMany(Swipe::class, 'target_user_id'); }
+    public function messages(): HasMany
+    {
+        return $this->hasMany(Message::class, 'sender_id');
+    }
+    public function giftsSent(): HasMany
+    {
+        return $this->hasMany(UserGift::class, 'sender_id');
+    }
+    public function giftsReceived(): HasMany
+    {
+        return $this->hasMany(UserGift::class, 'receiver_id');
+    }
+    public function transactions(): HasMany
+    {
+        return $this->hasMany(Transaction::class);
+    }
+    public function reportsMade(): HasMany
+    {
+        return $this->hasMany(Report::class, 'reporter_id');
+    }
+    public function reportsAgainst(): HasMany
+    {
+        return $this->hasMany(Report::class, 'reported_id');
+    }
+    public function swipesGiven(): HasMany
+    {
+        return $this->hasMany(Swipe::class, 'user_id');
+    }
+    public function swipesReceived(): HasMany
+    {
+        return $this->hasMany(Swipe::class, 'target_user_id');
+    }
 
-    public function matchesAsUser1(): HasMany { return $this->hasMany(UserMatch::class, 'user1_id'); }
-    public function matchesAsUser2(): HasMany { return $this->hasMany(UserMatch::class, 'user2_id'); }    
+    public function matchesAsUser1(): HasMany
+    {
+        return $this->hasMany(UserMatch::class, 'user1_id');
+    }
+    public function matchesAsUser2(): HasMany
+    {
+        return $this->hasMany(UserMatch::class, 'user2_id');
+    }
 
-    public function profileViewers(): HasMany { return $this->hasMany(ProfileView::class, 'viewed_id'); } 
-    public function blockedUsers(): HasMany { return $this->hasMany(UserBlock::class, 'blocker_id'); } 
-    public function blockers(): HasMany { return $this->hasMany(UserBlock::class, 'blocked_id'); } 
-    public function verifications(): HasMany { return $this->hasMany(Verification::class); }
+    public function profileViewers(): HasMany
+    {
+        return $this->hasMany(ProfileView::class, 'viewed_id');
+    }
+    public function blockedUsers(): HasMany
+    {
+        return $this->hasMany(UserBlock::class, 'blocker_id');
+    }
+    public function blockers(): HasMany
+    {
+        return $this->hasMany(UserBlock::class, 'blocked_id');
+    }
+    public function verifications(): HasMany
+    {
+        return $this->hasMany(Verification::class);
+    }
 
     public function subscribedAuthors(): BelongsToMany
     {
@@ -166,7 +262,7 @@ class User extends Authenticatable implements MustVerifyEmail
             return false;
         }
         return is_null($this->banned_until) || $this->banned_until->isFuture();
-    } 
+    }
 
     public function getIsOnlineAttribute(): bool
     {
@@ -174,11 +270,13 @@ class User extends Authenticatable implements MustVerifyEmail
     }
 
     // НОВЫЕ АКСЕССОРЫ БЕЗ БУЛЕВЫХ ФЛАГОВ
-    public function getHasActivePremiumAttribute(): bool {
+    public function getHasActivePremiumAttribute(): bool
+    {
         return $this->premium_expires_at && $this->premium_expires_at->isFuture();
     }
 
-    public function getHasActiveVipAttribute(): bool {
+    public function getHasActiveVipAttribute(): bool
+    {
         return $this->vip_expires_at && $this->vip_expires_at->isFuture();
     }
 
@@ -186,17 +284,17 @@ class User extends Authenticatable implements MustVerifyEmail
     {
         if ($this->relationLoaded('photos')) {
             $photos = $this->getRelation('photos');
-            
+
             if ($photos && $photos->isNotEmpty()) {
                 $photo = $photos->firstWhere(fn($p) => $p->is_primary && $p->status === 'approved')
                     ?? $photos->firstWhere('status', 'approved')
                     ?? $photos->firstWhere('is_primary', true)
                     ?? $photos->first();
-                
+
                 return $photo ? ($photo->thumb_url ?: '') : '';
             }
         }
-        
+
         return '';
     }
 
@@ -238,9 +336,13 @@ class User extends Authenticatable implements MustVerifyEmail
     {
         if (!$this->relationLoaded('preferences') || !$this->preferences) {
             return [
-                'on_message' => true, 'on_like' => true, 'on_view' => false,
-                'on_photo_moderated' => true, 'on_report' => true,
-                'on_ban' => true, 'on_broadcast' => true
+                'on_message' => true,
+                'on_like' => true,
+                'on_view' => false,
+                'on_photo_moderated' => true,
+                'on_report' => true,
+                'on_ban' => true,
+                'on_broadcast' => true
             ];
         }
         return $this->preferences->email_settings;
@@ -261,9 +363,20 @@ class User extends Authenticatable implements MustVerifyEmail
 
     // ============================================
     // СОБЫТИЯ МОДЕЛИ (Booted)
-    // ============================================
+    // ============================================  
+
     protected static function booted()
     {
+        // Генерация слага при создании (O(1) - без запросов в БД)
+        static::creating(function (User $user) {
+            $baseSlug = Str::slug($user->name);
+            if (empty($baseSlug)) {
+                $baseSlug = 'user';
+            }            
+            $user->slug = $baseSlug . '-' . Str::lower(Str::random(8));
+        });
+
+        // Твой существующий код создания профилей и балансов
         static::created(function (User $user) {
             DB::transaction(function () use ($user) {
                 $user->profile()->create();
@@ -272,5 +385,11 @@ class User extends Authenticatable implements MustVerifyEmail
                 Album::createDefaultForUser($user);
             });
         });
+    }
+
+    // Говорим Laravel использовать slug в URL вместо id
+    public function getRouteKeyName()
+    {
+        return 'slug';
     }
 }

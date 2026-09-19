@@ -19,6 +19,8 @@
     @stack('styles')
     <style>[x-cloak] { display: none !important; }</style>
 
+    <script>window.LIVEWIRE_ENABLED = false;</script>
+
     {{-- хелпер для определения темы --}}
     @include('partials.theme-bootstrap')
 
@@ -29,26 +31,33 @@
     <div class="min-h-screen flex flex-col">
         
         @if ($isAuthPage)
-            <livewire:layout.guest.auth-navigation />
-        @elseif ($isAuth)
-            <livewire:layout.inapp.navigation />
+            <x-layout.guest.auth-navigation />      
         @else
-            <livewire:layout.guest.home-navigation />
+            <x-layout.guest.home-navigation />
         @endif
 
         <main class="flex-1">
             {{ $slot }}
         </main>
-
-        <livewire:layout.footer />
+      
+         @if ($isAuthPage)
+            <x-layout.guest.footer />       
+        @else
+            <x-layout.inapp.footer />       
+        @endif
+        
     </div>
 
     <!-- Глобальный спиннер для wire:navigate -->
     <x-navigate-loader />
 
-    <livewire:modals.login-modal />
-    <livewire:modals.forgot-password-modal />
+    {{-- Модалка входа --}}
+    <x-modals.auth.login-modal />
+
+    <x-modals.auth.forgot-password-modal />
+
     <x-ui.sonner expand="true" />
+    
     
     @stack('scripts')
 </body>

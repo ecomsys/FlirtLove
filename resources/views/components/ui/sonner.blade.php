@@ -97,7 +97,7 @@
     role="region"
     aria-label="Notifications"
     tabindex="-1"
-    class="pointer-events-none fixed z-[100] flex w-full p-4 sm:max-w-[420px] {{ $posClass }}"
+    class="pointer-events-none fixed z-[1000] flex w-full p-4 sm:max-w-[420px] {{ $posClass }}"
     {{ $attributes }}
 >
     <div

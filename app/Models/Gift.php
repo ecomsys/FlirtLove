@@ -16,6 +16,7 @@ class Gift extends Model
         'price',
         'category',
         'is_active',
+        'type',  
     ];
 
     protected $casts = [

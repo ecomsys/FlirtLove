@@ -22,7 +22,7 @@ new class extends Component {
             <!-- Левая часть: Лого + Навигация -->
             <div class="flex items-center gap-6">
                 <a href="{{ route('home') }}" wire:navigate class="flex items-center gap-2.5 group shrink-0">
-                    <x-application-logo
+                    <x-svg.application-logo
                         class="w-8 h-8 fill-current text-foreground group-hover:text-primary transition-colors" />
 
                     @php
@@ -58,7 +58,7 @@ new class extends Component {
 
             <!-- Правая часть -->
             <div class="flex items-center gap-2 sm:gap-4">
-                <livewire:theme-switcher />
+                <x-theme-switcher />
 
 
                 <!-- Кнопка выхода через Livewire -->

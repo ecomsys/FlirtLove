@@ -16,6 +16,8 @@
     @stack('styles')
     <style>[x-cloak] { display: none !important; }</style>
 
+    <script>window.LIVEWIRE_ENABLED = true;</script>
+
     {{-- хелпер для определения темы --}}
     @include('partials.theme-bootstrap')
 

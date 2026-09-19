@@ -1,82 +1,86 @@
 <?php
-use App\Http\Controllers\Web\OnboardingController;
 
-use App\Livewire\Web\Home;
-use App\Livewire\Web\Blog\BlogIndex;
-use App\Livewire\Web\Blog\BlogShow;
-use App\Http\Controllers\Web\ProfileActionController;
-use App\Http\Controllers\Auth\SocialAuthController;
 use Illuminate\Support\Facades\Route;
 use Livewire\Volt\Volt;
 
+// Глобальные контроллеры
+use App\Http\Controllers\GiftController;
 use App\Http\Controllers\SwipeController;
-use App\Http\Controllers\Web\HomeController;
-use App\Http\Controllers\Web\FeedController; 
-use App\Http\Controllers\Web\ProfileController;
-// === ГЛАВНАЯ СТРАНИЦА ===
-// Route::get('/', Home::class)
-//     ->middleware('onboarding') // Теперь безопасно для гостей после фикса middleware
-//     ->name('home');
+use App\Http\Controllers\BillingController;
+use App\Http\Controllers\SettingsController;
 
-// === ГЛАВНАЯ СТРАНИЦА ===
+use App\Http\Controllers\Auth\LoginController;
+use App\Http\Controllers\Auth\ForgotPasswordController;
+use App\Http\Controllers\Auth\SocialAuthController;
+
+// Контроллеры страниц
+use App\Http\Controllers\Web\Blog\BlogController;
+use App\Http\Controllers\Web\Home\HomeController;
+use App\Http\Controllers\Web\Feed\FeedController;
+use App\Http\Controllers\Web\Onboarding\OnboardingController;
+
+use App\Http\Controllers\Web\User\UserController;
+use App\Http\Controllers\Web\User\UserActionController;
+
+// === ГЛАВНЫЕ СТРАНИЦЫ (Доступны всем) ===
 Route::get('/', [HomeController::class, 'index'])->name('home');
-Route::get('/user/{id}', [ProfileController::class, 'show'])->name('user.profile');
-
-
-
+Route::get('/user/{user}', [UserController::class, 'show'])->name('user.show');
 Route::get('/search', [HomeController::class, 'searchPage'])->name('search.page');
-// API для ленты (переведено на FeedController)
+
+// API для ленты
 Route::get('/api/users/search', [FeedController::class, 'search'])->name('api.users.search');
 
+// === AJAX РОУТЫ ДЛЯ МОДАЛОК (Доступны всем) ===
+Route::get('/ajax/captcha/login', [LoginController::class, 'getCaptcha'])->name('ajax.captcha.login');
+Route::post('/ajax/login', [LoginController::class, 'ajaxLogin'])->name('ajax.login');
+
+Route::get('/ajax/captcha/forgot', [ForgotPasswordController::class, 'getCaptcha'])->name('ajax.captcha.forgot');
+Route::post('/ajax/forgot-password', [ForgotPasswordController::class, 'sendResetLink'])->name('ajax.forgot.password');
+
+// === БЛОГ ===
+Route::get('/blog', [BlogController::class, 'index'])->name('blog.index');
+Route::get('/blog/{post:slug}', [BlogController::class, 'show'])->name('blog.show');
 
 // === АВТОРИЗАЦИЯ ЧЕРЕЗ СОЦСЕТИ ===
 Route::get('/auth/{provider}/redirect', [SocialAuthController::class, 'redirect'])
     ->where('provider', 'vkontakte|odnoklassniki|mailru|yandex|google')
     ->name('social.redirect');
-    
+
 Route::get('/auth/{provider}/callback', [SocialAuthController::class, 'callback'])
     ->where('provider', 'vkontakte|odnoklassniki|mailru|yandex|google')
     ->name('social.callback');
 
-// === БЛОГ ===
-Route::get('/blog', BlogIndex::class)->name('blog.index');
-Route::get('/blog/{post:slug}', BlogShow::class)->name('blog.show');
+// === АВТОРИЗОВАННЫЕ ОБЫЧНЫЕ РОУТЫ (Фронтенд) ===
+Route::middleware(['auth'])->group(function () {
+    // Настройки (тема)
+    Route::post('/settings/theme', [SettingsController::class, 'updateTheme'])->name('settings.theme.update');
 
-// === ОНБОРДИНГ ===
-Route::get('/onboarding', [OnboardingController::class, 'index'])
-    ->middleware(['auth'])
-    ->name('onboarding.index');
+    // Онбординг
+    Route::get('/onboarding', [OnboardingController::class, 'index'])->name('onboarding.index');
+    Route::post('/onboarding/save', [OnboardingController::class, 'save'])->name('onboarding.save');
+    Route::post('/onboarding/skip', [OnboardingController::class, 'skip'])->name('onboarding.skip');
 
-Route::post('/onboarding/save', [OnboardingController::class, 'save'])
-    ->middleware(['auth'])
-    ->name('onboarding.save');
-
-Route::post('/onboarding/skip', [OnboardingController::class, 'skip'])
-    ->middleware(['auth'])
-    ->name('onboarding.skip');
-
-// === АВТОРИЗОВАННЫЕ МАРШРУТЫ ===
-Route::middleware(['auth', 'verified'])->group(function () {
-    Route::view('profile', 'profile')->name('profile');
-});
-
-
-
-Route::middleware('auth')->group(function () {
+    // Подарки и Свайпы
     Route::post('/user/{user}/swipe', [SwipeController::class, 'store'])->name('user.swipe');
+    Route::post('/user/{user}/gift', [GiftController::class, 'store'])->name('user.gift');
 
-    Route::post('/user/{user}/chat', [ProfileActionController::class, 'chat'])->name('user.chat');
-    Route::post('/user/{user}/favorite', [ProfileActionController::class, 'toggleFavorite'])->name('user.favorite');
-    Route::post('/user/{user}/block', [ProfileActionController::class, 'toggleBlock'])->name('user.block');
-    Route::post('/user/{user}/report', [ProfileActionController::class, 'report'])->name('user.report');
+    // Биллинг
+    Route::post('/billing/pay', [BillingController::class, 'pay'])->name('billing.pay');
+    Route::get('/billing/success', [BillingController::class, 'success'])->name('billing.success');
+
+    // Взаимодействие с юзером (Чат, Избранное, Блок, Жалоба)
+    Route::post('/user/{user}/chat', [UserActionController::class, 'chat'])->name('user.chat');
+    Route::post('/user/{user}/favorite', [UserActionController::class, 'toggleFavorite'])->name('user.favorite');
+    Route::post('/user/{user}/block', [UserActionController::class, 'toggleBlock'])->name('user.block');
+    Route::post('/user/{user}/report', [UserActionController::class, 'report'])->name('user.report');
 });
 
-// === АДМИНКА ===
+// === АДМИНКА (LIVEWIRE/VOLT) ===
 Route::middleware(['auth', 'verified'])
     ->prefix('admin')
     ->name('admin.')
     ->group(function () {
-        
+
         // ЗОНА 1: Админ, Модератор, Саппорт
         Route::middleware('role:admin,moderator,support')->group(function () {
             Volt::route('/', 'admin.dashboard.index')->name('dashboard');
@@ -133,4 +137,5 @@ Route::middleware(['auth', 'verified'])
         });
     });
 
+// Подключаем файл с роутами авторизации
 require __DIR__ . '/auth.php';

@@ -17,7 +17,8 @@ class UserProfile extends Model
         'relationship_status', 'children_status', 'pets', 'housing', 'has_car', 'smoking', 'alcohol',
         'zodiac_sign',
         'body_decorations', 'languages', 'sports',
-        'education', 'institution', 'institution_year', 'activity', 'position',
+              
+        'education_level', 'income', 'institution', 'institution_year', 'activity', 'position',
         'location', 'address',       
     ];
 
@@ -60,7 +61,6 @@ class UserProfile extends Model
 
     /**
      * Безопасно обновить гео-точку через PostGIS.
-     * Используем newQuery()->update(), чтобы не сохранить случайно другие "грязные" поля модели.
      */
     public function setLocation(float $lat, float $lng): void
     {
@@ -70,7 +70,6 @@ class UserProfile extends Model
                 'location' => DB::raw("ST_SetSRID(ST_MakePoint({$lng}, {$lat}), 4326)::geography")
             ]);
         
-        // Обновляем атрибут в памяти текущей модели, чтобы он не был stale
         $this->location = DB::raw("ST_SetSRID(ST_MakePoint({$lng}, {$lat}), 4326)::geography");
     }
 
@@ -93,11 +92,11 @@ class UserProfile extends Model
         return $query->whereNotNull('location')
             ->whereRaw(
                 "ST_DWithin(location, ST_SetSRID(ST_MakePoint(?, ?), 4326)::geography, ?)", 
-                [$lng, $lat, $radius * 1000] // Переводим км в метры
+                [$lng, $lat, $radius * 1000]
             );
     }
 
-        // Маппер чисел в названия знаков зодиака
+    // Маппер чисел в названия знаков зодиака
     private const ZODIAC_SIGNS = [
         1 => 'Овен', 2 => 'Телец', 3 => 'Близнецы', 4 => 'Рак', 
         5 => 'Лев', 6 => 'Дева', 7 => 'Весы', 8 => 'Скорпион',
@@ -124,13 +123,8 @@ class UserProfile extends Model
         return $query->where('gender', $gender);
     }
 
-    // ============================================
-    // СКОПЫ ДЛЯ ПОИСКА (МАТЧИНГА)
-    // ============================================
-
     /**
-     * Фильтр по возрасту (Киллер-фича для индексов).
-     * Конвертируем возраст в дату рождения, чтобы использовать индекс birth_date!
+     * Фильтр по возрасту
      */
     public function scopeBetweenAges($query, ?int $minAge = 18, ?int $maxAge = 99)
     {
@@ -141,20 +135,16 @@ class UserProfile extends Model
             [$minAge, $maxAge] = [$maxAge, $minAge];
         }
 
-        // Вычисляем даты: кому на сегодня уже есть minAge лет, и кому не больше maxAge лет
-        $maxDate = Carbon::now()->subYears($minAge)->format('Y-m-d'); // Самая поздняя дата рождения (самые молодые)
-        $minDate = Carbon::now()->subYears($maxAge)->format('Y-m-d'); // Самая ранняя дата рождения (самые старые)
+        $maxDate = Carbon::now()->subYears($minAge)->format('Y-m-d');
+        $minDate = Carbon::now()->subYears($maxAge)->format('Y-m-d');
 
-        // Использует ИНДЕКС birth_date!
         return $query->whereBetween('birth_date', [$minDate, $maxDate]);
     }
-
 
     // ============================================
     // АКСЕССОРЫ И ХЕЛПЕРЫ
     // ============================================
    
-    
     /**
      * Вычисляем возраст на лету (для UI).
      */

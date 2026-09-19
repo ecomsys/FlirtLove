@@ -30,19 +30,21 @@ class RebuildDatabase extends Command
         $this->newLine();
 
         // 1. Миграции
-        $this->info('1/3: Сброс и накатка миграций (migrate:fresh)...');
+        $this->info('1/4: Сброс и накатка миграций (migrate:fresh)...');
         $this->call('migrate:fresh');
 
         // 2. Гео-данные
-        $this->info('2/3: Заливка стран и городов (world:install)...');
+        $this->info('2/4: Заливка стран и городов (world:install)...');
         // Используем Artisan::call с --no-interaction, чтобы команда сама отвечала "yes"
         Artisan::call('world:install', ['--no-interaction' => true], $this->getOutput());
 
         // 3. Сидеры
-        $this->info('3/3: Запуск всех сидеров (db:seed)...');
+        $this->info('3/4: Запуск всех сидеров (db:seed)...');
         $this->call('db:seed');
 
-        $this->newLine();
-        $this->info('✅ База данных успешно пересоздана и заполнена!');
+        // 4. Запуск сервера
+        $this->info('4/4: Запуск сервера');
+        $this->call('serve');
+        
     }
 }

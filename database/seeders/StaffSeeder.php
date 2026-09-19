@@ -10,6 +10,7 @@ use App\Models\Album;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 class StaffSeeder extends Seeder
 {
@@ -45,16 +46,15 @@ class StaffSeeder extends Seeder
         $password = '12121212';
 
         foreach ($staffMembers as $member) {
-            // Отключаем события, чтобы не триггерить автосоздание пустых связей
             $user = User::withoutEvents(function () use ($member, $password) {
                 return User::updateOrCreate(
                     ['email' => $member['email']],
                     [
                         'name' => $member['name'],
+                        'slug' => Str::slug($member['name']) . '-' . Str::lower(Str::random(8)), 
                         'password' => Hash::make($password),
                         'role' => $member['role'],
                         'status' => User::STATUS_ACTIVE,
-                        // Убрали is_premium. Дата сама сделает его премиумом
                         'premium_expires_at' => now()->addYears(5),
                         'vip_expires_at' => now()->addYears(5),
                         'is_verified' => true,
@@ -67,13 +67,11 @@ class StaffSeeder extends Seeder
                 );
             });
 
-            // Создаем связи вручную в транзакции
             DB::transaction(function () use ($user, $member, $spb, $russia) {
                 UserProfile::updateOrCreate(
                     ['user_id' => $user->id],
                     [
                         'gender' => $member['gender'],
-                        // Убрали 'age' => 29. Postgres/PHP сам посчитает из birth_date!
                         'birth_date' => '1995-05-15',
                         'dating_goal' => 'friends',
                         'city_id' => $spb->id ?? null, 
@@ -84,7 +82,10 @@ class StaffSeeder extends Seeder
                         'interests' => ['работа', 'общение', 'кино'],
                         'height' => $member['gender'] === 'male' ? 180 : 165,
                         'weight' => $member['gender'] === 'male' ? 80 : 55,
-                        'zodiac_sign' => 5,                                  
+                        'zodiac_sign' => 5,
+                        // ДОБАВЛЕНО: education_level и income для полноты профиля
+                        'education_level' => 6, // Высшее
+                        'income' => 3, // Хватает на основное и отдых
                     ]
                 );
 
