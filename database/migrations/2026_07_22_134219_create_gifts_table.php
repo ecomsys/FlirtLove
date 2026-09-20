@@ -13,12 +13,14 @@ return new class extends Migration
             
             $table->string('name');
             $table->string('slug')->unique();
+            
             $table->string('image_url');
             
             // ИЗМЕНЕНО: unsignedInteger -> unsignedBigInteger (для совпадения с user_balances)
             $table->unsignedBigInteger('price');
             
             $table->string('category', 50)->nullable()->index();
+            $table->enum('type', ['main', 'premium', 'services'])->default('main')->index();
             $table->boolean('is_active')->default(true)->index();
             
             $table->timestamps();

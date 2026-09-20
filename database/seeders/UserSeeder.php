@@ -145,15 +145,18 @@ class UserSeeder extends Seeder
             $lat = 55.5 + (rand(0, 100) / 100);
             $lng = 37.3 + (rand(0, 100) / 100);
 
+             
             // 2. Создаем связи в транзакции
             DB::transaction(function () use ($user, $gender, $genders, $birthDate, $month, $day, $goals, $cityIds, $russia, $bios, $lookingFors, $options, $getRandomIds, $institutions, $activities, $positions, $lng, $lat, $isPremium, $shortPortraits, $longPortraits) {
+
+                $goals = ['friends', 'romantic', 'family', 'casual', 'travel'];
 
                 UserProfile::updateOrCreate(
                     ['user_id' => $user->id],
                     [
                         'gender' => $gender,
-                        'birth_date' => $birthDate,
-                        'dating_goal' => $goals[array_rand($goals)],
+                        'birth_date' => $birthDate,                                       
+                        'dating_goals' => [$goals[array_rand($goals)]], // Обернули в массив []
                         'city_id' => !empty($cityIds) ? $cityIds[array_rand($cityIds)] : null,
                         'country_id' => $russia->id ?? null,
                         'headline' => $bios[array_rand($bios)],

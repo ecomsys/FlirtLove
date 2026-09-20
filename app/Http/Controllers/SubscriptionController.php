@@ -2,19 +2,21 @@
 
 namespace App\Http\Controllers;
 
-use App\Jobs\ProcessCreditPaymentGateway;
+use App\Http\Controllers\Controller;
+use App\Jobs\ProcessPaymentGateway;
+use App\Models\SubscriptionPlan;
 use App\Models\Transaction;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 
-class BillingController extends Controller
+class SubscriptionController extends Controller
 {
     public function pay(Request $request)
     {
         $validator = Validator::make($request->all(), [
-            'amount' => 'required|in:80,250,500,900',
+            'plan_id' => 'required|exists:subscription_plans,id',
             'payment_method' => 'required|in:card,yoomoney',
-            'auto_top_up' => 'boolean',
+            'auto_renew' => 'boolean',
             'return_url' => 'nullable|string'
         ]);
 
@@ -24,37 +26,29 @@ class BillingController extends Controller
 
         $validated = $validator->validated();
         $user = $request->user();
-
-        $plans = [
-            80 => ['credits' => 80, 'bonus' => 0],
-            250 => ['credits' => 300, 'bonus' => 50],
-            500 => ['credits' => 650, 'bonus' => 150],
-            900 => ['credits' => 1250, 'bonus' => 350],
-        ];
-
-        $plan = $plans[$validated['amount']];
-        $creditsToCharge = $plan['credits'] + $plan['bonus'];
+        $plan = SubscriptionPlan::findOrFail($validated['plan_id']);
 
         try {
             $transaction = Transaction::create([
                 'user_id' => $user->id,
-                'amount' => $validated['amount'],
-                'currency' => 'RUB',
-                'type' => Transaction::TYPE_CREDITS,
+                'amount' => $plan->price,
+                'currency' => $plan->currency,
+                'type' => Transaction::TYPE_SUBSCRIPTION,
                 'status' => Transaction::STATUS_PENDING,
                 'provider' => $validated['payment_method'],
-                'credits_amount' => $creditsToCharge,
                 'meta' => [
-                    'auto_top_up' => $validated['auto_top_up'] ?? false,
-                    'bonus_credits' => $plan['bonus'],
+                    'plan_id' => $plan->id,
+                    'tier' => $plan->tier,
+                    'auto_renew' => $validated['auto_renew'] ?? false,
                     'return_url' => $validated['return_url'] ?? route('home'),
                 ]
             ]);
 
             // ЗАПУСКАЕМ АСИНХРОННУЮ СИМУЛЯЦИЮ БАНКА (Задержка 5 секунд)
-            ProcessCreditPaymentGateway::dispatch($transaction->id)->delay(now()->addSeconds(5))->onQueue('payments');
+            ProcessPaymentGateway::dispatch($transaction->id)->delay(now()->addSeconds(5))->onQueue('payments');;
 
-            $confirmationUrl = route('billing.success', ['transaction_id' => $transaction->id]);
+            // Возвращаем ссылку на "Зал ожидания"
+            $confirmationUrl = route('subscription.success', ['transaction_id' => $transaction->id]);
 
             return response()->json([
                 'success' => true,
@@ -74,14 +68,16 @@ class BillingController extends Controller
         $transactionId = $request->query('transaction_id');
         $transaction = Transaction::findOrFail($transactionId);
 
-        // Защита от зацикливания, если юзер покупал кредиты со страницы биллинга
+        // Вычисляем URL для кнопки "Продолжить" (чтобы не было цикла при возврате на /premium)
         $returnUrl = $transaction->meta['return_url'] ?? route('home');
-        if (str_contains($returnUrl, '/billing')) {
+        if (str_contains($returnUrl, '/premium') || str_contains($returnUrl, '/vip')) {
             $returnUrl = route('home');
         }
 
-        return view('pages.billing.success', [
+        // Отдаем страницу, которая будет опрашивать статус (polling)
+        return view('pages.subscriptions.success', [
             'transactionId' => $transaction->id,
+            'tier' => $transaction->meta['tier'] ?? 'subscription',
             'returnUrl' => $returnUrl
         ]);
     }
@@ -89,13 +85,22 @@ class BillingController extends Controller
     // НОВЫЙ МЕТОД: API для опроса статуса (Polling)
     public function status(Request $request, Transaction $transaction)
     {
+        // Проверка безопасности
         if ($transaction->user_id !== $request->user()->id) {
             abort(403);
         }
 
+        $planName = SubscriptionPlan::find($transaction->meta['plan_id'] ?? null)?->name ?? 'тариф';
+        $endsAt = null;
+        if ($transaction->status === Transaction::STATUS_SUCCESS) {
+            $sub = $transaction->user->subscriptions()->where('transaction_id', $transaction->id)->first();
+            if ($sub) $endsAt = $sub->ends_at->format('d.m.Y H:i');
+        }
+
         return response()->json([
             'status' => $transaction->status,
-            'creditsAmount' => $transaction->credits_amount,
+            'planName' => $planName,
+            'endsAt' => $endsAt,
             'failReason' => $transaction->meta['fail_reason'] ?? null
         ]);
     }

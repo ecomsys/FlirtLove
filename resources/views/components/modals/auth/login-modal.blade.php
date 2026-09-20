@@ -1,5 +1,5 @@
-<div x-data="{
-    modalOpen: new URLSearchParams(window.location.search).has('login'),
+<div x-data="{    
+    modalOpen: false,
     email: '',
     password: '',
     remember: false,
@@ -22,6 +22,13 @@
         this.remember = false;
         this.errors = {};
     },
+    
+    init() {
+            if (new URLSearchParams(window.location.search).has('login')) {
+                this.modalOpen = true;
+                this.getCaptcha();
+            }
+        },
 
     async getCaptcha() {
         try {
@@ -157,26 +164,28 @@
                         </div>
 
                         <!-- Капча -->
-                        <div class="space-y-1.5 pt-2">
-                            <x-ui.label>Символы на картинке</x-ui.label>
-                            <div class="space-y-2">
-                                <div class="flex items-center gap-2">
-                                    <img :src="captchaImage" alt="Captcha"
-                                        class="flex-1 h-10 rounded border border-border bg-[#dcdee4] object-contain">
-                                    <button type="button" class="shrink-0 h-10 w-10 flex items-center justify-center"
-                                        @click="getCaptcha(); captchaInput = ''" title="Обновить картинку">
-                                        <x-lucide-refresh-cw class="w-6 h-6" x-show="!loading" />
-                                        <x-lucide-loader-2 class="w-6 h-6 animate-spin" x-show="loading" x-cloak
-                                            style="display: none;" />
-                                    </button>
+                            <div class="space-y-1.5 pt-2">
+                                <x-ui.label>Символы на картинке</x-ui.label>
+                                <div class="space-y-2">
+                                    <div class="flex items-center gap-2">
+                                        <!-- Обернули картинку в контейнер с серым фоном -->
+                                        <div class="relative flex-1 h-10 rounded border border-border bg-[#dcdee4] overflow-hidden flex items-center justify-center">
+                                            <!-- Спиннер (показывается, пока captchaImage пустая) -->
+                                            <svg x-show="!captchaImage" class="w-5 h-5 text-muted-foreground/50 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                                            
+                                            <!-- Сама картинка (показывается только когда ссылка загрузилась) -->
+                                            <img x-show="captchaImage" :src="captchaImage" alt="Captcha" class="absolute inset-0 w-full h-full object-contain">
+                                        </div>
+                                        
+                                        <button type="button" class="shrink-0 h-10 w-10 flex items-center justify-center" @click="getCaptcha(); captchaInput = ''" title="Обновить картинку">
+                                            <x-lucide-refresh-cw class="w-6 h-6" x-show="!loading" />
+                                            <x-lucide-loader-2 class="w-6 h-6 animate-spin" x-show="loading" x-cloak style="display: none;" />
+                                        </button>
+                                    </div>
+                                    <x-ui.input x-model="captchaInput" placeholder="Введите код" class="w-full" />
                                 </div>
-                                <x-ui.input x-model="captchaInput" placeholder="Введите код" class="w-full" />
+                                <p x-show="errors.captchaInput" x-text="errors.captchaInput?.[0] || ''" class="text-xs text-destructive mt-1"></p>
                             </div>
-                            <!-- Капча -->
-                            <p x-show="errors.captchaInput" x-text="errors.captchaInput?.[0] || ''"
-                                class="text-xs text-destructive mt-1"></p>
-                        </div>
-
                         <!-- Кнопка Войти -->
                         <x-ui.button type="submit" x-bind:disabled="loading" class="w-full">
                             <span x-show="!loading">Войти</span>

@@ -9,6 +9,13 @@
         emailSent: false,
         emailProviderUrl: '#',
         
+        init() {
+            // Авто-открытие, если в URL есть ?forgot=1
+            if (new URLSearchParams(window.location.search).has('forgot')) {
+                this.openModal();
+            }
+        },
+        
         openModal(email = '') {
             this.email = email || '';
             this.captchaInput = '';
@@ -127,17 +134,30 @@
             
             <!-- ЭКРАН 1: Письмо отправлено -->
             <template x-if="emailSent">
-                <div class="p-6 space-y-4 text-center">
-                    <div class="flex justify-end">
+                <div class="relative p-6 pt-12 text-center flex flex-col items-center gap-3">
+                    
+                    <!-- Кнопка закрытия (абсолютная, чтобы не занимать место) -->
+                    <div class="absolute top-3 right-3">
                         <x-ui.button variant="ghost" size="icon-sm" @click="modalOpen = false">
                             <x-lucide-x class="w-5 h-5" />
                         </x-ui.button>
                     </div>
-                    <x-lucide-mail-check class="w-12 h-12 mx-auto text-green-500" />
-                    <h4 class="text-lg font-semibold">Письмо отправлено!</h4>
-                    <p class="text-sm text-muted-foreground">Мы отправили ссылку для сброса пароля на email: <strong x-text="email"></strong>. Проверьте вашу почту.</p>
+
+                    <!-- Иконка в красивом круге -->
+                    <div class="w-16 h-16 rounded-full bg-green-500/10 flex items-center justify-center">
+                        <x-lucide-mail-check class="w-8 h-8 text-green-500" />
+                    </div>
                     
-                    <div class="space-y-2 pt-2">
+                    <h4 class="text-lg font-semibold text-foreground">Письмо отправлено!</h4>
+                    
+                    <!-- Компактный текст с переносом -->
+                    <p class="text-sm text-muted-foreground max-w-[20rem]">
+                        Ссылка для сброса пароля отправлена на:<br>
+                        <strong class="text-foreground" x-text="email"></strong>
+                    </p>
+                    
+                    <!-- Кнопки ограниченные по ширине и выровненные по центру -->
+                    <div class="w-full max-w-xs space-y-2 mt-2 mx-auto">
                         <x-ui.button as-child class="w-full">
                             <a :href="emailProviderUrl" target="_blank" class="flex items-center justify-center gap-2">
                                 Перейти в почту
@@ -177,12 +197,15 @@
                                     <p x-show="errors.email" x-text="errors.email?.[0] || ''" class="text-xs text-destructive mt-1"></p>
                                 </div>
 
-                                <!-- Капча -->
+                                <!-- Капча (С фиксом спиннера) -->
                                 <div class="space-y-1.5 pt-2">
                                     <x-ui.label>Символы на картинке</x-ui.label>
                                     <div class="space-y-2">
                                         <div class="flex items-center gap-2">
-                                            <img :src="captchaImage" alt="Captcha" class="flex-1 h-10 rounded border border-border bg-[#dcdee4] object-contain">
+                                            <div class="relative flex-1 h-10 rounded border border-border bg-[#dcdee4] overflow-hidden flex items-center justify-center">
+                                                <svg x-show="!captchaImage" class="w-5 h-5 text-muted-foreground/50 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                                                <img x-show="captchaImage" :src="captchaImage" alt="Captcha" class="absolute inset-0 w-full h-full object-contain">
+                                            </div>
                                             <button type="button" class="shrink-0 h-10 w-10 flex items-center justify-center" @click="getCaptcha(); captchaInput = ''" title="Обновить картинку">
                                                 <x-lucide-refresh-cw class="w-6 h-6" x-show="!loading" />
                                                 <x-lucide-loader-2 class="w-6 h-6 animate-spin" x-show="loading" x-cloak style="display: none;" />

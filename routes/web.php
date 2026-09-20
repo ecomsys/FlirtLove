@@ -8,12 +8,15 @@ use App\Http\Controllers\GiftController;
 use App\Http\Controllers\SwipeController;
 use App\Http\Controllers\BillingController;
 use App\Http\Controllers\SettingsController;
+use App\Http\Controllers\SubscriptionController;
 
 use App\Http\Controllers\Auth\LoginController;
 use App\Http\Controllers\Auth\ForgotPasswordController;
 use App\Http\Controllers\Auth\SocialAuthController;
 
 // Контроллеры страниц
+use App\Http\Controllers\Web\Subscriptions\VipController;
+use App\Http\Controllers\Web\Subscriptions\PremiumController;
 use App\Http\Controllers\Web\Blog\BlogController;
 use App\Http\Controllers\Web\Home\HomeController;
 use App\Http\Controllers\Web\Feed\FeedController;
@@ -52,6 +55,20 @@ Route::get('/auth/{provider}/callback', [SocialAuthController::class, 'callback'
 
 // === АВТОРИЗОВАННЫЕ ОБЫЧНЫЕ РОУТЫ (Фронтенд) ===
 Route::middleware(['auth'])->group(function () {
+
+    // Биллинг (Покупка кредитов)
+    Route::post('/billing/pay', [BillingController::class, 'pay'])->name('billing.pay');
+    Route::get('/billing/success', [BillingController::class, 'success'])->name('billing.success');
+    Route::get('/api/billing/status/{transaction}', [BillingController::class, 'status'])->name('billing.status'); 
+    
+    // Премиум и VIP (Покупка подписки)
+    Route::get('/premium', [PremiumController::class, 'index'])->name('premium.index');
+    Route::post('/premium/pay', [SubscriptionController::class, 'pay'])->name('premium.pay');
+    Route::get('/vip', [VipController::class, 'index'])->name('vip.index');
+    Route::post('/vip/pay', [SubscriptionController::class, 'pay'])->name('vip.pay');
+    Route::get('/subscription/success', [SubscriptionController::class, 'success'])->name('subscription.success');  
+    Route::get('/api/subscription/status/{transaction}', [SubscriptionController::class, 'status'])->name('subscription.status');    
+
     // Настройки (тема)
     Route::post('/settings/theme', [SettingsController::class, 'updateTheme'])->name('settings.theme.update');
 
@@ -59,14 +76,11 @@ Route::middleware(['auth'])->group(function () {
     Route::get('/onboarding', [OnboardingController::class, 'index'])->name('onboarding.index');
     Route::post('/onboarding/save', [OnboardingController::class, 'save'])->name('onboarding.save');
     Route::post('/onboarding/skip', [OnboardingController::class, 'skip'])->name('onboarding.skip');
+ 
 
     // Подарки и Свайпы
     Route::post('/user/{user}/swipe', [SwipeController::class, 'store'])->name('user.swipe');
-    Route::post('/user/{user}/gift', [GiftController::class, 'store'])->name('user.gift');
-
-    // Биллинг
-    Route::post('/billing/pay', [BillingController::class, 'pay'])->name('billing.pay');
-    Route::get('/billing/success', [BillingController::class, 'success'])->name('billing.success');
+    Route::post('/user/{user}/gift', [GiftController::class, 'store'])->name('user.gift');    
 
     // Взаимодействие с юзером (Чат, Избранное, Блок, Жалоба)
     Route::post('/user/{user}/chat', [UserActionController::class, 'chat'])->name('user.chat');

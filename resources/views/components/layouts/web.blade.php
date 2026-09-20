@@ -82,45 +82,35 @@
         @endguest
     </div>
 
-    <!-- Глобальный спиннер для wire:navigate -->
-    <x-navigate-loader />
-
     <!-- Наша модалка логина -->
     <x-modals.auth.login-modal />
 
     <!-- ФИКС: Модалка восстановления пароля -->
     <x-modals.auth.forgot-password-modal />
 
+    <!-- Модалка регистрации для особых случаев -->
+    <x-modals.auth.register-modal />
+
+
+    <!-- Магазин подарков и Оплата -->
+    @auth
+        {{-- Модалка - "Купить Кредиты" --}}
+        <x-modals.billing-modal />
+
+        {{-- Модалка - "Купить Премиум" --}}
+        <x-modals.premium-modal />
+
+        {{-- Модалка - "Купить Vip" --}}
+        <x-modals.vip-modal />
+    @endauth
+
+
     <x-ui.sonner expand="true" />
-    
 
-    @stack('scripts')
+    {{-- спинер при переходе между страницами триггер-функция window.showPageLoader(); --}}
+    <x-web-ui.global-page-loader />
 
-        @if(request()->has('payment_success'))
-    <script>
-        console.log('1. Скрипт оплаты загрузился');
-        
-        document.addEventListener('DOMContentLoaded', () => {
-            console.log('2. DOM полностью загружен');
-            
-            let params = new URLSearchParams(window.location.search);
-            if (params.has('payment_success')) {
-                let credits = params.get('credits_added');
-                let msg = 'Платеж успешно завершен! Вам начислено ' + credits + ' ед.';
-                console.log('3. Отправляем событие show-toast с текстом:', msg);
-                
-                // Отправляем событие
-                window.dispatchEvent(new CustomEvent('show-toast', { 
-                    detail: { type: 'success', message: msg } 
-                }));
-                
-                // Очищаем URL
-                window.history.replaceState({}, document.title, window.location.pathname);
-                console.log('4. URL очищен');
-            }
-        });
-    </script>
-    @endif
+    @stack('scripts')   
 </body>
 
 </html>

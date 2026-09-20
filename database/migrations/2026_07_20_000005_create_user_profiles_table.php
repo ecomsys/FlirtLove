@@ -16,7 +16,9 @@ return new class extends Migration
             // === БАЗОВАЯ ИНФА ===
             $table->enum('gender', ['male', 'female'])->nullable()->index();
             $table->date('birth_date')->nullable()->index(); 
-            $table->enum('dating_goal', ['friends', 'romantic', 'family', 'casual', 'travel'])->nullable()->index();
+            
+            // ИЗМЕНЕНО: enum -> jsonb (поддержка множественного выбора)
+            $table->jsonb('dating_goals')->nullable();
             
             // === СПРАВОЧНИКИ ===
             $table->foreignId('city_id')->nullable()->constrained('cities')->nullOnDelete()->index();
@@ -54,10 +56,7 @@ return new class extends Migration
             $table->jsonb('sports')->nullable();
 
             // === РАБОТА И ОБРАЗОВАНИЕ ===
-            // ИЗМЕНЕНО: education -> education_level (тип TinyInteger для совпадения с конфигом)
             $table->unsignedTinyInteger('education_level')->default(0);
-            
-            // ДОБАВЛЕНО: income
             $table->unsignedTinyInteger('income')->default(0);
             
             $table->string('institution')->nullable();
@@ -79,11 +78,7 @@ return new class extends Migration
         DB::statement('CREATE INDEX user_profiles_body_type_index ON user_profiles (body_type)');
         DB::statement('CREATE INDEX user_profiles_smoking_index ON user_profiles (smoking)');
         DB::statement('CREATE INDEX user_profiles_relationship_status_index ON user_profiles (relationship_status)');
-        
-        // ИЗМЕНЕНО: Индекс переименован под новую колонку
         DB::statement('CREATE INDEX user_profiles_education_level_index ON user_profiles (education_level)');
-        
-        // ДОБАВЛЕНО: Индекс на доход
         DB::statement('CREATE INDEX user_profiles_income_index ON user_profiles (income)');
         
         // Пространственный индекс для геолокации
@@ -93,6 +88,9 @@ return new class extends Migration
         DB::statement('CREATE INDEX user_profiles_interests_gin ON user_profiles USING GIN (interests jsonb_path_ops)');
         DB::statement('CREATE INDEX user_profiles_languages_gin ON user_profiles USING GIN (languages jsonb_path_ops)');
         DB::statement('CREATE INDEX user_profiles_sports_gin ON user_profiles USING GIN (sports jsonb_path_ops)');    
+        
+        // ИЗМЕНЕНО: Добавили GIN-индекс для dating_goals
+        DB::statement('CREATE INDEX user_profiles_dating_goals_gin ON user_profiles USING GIN (dating_goals jsonb_path_ops)');    
     }
 
     public function down(): void

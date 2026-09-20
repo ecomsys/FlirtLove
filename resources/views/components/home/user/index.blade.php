@@ -102,15 +102,16 @@
                     <h3 class="text-base font-medium text-accent-foreground mb-1">Я ищу</h3>
 
                     <p class="text-base text-muted-foreground">
-                        Ищу
+                        Ищу 
                         @if ($user->preferences->preferred_gender === 'male')
-                            парней
+                            парней 
                         @elseif ($user->preferences->preferred_gender === 'female')
-                            девушек
+                            девушек 
                         @endif
-                        от {{ $user->preferences->preferred_age_min ?? 18 }}
-                        до {{ $user->preferences->preferred_age_max ?? 99 }} лет,
-                        для {{ mb_strtolower(__('auth.' . $user->profile->dating_goal)) }}.
+                        от {{ $user->preferences->preferred_age_min ?? 18 }} 
+                        до {{ $user->preferences->preferred_age_max ?? 99 }} лет, 
+                        для {{-- Превращаем массив в коллекцию, переводим каждый элемент в нижний регистр и склеиваем через запятую --}}
+                        {{ collect($user->profile->dating_goals)->map(fn($goal) => mb_strtolower(__('auth.' . $goal)))->implode(', ') }}.
                     </p>
                 </div>
             @endif
@@ -171,7 +172,7 @@
             <x-modals.gift-checkout-modal :user="$user" />            
 
             {{-- Модалка - "Купить Кредиты" --}}
-            <x-modals.billing-modal />
+            {{-- <x-modals.billing-modal /> --}}
         @endif
     @endauth
 

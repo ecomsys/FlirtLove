@@ -22,7 +22,7 @@ class RegisterController extends Controller
         $this->captchaService = $captchaService;
     }
 
-    public function showRegistrationForm()
+    public function showRegistrationForm(Request $request)
     {
         $months = [];
         for ($m = 1; $m <= 12; $m++) {
@@ -34,8 +34,32 @@ class RegisterController extends Controller
 
         $captchaImage = $this->captchaService->generate('register_captcha');
 
-        return view('pages.auth.register', compact('months', 'days', 'years', 'captchaImage'));
+        // НОВОЕ: Собираем данные из URL (от модалки-приманки)
+        $prefill = [
+            'name' => $request->query('name', ''),
+            'gender' => $request->query('gender', ''),
+            'birth_day' => $request->query('birth_day', ''),
+            'birth_month' => $request->query('birth_month', ''),
+            'birth_year' => $request->query('birth_year', ''),
+        ];
+
+        // Если передана дата (формат YYYY-MM-DD из input type="date"), разбиваем её
+        $birthDate = $request->query('birth_date');
+        if ($birthDate) {
+            try {
+                $date = Carbon::parse($birthDate);
+                $prefill['birth_day'] = (string) $date->day;
+                $prefill['birth_month'] = (string) $date->month;
+                $prefill['birth_year'] = (string) $date->year;
+            } catch (\Exception $e) {
+                // Если дата кривая, оставляем пустые значения
+            }
+        }
+
+        return view('pages.auth.register', compact('months', 'days', 'years', 'captchaImage', 'prefill'));
     }
+
+    
 
     // Общий метод для жёсткого возврата JSON ошибок
     protected function validateJson(Request $request, array $rules)
@@ -81,7 +105,8 @@ class RegisterController extends Controller
     public function validateStep2(Request $request)
     {
         $rules = [
-            'dating_goal' => ['required', 'in:friends,romantic,family,casual,travel'],
+            'dating_goals' => ['required', 'array', 'min:1'],
+            'dating_goals.*' => ['required', 'in:friends,romantic,family,casual,travel'],
         ];
 
         if ($errorResponse = $this->validateJson($request, $rules)) {
@@ -107,7 +132,7 @@ class RegisterController extends Controller
             'birth_day' => ['required', 'integer', 'between:1,31'],
             'birth_month' => ['required', 'integer', 'between:1,12'],
             'birth_year' => ['required', 'integer', 'between:1950,2010'],
-            'dating_goal' => ['required', 'in:friends,romantic,family,casual,travel'],
+            'dating_goals' => ['required', 'array', 'min:1'],
             'city' => ['required', 'string', 'max:255'],
             'email' => ['required', 'string', 'lowercase', 'email', 'max:255', 'unique:' . User::class],
             'password' => ['required', 'string', Rules\Password::defaults()],
@@ -149,7 +174,7 @@ class RegisterController extends Controller
         $user->profile->update([
             'gender' => $validated['gender'],
             'birth_date' => $birthDate,
-            'dating_goal' => $validated['dating_goal'],
+            'dating_goals' => $validated['dating_goals'], // <--- СОХРАНЯЕМ МАССИВ
             'city' => $validated['city'],
         ]);
 

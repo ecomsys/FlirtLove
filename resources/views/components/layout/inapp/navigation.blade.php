@@ -78,22 +78,36 @@
                         </div>
                     </div>
 
-                    <!-- 2. VIP СТАТУС -->
-                    <div class="relative" 
-                         @mouseenter="clearTimeout(timer); activeMenu = 'vip'" 
-                         @mouseleave="timer = setTimeout(() => activeMenu = null, 200)">
+                  
+                <!-- 2. VIP СТАТУС -->
+                <div class="relative" 
+                    @mouseenter="clearTimeout(timer); activeMenu = 'vip'" 
+                    @mouseleave="timer = setTimeout(() => activeMenu = null, 200)">
+                    
+                    <button class="w-9 h-9 rounded-full bg-blue-500/10 text-blue-500 hover:bg-blue-500/20 flex items-center justify-center transition-colors border border-blue-500/20">
+                        <x-lucide-gem class="w-5 h-5" />
+                    </button>
+
+                    <div x-show="activeMenu === 'vip'" x-cloak x-transition.opacity.duration.200ms
+                        @mouseenter="clearTimeout(timer)"
+                        class="absolute left-1/2 -translate-x-1/2 top-full mt-3 w-72 z-50">
                         
-                        <button class="w-9 h-9 rounded-full bg-blue-500/10 text-blue-500 hover:bg-blue-500/20 flex items-center justify-center transition-colors border border-blue-500/20">
-                            <x-lucide-gem class="w-5 h-5" />
-                        </button>
+                        <div class="relative bg-card border border-border rounded-lg shadow-xl">
+                            <div class="absolute left-1/2 -translate-x-1/2 -top-2 w-4 h-4 rotate-45 bg-card border-l border-t border-border"></div>
 
-                        <div x-show="activeMenu === 'vip'" x-cloak x-transition.opacity.duration.200ms
-                             @mouseenter="clearTimeout(timer)"
-                             class="absolute left-1/2 -translate-x-1/2 top-full mt-3 w-72 z-50">
-                            
-                            <div class="relative bg-card border border-border rounded-lg shadow-xl">
-                                <div class="absolute left-1/2 -translate-x-1/2 -top-2 w-4 h-4 rotate-45 bg-card border-l border-t border-border"></div>
-
+                            @if(auth()->user()->has_active_vip)
+                                <!-- ЕСЛИ VIP УЖЕ ЕСТЬ -->
+                                <div class="relative p-4 flex items-start gap-3">
+                                    <div class="mt-1 w-10 h-10 rounded-full bg-blue-500/10 flex items-center justify-center shrink-0">
+                                        <x-lucide-gem class="w-5 h-5 text-blue-500" />
+                                    </div>
+                                    <div>
+                                        <h4 class="font-semibold text-foreground text-sm">VIP активен</h4>
+                                        <p class="text-xs text-muted-foreground mt-1">Действует до: {{ auth()->user()->vip_expires_at?->format('d.m.Y') }}</p>
+                                    </div>
+                                </div>
+                            @else
+                                <!-- ЕСЛИ VIP НЕТ -->
                                 <div class="relative p-4 flex items-start gap-3">
                                     <div class="mt-1 w-10 h-10 rounded-full bg-blue-500/10 flex items-center justify-center shrink-0">
                                         <x-lucide-gem class="w-5 h-5 text-blue-500" />
@@ -104,44 +118,61 @@
                                     </div>
                                 </div>
                                 <div class="relative p-4 pt-0">
-                                    <button class="w-full py-2.5 rounded-md bg-green-600 hover:bg-green-700 text-white text-sm font-medium transition-colors flex items-center justify-center gap-2">
+                                    <!-- Заменили кнопку на ссылку, ведущую на страницу /vip -->
+                                    <a href="{{ route('vip.index') }}" class="w-full py-2.5 rounded-md bg-green-600 hover:bg-green-700 text-white text-sm font-medium transition-colors flex items-center justify-center gap-2">
                                         <x-lucide-gem class="w-4 h-4" /> Включить VIP статус
-                                    </button>
+                                    </a>
                                 </div>
-                            </div>
+                            @endif
                         </div>
                     </div>
+                </div>
 
-                    <!-- 3. ПРЕМИУМ ДОСТУП -->
+                   <!-- 3. ПРЕМИУМ ДОСТУП -->
                     <div class="relative" 
-                         @mouseenter="clearTimeout(timer); activeMenu = 'premium'" 
-                         @mouseleave="timer = setTimeout(() => activeMenu = null, 200)">
+                        @mouseenter="clearTimeout(timer); activeMenu = 'premium'" 
+                        @mouseleave="timer = setTimeout(() => activeMenu = null, 200)">
                         
                         <button class="w-9 h-9 rounded-full bg-orange-500/10 text-orange-500 hover:bg-orange-500/20 flex items-center justify-center transition-colors border border-orange-500/20">
                             <x-lucide-star class="w-5 h-5" />
                         </button>
 
                         <div x-show="activeMenu === 'premium'" x-cloak x-transition.opacity.duration.200ms
-                             @mouseenter="clearTimeout(timer)"
-                             class="absolute left-1/2 -translate-x-1/2 top-full mt-3 w-72 z-50">
+                            @mouseenter="clearTimeout(timer)"
+                            class="absolute left-1/2 -translate-x-1/2 top-full mt-3 w-72 z-50">
                             
                             <div class="relative bg-card border border-border rounded-lg shadow-xl">
                                 <div class="absolute left-1/2 -translate-x-1/2 -top-2 w-4 h-4 rotate-45 bg-card border-l border-t border-border"></div>
 
-                                <div class="relative p-4 flex items-start gap-3">
-                                    <div class="mt-1 w-10 h-10 rounded-full bg-orange-500/10 flex items-center justify-center shrink-0">
-                                        <x-lucide-star class="w-5 h-5 text-orange-500" />
+                                @if(auth()->user()->has_active_premium)
+                                    <!-- ЕСЛИ ПРЕМИУМ УЖЕ ЕСТЬ -->
+                                    <div class="relative p-4 flex items-start gap-3">
+                                        <div class="mt-1 w-10 h-10 rounded-full bg-orange-500/10 flex items-center justify-center shrink-0">
+                                            <x-lucide-star class="w-5 h-5 text-orange-500" />
+                                        </div>
+                                        <div>
+                                            <h4 class="font-semibold text-foreground text-sm">Премиум активен</h4>
+                                            <p class="text-xs text-muted-foreground mt-1">Действует до: {{ auth()->user()->premium_expires_at?->format('d.m.Y') }}</p>
+                                        </div>
                                     </div>
-                                    <div>
-                                        <h4 class="font-semibold text-foreground text-sm">Включить Премиум доступ</h4>
-                                        <p class="text-xs text-muted-foreground mt-1">Знакомься без ограничений</p>
+                                @else
+                                    <!-- ЕСЛИ ПРЕМИУМА НЕТ -->
+                                    <div class="relative p-4 flex items-start gap-3">
+                                        <div class="mt-1 w-10 h-10 rounded-full bg-orange-500/10 flex items-center justify-center shrink-0">
+                                            <x-lucide-star class="w-5 h-5 text-orange-500" />
+                                        </div>
+                                        <div>
+                                            <h4 class="font-semibold text-foreground text-sm">Включить Премиум доступ</h4>
+                                            <p class="text-xs text-muted-foreground mt-1">Знакомься без ограничений</p>
+                                        </div>
                                     </div>
-                                </div>
-                                <div class="relative p-4 pt-0">
-                                    <button class="w-full py-2.5 rounded-md bg-green-600 hover:bg-green-700 text-white text-sm font-medium transition-colors flex items-center justify-center gap-2">
-                                        <x-lucide-star class="w-4 h-4" /> Включить Премиум
-                                    </button>
-                                </div>
+                                    <div class="relative p-4 pt-0">
+                                        <!-- Кнопка ведет на посадочную страницу -->
+                                        <a href="{{ route('premium.index') }}" class="w-full py-2.5 rounded-md bg-green-600 hover:bg-green-700 text-white text-sm font-medium transition-colors flex items-center justify-center gap-2">
+                                            <x-lucide-star class="w-4 h-4" /> Включить Премиум
+                                        </a>
+                                    </div>
+                                @endif
                             </div>
                         </div>
                     </div>

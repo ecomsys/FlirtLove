@@ -64,7 +64,7 @@ echo "  Запуск фоновых сервисов...\n";
 // Запускаем все сервисы в отдельных окнах
 openTerminal('npm run dev', 'Vite');
 openTerminal('php artisan schedule:work', 'Schedule');
-openTerminal('php artisan queue:work --queue=default', 'Queue Default');
+openTerminal('php artisan queue:work --queue=payments,default', 'Queue Default'); // Приоритет платы за кредиты и подписки
 openTerminal('php artisan queue:work --queue=heavy', 'Queue Heavy');
 openTerminal('php artisan queue:work --queue=broadcasts', 'Queue Broadcasts');
 
