@@ -73,7 +73,7 @@ class StaffSeeder extends Seeder
                     [
                         'gender' => $member['gender'],
                         'birth_date' => '1995-05-15',
-                        'dating_goal' => 'friends',
+                        'dating_goals' => ['friends'],
                         'city_id' => $spb->id ?? null, 
                         'country_id' => $russia->id ?? null, 
                         'headline' => $member['headline'],

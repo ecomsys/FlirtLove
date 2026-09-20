@@ -21,6 +21,7 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Session;
 
+use App\Models\SubscriptionPlan;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -46,7 +47,11 @@ class AppServiceProvider extends ServiceProvider
      * Bootstrap any application services.
      */
     public function boot(): void
-    {
+    {        
+        // Передаем активные тарифы Премиума и VIP во все вьюхи
+        View::share('premiumPlans', SubscriptionPlan::where('tier', 'premium')->active()->ordered()->get());
+        View::share('vipPlans', SubscriptionPlan::where('tier', 'vip')->active()->ordered()->get());
+
 
         // делаем доступными во всех лейаутах переменные
         View::composer('*', function ($view) {

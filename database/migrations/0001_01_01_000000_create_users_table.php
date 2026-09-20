@@ -13,6 +13,7 @@ return new class extends Migration
             
             // === 1. БАЗОВАЯ АВТОРИЗАЦИЯ ===
             $table->string('name')->nullable(); 
+            $table->string('slug')->nullable()->unique();
             $table->string('email')->unique();
             $table->timestamp('email_verified_at')->nullable();
             $table->string('phone', 20)->nullable()->unique(); 

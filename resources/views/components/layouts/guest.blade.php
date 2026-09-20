@@ -56,6 +56,9 @@
 
     <x-modals.auth.forgot-password-modal />
 
+     <!-- Модалка регистрации для особых случаев -->
+    <x-modals.auth.register-modal />
+
     <x-ui.sonner expand="true" />
     
     

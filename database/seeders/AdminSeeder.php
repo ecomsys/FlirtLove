@@ -70,7 +70,7 @@ class AdminSeeder extends Seeder
                     [
                         'gender' => 'male',
                         'birth_date' => '1990-01-01',
-                        'dating_goal' => 'friends',
+                        'dating_goals' => ['friends'],
                         'city_id' => $moscow->id ?? null,
                         'country_id' => $russia->id ?? null,
                         'headline' => $founderData['name'] . ' сайта',

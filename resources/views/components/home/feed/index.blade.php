@@ -205,7 +205,7 @@
                 <div 
                     :style="'animation: fadeInUp 0.4s ease-out forwards; animation-delay: ' + Math.min((index % 9) * 75, 400) + 'ms; opacity: 0;'"
                     @click="window.location.href = '/user/' + user.slug" 
-                    class="relative group rounded-xl overflow-hidden border bg-card shadow-sm hover:shadow-md transition-all cursor-pointer flex flex-col" 
+                    class="relative group rounded-sm overflow-hidden border bg-card shadow-sm hover:shadow-md transition-all cursor-pointer flex flex-col" 
                     :class="user.has_premium ? 'border-3 border-yellow-400 shadow-md shadow-yellow-400/30' : 'border-border'"
                 >
                     <div class="aspect-[5/4] bg-muted relative">
@@ -221,7 +221,7 @@
                         <div class="text-muted-foreground text-xs" x-text="user.city"></div>
                         <a @click.stop href="#" class="flex items-center gap-1 text-primary text-xs hover:underline w-fit mt-1"><svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" /></svg><span x-text="user.distance ? 'В ' + user.distance + ' от вас' : 'Геолокация не указана'"></span></a>
                         <div class="flex items-center gap-1.5 text-xs pt-1"><span class="w-2 h-2 rounded-full" :class="user.is_online ? 'bg-green-500' : 'bg-gray-400'"></span><span class="font-medium" :class="user.is_online ? 'text-green-600' : 'text-muted-foreground'" x-text="user.status_text"></span></div>
-                        <button @click.stop="$dispatch('open-login-modal')" class="mt-auto pt-2 w-full bg-primary/10 text-primary hover:bg-primary/20 font-medium py-2 rounded-md transition-colors flex items-center justify-center gap-1.5 text-xs"><svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" /></svg>Написать</button>
+                        <button @click.stop="$dispatch('open-login-modal')" class="mt-auto pt-2 w-full bg-primary/10 text-primary hover:bg-primary/20 font-medium py-2 rounded-sm transition-colors flex items-center justify-center gap-1.5 text-xs"><svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" /></svg>Написать</button>
                     </div>
                 </div>
             </template>

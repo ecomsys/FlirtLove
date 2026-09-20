@@ -8,6 +8,7 @@ import { registerBlatUI } from "./blatui-core.js";
 import { registerCharts } from "./blatui-charts.js";
 import { initShowToast } from "./modules/show-toast.js";
 import { initApllyTheme } from "./modules/theme.js";
+import { initShowPageLoader } from "./modules/show-page-loader.js";
 import { initScrollLockManager } from "./modules/scroll-lock-manager.js";
 import playToastSound from "./modules/play-toast-sound.js";
 
@@ -30,9 +31,11 @@ document.addEventListener("alpine:init", () => {
 if (!window.LIVEWIRE_ENABLED) {
     window.Alpine = Alpine;
     Alpine.start();
+    initShowPageLoader();
+    initScrollLockManager();
 }
 
 // Инициализация других скриптов
 initShowToast();
 initApllyTheme();
-initScrollLockManager();
+

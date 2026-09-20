@@ -58,12 +58,12 @@
     <div class="bg-muted/30 dark:bg-muted/20 border border-border/50 rounded-xl p-4">
         <div class="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-7 gap-3">
             
-                        <!-- Кнопка "Подарить" (Показывается всем, кроме хозяина профиля) -->
+            <!-- Кнопка "Подарить" (Показывается всем, кроме хозяина профиля) -->
             @if (!$isOwnProfile)
             <x-web-ui.tooltip text="Подарить подарок">
                 <div 
-                    @auth @click="$dispatch('open-gift-modal')" @endauth
-                    @guest @click="$dispatch('open-login-modal', { intended_action: 'gift' })" @endguest
+                    @auth @click="window.dispatchEvent(new CustomEvent('open-gift-modal'))" @endauth
+                    @guest @click="window.dispatchEvent(new CustomEvent('open-register-modal'))" @endguest
                     class="aspect-square rounded-lg border border-dashed border-primary/50 flex items-center justify-center cursor-pointer hover:border-primary hover:bg-accent transition-colors text-muted-foreground hover:text-primary group relative"
                 >
                     <svg class="w-10 h-10" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">

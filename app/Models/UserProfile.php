@@ -11,7 +11,7 @@ class UserProfile extends Model
 {
     protected $fillable = [
         'user_id', 
-        'gender', 'birth_date', 'dating_goal', 'city_id', 'country_id',
+        'gender', 'birth_date', 'dating_goals', 'city_id', 'country_id',
         'headline', 'bio', 'looking_for', 'interests', 'self_portrait',
         'body_type', 'eye_color', 'hair_color', 'height', 'weight',
         'relationship_status', 'children_status', 'pets', 'housing', 'has_car', 'smoking', 'alcohol',
@@ -31,6 +31,7 @@ class UserProfile extends Model
         'body_decorations' => 'array',
         'languages' => 'array',
         'sports' => 'array',
+        'dating_goals' => 'array',
         
         // Числовые значения
         'institution_year' => 'integer',

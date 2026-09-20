@@ -18,7 +18,7 @@ class ResetPasswordController extends Controller
      */
     public function showResetForm(Request $request, $token = null)
     {
-        return view('auth.reset-password', [
+        return view('pages.auth.reset-password', [
             'token' => $token,
             'email' => $request->query('email', '')
         ]);
